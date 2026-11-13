@@ -27,7 +27,6 @@ Base ROM = **original Rev A**. The SEGA AGES ROM is only a comparison/diff targe
 | `_template_sonic/` | Read-only clone of mstan's Sonic SMS companion repo (template source). Can be deleted. |
 | `PhantasyStarSMSRecomp/`, `PhantasyStarAgesRecomp/` | **Old per-game dirs** (superseded by `Games/ps-reva`, `Games/ps-ages-en`; still build). `build.ps1`/`run_loop.ps1` were repointed to `..\Recomp\smsggrecomp`. Their `.sav` files came from my early tests (see "Save name entry"). |
 | `Disasm/ps1disasm-master/` | **Primary disassembly** (has `ps1.constants.asm` with named RAM vars/dungeon IDs, `sound/sound_driver.asm`, `ps1original.sms`). `Disasm/PS1_Disasm/`, `Disasm/PS_Disasm/` = other variants; not needed. |
-| `Phantasy_Star_PC_Port_Roadmap.pdf` | Original roadmap. Overall idea is right, details about the patch and about smsggrecomp maturity were optimistic. |
 | ROMs `Phantasy Star (USA, Europe) (Rev A).sms` etc. | Rev A MD5 `1110938DF80F4E44C8213D7F85CFB5E6`, CRC32 `00BEF1D7`, 512 KB. AGES En = 540,672 B, AGES Ja = 565,248 B (headers parse; sizes not multiples of 16 KB). |
 
 ## Toolchain (installed this session)
@@ -219,8 +218,8 @@ All optional, default = original game, own C code (no ROM patches), Rev A first.
 - Original-game bug fixes from the 2.5 patch notes (`ROMPatches/PhantasyStar-SMS-EN-2.5/technical.md`): liar-village duplicate text, Myau's stats dropping at max level, script-box line counting; halt-based idle loop.
 - Text speed option. Alisa hair colour option.
 - Audio polish: FM/PSG balance, low-pass/resampling, optional reverb (needs a human listen).
-- **Standalone EXE**: link SDL2 statically (exe then only needs Windows DLLs; today: exe + `SDL2.dll` + the ROM). Optional build flag to embed the ROM (personal use only: an exe with the ROM inside is a copy of the game; the generated C is ROM-derived too, so no build is freely distributable).
 - **Launcher**: scan `ROMs/`, CRC32 -> slug, mkgame + build on first use, then run (PowerShell menu first, SDL list later). One exe with all games would need per-game symbol prefixes in the generated C.
+- Distribution model (user decision 2026-11-13): the repo ships no ROM-derived files; users supply their own ROM, which the build recompiles and the runtime reads (graphics, maps, text, music data, interpreter fallback; CRC-checked). A single EXE with the ROM inside is NOT wanted.
 
 ## Plan for the 2026-11-13 day session (agreed with the user)
 Engine work committed (local only, NOT pushed) on branch `ps-qol-night2` of `Recomp/smsggrecomp`: `e94c4b3` (night), `a5f2069` (day session; user OK'd committing progress). The project folder is its own git repo since 2026-11-13 (local only, branch `main`, user OK'd): `.gitignore` keeps out ROMs, saves (`*.sav`, `*.automap`), logs, `ps_qol.ini` (personal settings), `Games/*/build*` and `Games/*/generated` (ROM-derived, regenerable), and the separate/third-party trees `Recomp/` (engine = its own repo), `Disasm/`, `Emulicious/`, `Masterlator/`, `Patchers/`, `ROMPatches/`. The project repo does not pin an engine commit: note the engine commit in commit messages when both change. The old `PhantasyStarSMSRecomp/`, `PhantasyStarAgesRecomp/` are identical to `Games/ps-reva`, `Games/ps-ages-en` (the user may delete them).
