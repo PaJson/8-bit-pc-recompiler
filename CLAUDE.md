@@ -258,6 +258,15 @@ User feedback + tasks, in order:
 - **Side panel / widescreen** (engine `4f7e1de` on `ps-qol-night2`: `hud_set_panel`, `hud_set_panel_enabled`, `hud_text_scaled`, host_sdl 16:9 layout = game 3x + 256 x 576 panel, window width follows; `SMS_WINDOW_SHOT=<ppm>` + `SMS_WINDOW_SHOT_FRAME=n` reads the composed window back, works with `--hidden --speed 40`; GPU `--internal-scale` path unchanged). **`Common/PhantasyStar/ps_panel.c`** (new): party boxes (portrait placeholder = initial letter, name, LV, HP/MP + bars; party = slots 0..`$C4F0`, status bit0 alive), Meseta, map box (surroundings map / dungeon map via new `ps_automap_draw()`). HUD option SIDE PANEL, ini `side_panel` (default 0). Test env `PS_PANEL_PPM=<file>` + `PS_PANEL_FRAME=n`. The user's `Games/ps-reva/ps_qol.ini` was set to `side_panel = 1`, `automap = 0` (old window off; backup of the previous file in the session scratchpad).
 - Regression: Rev A 20000-frame lockstep final SAME, 0 misses; 5 x 20000-frame soaks with `PS_WORLDMAP_SELFTEST=1` clean; all 10 PS builds + Miracle Warriors build.
 - Every PS game dir's CMakeLists and `mkgame.py` now also compile `ps_worldmap.c` and `ps_panel.c`.
+- Later the same night: HUD MAP page **planet view** (Up/Down = area <-> whole planet; 8 x 8 screens rendered once per planet at 1/4 size; test env `PS_MAP_VIEW=1`); blinking party marker; scaled-image cache (panel cost 0.87 -> 0.27 ms/frame, output byte-identical); panel shows only a title before the game starts (mode <= 3); engine `6e52a85`: **F11 / Alt+Enter fullscreen** (desktop, letterboxed), widened window kept on its display; runtime panel toggle verified (window 768x576 <-> 1024x576, test env `PS_PANEL_TOGGLE=<frame>`). Vehicles: the Land Rover is object `$C800` = 10 with the same +2/+4 screen position (checked on Motavia). Panel checked on Japan, Korea, EN 2.5 (same party RAM).
+- Dungeon names: `ps1.constants.asm` has `DungeonID_*`, but many floors are shared (e.g. `$00` = Medusa Cave / Gothic Tunnel / Baya Malay Pass, `$10-$13` Iala/Naula Cave) -> a floor number alone cannot name the dungeon; not shown (would need the entrance used). On the ToDo list.
+
+### Morning play-test checklist (after the 2026-11-13/14 night)
+1. `Games/ps-reva/play.ps1`: the window opens 16:9 with the side panel (your `ps_qol.ini` has `side_panel = 1`; the old separate map window was switched off: `automap = 0`). HUD (F1) -> SIDE PANEL OFF/ON resizes the window.
+2. Panel: party HP/MP/LV update live (also in battles), Meseta, map box: surroundings map on a planet / in a town, dungeon map in a dungeon.
+3. HUD MAP page outside dungeons: 3 x 3 screens; Up/Down -> whole planet (party marker blinks).
+4. F11 / Alt+Enter fullscreen (does Controller Companion behave in fullscreen?).
+5. Tell me: layout/colours, what to show besides party/meseta/map, portrait images (format/size), town names wanted?
 
 ### Weekend play-test checklist for the user (2026-11-13)
 1. HUD with the pad: one D-pad press = one row; hold = repeat, getting faster; EXP x1 -> x100 by holding Right (~3 s). Keyboard the same.
