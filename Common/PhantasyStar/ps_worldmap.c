@@ -321,10 +321,13 @@ bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh
             fb[yy * w + xx] = 0xFF000000u | r << 16 | g << 8 | b;
         }
     }
-    {   /* party: red square with a white rim, ~1/40 of the map width (at least 7 px) */
+    {   /* party: red square, ~1/40 of the map width (at least 7 px), rim alternating white / black
+           every 20 draws (the panel and the HUD page redraw every presented frame) */
+        static unsigned calls;
+        uint32_t rim = (calls++ / 20) & 1 ? 0xFF000000u : 0xFFFFFFFFu;
         int cx = mx + (int)((long)rx * dw / sw), cy = my + (int)((long)ry * dh / sh);
         int r = dw / 80; if (r < 2) r = 2;
-        hud_fill(fb, w, h, cx - r - 1, cy - r - 1, cx + r + 2, cy + r + 2, 0xFFFFFFFFu, false);
+        hud_fill(fb, w, h, cx - r - 1, cy - r - 1, cx + r + 2, cy + r + 2, rim, false);
         hud_fill(fb, w, h, cx - r, cy - r, cx + r + 1, cy + r + 1, 0xFFEB3C3Cu, false);
     }
     return true;
