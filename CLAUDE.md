@@ -213,7 +213,7 @@ Games generated with `sms_generic` (NO game-specific jump tables except Sonic 1'
 All optional, default = original game, own C code (no ROM patches), Rev A first.
 - **Multiple level-ups per battle** (option, default off): `CalculateExp` does one `inc level` per battle; mainly useful with high EXP multipliers. Loop the level check (keep the 65535 EXP / level-30 caps).
 - **Widescreen overworld**: render the surrounding screens from the ROM map data so the view is wider than 256 px.
-- **Overworld/world map** in the HUD (whole planet, party position, towns/dungeons), dungeon map in the widescreen side area.
+- **Overworld/world map** in the HUD (whole planet, party position, towns/dungeons), dungeon map in the widescreen side area. Visual references from the user (fan-site rips, look only; ours is rendered at runtime from the ROM's map data, no images shipped): https://www.pscave.com/ps1/images/palma2.gif , `.../motavia2.gif`, `.../dezoris2.gif`, towns https://www.pscave.com/ps1/towns/
 - **Per-dungeon stats** in the HUD (chests found / total, from `B03_ObjectData` flags).
 - Original-game bug fixes from the 2.5 patch notes (`ROMPatches/PhantasyStar-SMS-EN-2.5/technical.md`): liar-village duplicate text, Myau's stats dropping at max level, script-box line counting; halt-based idle loop.
 - Text speed option. Alisa hair colour option.

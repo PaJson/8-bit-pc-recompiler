@@ -159,7 +159,7 @@ typedef void (*FillFn)(int x0, int y0, int x1, int y1, uint32_t rgb);   /* [x0,x
 
 static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
 {
-    int e = cs - 1, m = cs / 2, q = cs / 4 > 0 ? cs / 4 : 1;
+    int e = cs - 1, q = cs / 4 > 0 ? cs / 4 : 1;
     uint32_t floor = visited ? C_FLOOR_V : C_FLOOR;
     switch (k) {
     case K_WALL:   f(sx, sy, sx + e, sy + e, C_WALL); break;
@@ -172,9 +172,18 @@ static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
         break;
     case K_UP: case K_DOWN:
         f(sx, sy, sx + e, sy + e, floor);
-        for (int r = 0; r < m; r++) {                    /* triangle, 1 px wider per row */
-            int y = k == K_UP ? sy + q + r : sy + e - q - 1 - r;
-            f(sx + m - r, y, sx + m + r + 1 > sx + e ? sx + e : sx + m + r + 1, y + 1, C_STAIRS);
+        {   /* centred triangle, 2 px wider every 2 rows, 1 px margin; pointing up or down */
+            int rows = 0, wid[16];
+            for (int i = 0; i < 16; i++) {
+                int wd = (e % 2 == 0) ? 2 * (i / 2 + 1) : 2 * (i / 2) + 1;
+                if (wd > (e - 2 > 1 ? e - 2 : 1)) break;
+                wid[rows++] = wd;
+            }
+            int top = sy + (e - rows) / 2;
+            for (int i = 0; i < rows; i++) {
+                int wd = wid[k == K_UP ? i : rows - 1 - i], x0 = sx + (e - wd) / 2;
+                f(x0, top + i, x0 + wd, top + i + 1, C_STAIRS);
+            }
         }
         break;
     case K_PIT:
@@ -187,8 +196,12 @@ static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
         f(sx + q, sy + q, sx + e - q, sy + e - q, k == K_CHEST ? C_CHEST : C_OPENED);
         break;
     case K_EVENT: case K_EVENT_DONE:
-        f(sx, sy, sx + e, sy + e, floor);
-        f(sx + m - q, sy + m - q, sx + m + q + 1, sy + m + q + 1, k == K_EVENT ? C_EVENT : C_OPENED);
+        f(sx, sy, sx + e, sy + e, floor);           /* "!" */
+        {   uint32_t c = k == K_EVENT ? C_EVENT : C_OPENED;
+            int bw = e >= 6 ? 2 : 1, x0 = sx + (e - bw) / 2;
+            if (e >= 5) { f(x0, sy + 1, x0 + bw, sy + e - 3, c); f(x0, sy + e - 2, x0 + bw, sy + e - 1, c); }
+            else f(x0, sy, x0 + bw, sy + e, c);
+        }
         break;
     default:       f(sx, sy, sx + e, sy + e, floor); break;
     }
@@ -479,28 +492,71 @@ void ps_automap_enable(bool on)       /* the side window (the HUD page is always
 /* line of sight stops at anything that looks like a wall (walls, doors, secret walls) */
 static bool blocks_view(uint8_t cell) { int t = cell & 7; return t == 1 || t >= 4; }
 
+/* Stairs / doors: the game moves the party 2 cells (past the stairs or door), so the party never
+   stands on them. Reveal the 3x3 around such a cell when the party arrives next to it. */
+static bool is_passage(uint8_t cell) { int t = cell & 7; return t >= 2 && t <= 6; }
+static void reveal_around(DungeonMemory *m, int x, int y)
+{
+    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) reveal(m, x + dx, y + dy, SEEN);
+}
+
+/* Settling: on a floor change (stairs, pit) the game switches Dungeon_index and the layout at once,
+   but moves the position only after the fade-out (~36 frames for stairs; a pit keeps the position).
+   When a dungeon is entered, the layout is all zero for a few frames. Nothing is recorded until
+   the new state is consistent. */
+#define SETTLE_TIMEOUT 90
+static bool g_was_in, g_pending;
+static int  g_pend_frames, g_pend_pos, g_last_floor = -1, g_last_pos = -1;
+
 void ps_automap_frame(uint64_t frame)
 {
     (void)frame;
     uint8_t mode = sms_read8(RAM_GAME_MODE);
     track_saves(mode);
     g_in_dungeon = (mode == MODE_DUNGEON);
-    if (!g_in_dungeon) { window_hide(); return; }
+    if (!g_in_dungeon) { g_was_in = false; g_last_pos = -1; window_hide(); return; }
 
-    uint8_t map[256];
-    for (int i = 0; i < 256; i++) map[i] = sms_read8((uint16_t)(RAM_DNG_MAP + i));
+    uint8_t map[256]; bool any = false;
+    for (int i = 0; i < 256; i++) { map[i] = sms_read8((uint16_t)(RAM_DNG_MAP + i)); any |= map[i] != 0; }
     uint8_t pos = sms_read8(RAM_DNG_POS);
     uint8_t floor = sms_read8(RAM_DNG_IDX);
-    g_cur_dir = sms_read8(RAM_DNG_DIR) & 3;
-    g_cur_px = pos & 15; g_cur_py = pos >> 4;
+    uint8_t dir = sms_read8(RAM_DNG_DIR) & 3;
+    uint32_t hsh = 0; for (int i = 0; i < 256; i++) hsh = hsh * 31 + map[i];
+    {   static int tr = -1; if (tr < 0) tr = getenv("PS_AUTOMAP_TRACE") != NULL;
+        if (tr) fprintf(stderr, "[amtrace] f=%llu floor=%02X pos=%02X dir=%d map=%08X\n", (unsigned long long)frame, floor, pos, dir, hsh); }
+    static uint32_t prev_hsh;
+    bool stable = hsh == prev_hsh; prev_hsh = hsh;
+    if (!any || !stable) return;                         /* layout not (fully) loaded yet: loads over 1-2 frames */
 
+    bool arrived = false;
+    if (!g_was_in) {                                     /* entered from outside: position is final */
+        g_was_in = true; g_pending = false; arrived = true;
+    } else if (floor != g_last_floor) {                  /* stairs / pit: wait for the position */
+        g_pending = true; g_pend_frames = 0; g_pend_pos = g_last_pos;
+    }
+    g_last_floor = floor;
+    if (g_pending) {
+        if (pos == g_pend_pos && ++g_pend_frames < SETTLE_TIMEOUT) return;
+        g_pending = false; arrived = true;
+    }
+
+    int px = pos & 15, py = pos >> 4;
+    g_cur_dir = dir; g_cur_px = px; g_cur_py = py;
     g_cur = memory_for(&g_work, floor);
     memcpy(g_cur->cells, map, 256);                      /* doors / chests change: keep the latest */
     g_cur->index = floor;
     g_cur->flags[pos] |= VISITED | SEEN;
-    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) reveal(g_cur, g_cur_px + dx, g_cur_py + dy, SEEN);
+    reveal_around(g_cur, px, py);
+    {   /* arrived past stairs (or walked through a door): also show around the stairs/door cell */
+        int bx = px - DX[dir], by = py - DY[dir];
+        bool jumped = !arrived && g_last_pos >= 0 && g_last_pos != pos
+                      && px - 2 * DX[dir] == (g_last_pos & 15) && py - 2 * DY[dir] == (g_last_pos >> 4);
+        if ((arrived || jumped) && bx >= 0 && bx < 16 && by >= 0 && by < 16 && is_passage(map[by * 16 + bx]))
+            reveal_around(g_cur, bx, by);
+    }
+    g_last_pos = pos;
     {   /* line of sight straight ahead */
-        int x = g_cur_px, y = g_cur_py;
+        int x = px, y = py;
         for (int i = 0; i < 16; i++) {
             x += DX[g_cur_dir]; y += DY[g_cur_dir];
             if (x < 0 || x > 15 || y < 0 || y > 15) break;
