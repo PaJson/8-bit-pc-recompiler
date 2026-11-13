@@ -53,7 +53,7 @@ extern const char    *glue_save_path(void);
 #define MODE_DUNGEON  0x0B
 #define N_SLOTS       6                 /* index 1..5 = the game's save slots (0 unused) */
 
-enum { SEEN = 1, VISITED = 2 };
+enum { SEEN = 1, VISITED = 2, AVAIL = 4 };   /* AVAIL: a hidden-at-start chest was seen available here */
 #define MAX_DUNGEONS 96
 
 /* key = floor number (Dungeon_index); `index` kept for the file format */
@@ -88,7 +88,7 @@ static void reveal(DungeonMemory *m, int x, int y, uint8_t f)
 }
 
 /* ---- object table (chests / events) from ROM ---- */
-typedef struct { uint8_t floor, pos, kind; uint16_t flag; } MapObject;
+typedef struct { uint8_t floor, pos, kind; bool hidden; uint16_t flag; } MapObject;
 static MapObject g_obj[320];
 static int       g_nobj;
 
@@ -109,7 +109,30 @@ static void load_objects(void)
     for (long o = tbl; o + 7 <= (long)n && rom[o] != 0xFF && g_nobj < (int)(sizeof g_obj / sizeof g_obj[0]); o += 7) {
         MapObject *m = &g_obj[g_nobj++];
         m->floor = rom[o]; m->pos = rom[o + 1]; m->flag = (uint16_t)(rom[o + 2] | (rom[o + 3] << 8)); m->kind = rom[o + 4];
+        m->hidden = false;
     }
+    /* Chests that only appear after a script enables them: the new-game routine (LABEL_5E8) clears the
+       save block and then sets their flags to $FF (= "no chest"); a script later writes $00 (Rev A:
+       $C600 Odin joining, $C604 Dungeon Key NPC LABEL_4B9D). So $FF on such a flag means "not yet
+       available" OR "taken". Find them in the ROM:
+       ld hl,$C300 ; ld de,$C301 ; ld bc,$03FF ; ld (hl),l (Rev A) or ld (hl),0 (Japan) ; ldir
+       then   ld hl,flag ; ld (hl),$FF */
+    static const uint8_t clr[] = { 0x21, 0x00, 0xC3, 0x11, 0x01, 0xC3, 0x01, 0xFF, 0x03 };
+    int nhid = 0;
+    for (size_t i = 0; i + sizeof clr + 80 <= 0x8000; i++) {
+        if (memcmp(rom + i, clr, sizeof clr)) continue;
+        const uint8_t *t = rom + i + sizeof clr;
+        size_t body = (t[0] == 0x75 && t[1] == 0xED && t[2] == 0xB0) ? 3
+                    : (t[0] == 0x36 && t[1] == 0x00 && t[2] == 0xED && t[3] == 0xB0) ? 4 : 0;
+        if (!body) continue;
+        for (size_t j = i + sizeof clr + body; j < i + sizeof clr + body + 64; j++)
+            if (rom[j] == 0x21 && rom[j + 3] == 0x36 && rom[j + 4] == 0xFF) {
+                uint16_t f = (uint16_t)(rom[j + 1] | (rom[j + 2] << 8));
+                for (int k = 0; k < g_nobj; k++) if (g_obj[k].flag == f) { g_obj[k].hidden = true; nhid++; }
+            }
+        break;
+    }
+    if (getenv("PS_AUTOMAP_ASCII")) fprintf(stderr, "[automap] %d objects, %d hidden at start\n", g_nobj, nhid);
 }
 
 static const MapObject *object_at(uint8_t floor, int pos)
@@ -121,7 +144,7 @@ static const MapObject *object_at(uint8_t floor, int pos)
 /* ---- cell classification ---- */
 enum { K_FLOOR, K_WALL, K_UP, K_DOWN, K_DOOR, K_LOCKED, K_MAGIC, K_SECRET, K_PIT, K_CHEST, K_CHEST_OPEN,
        K_EVENT, K_EVENT_DONE, K_N };
-static int classify(uint8_t floor, int pos, uint8_t cell, bool *event)
+static int classify(uint8_t floor, int pos, uint8_t cell, uint8_t mflags, bool *event)
 {
     int v = cell & 0x0F, t = v & 7;
     *event = false;
@@ -129,6 +152,7 @@ static int classify(uint8_t floor, int pos, uint8_t cell, bool *event)
         const MapObject *o = object_at(floor, pos);
         if (!o) return K_PIT;
         bool done = o->flag >= 0xC000 && sms_read8(o->flag) == 0xFF;
+        if (done && o->hidden && !(mflags & AVAIL)) return K_FLOOR;   /* not enabled yet (or taken unseen) */
         if (o->kind <= 1) return done ? K_CHEST_OPEN : K_CHEST;
         return done ? K_EVENT_DONE : K_EVENT;
     }
@@ -217,7 +241,7 @@ static int draw_map(FillFn f, int mx, int my, int cs)
         uint8_t fl = g_cur->flags[p];
         if (fl & (SEEN | VISITED)) seen++;
         if (!(fl & (SEEN | VISITED)) && !g_reveal_all) continue;
-        bool ev; int k = classify(g_cur->index, p, g_cur->cells[p], &ev);
+        bool ev; int k = classify(g_cur->index, p, g_cur->cells[p], fl, &ev);
         if (is_secret(k) && !g_show_secrets && !(fl & VISITED)) {   /* looks like what it pretends to be */
             k = (k == K_SECRET) ? K_WALL : K_FLOOR; ev = false;
         }
@@ -411,7 +435,7 @@ static void ascii_dump(int px, int py, int dir)
     for (int y = 0; y < 16; y++) {
         char row[17]; row[16] = 0;
         for (int x = 0; x < 16; x++) {
-            bool ev; int k = classify(g_cur->index, y * 16 + x, g_cur->cells[y * 16 + x], &ev);
+            bool ev; int k = classify(g_cur->index, y * 16 + x, g_cur->cells[y * 16 + x], g_cur->flags[y * 16 + x], &ev);
             char c = (g_cur->flags[y * 16 + x] & (SEEN | VISITED)) ? sym[k] : ' ';
             if (x == px && y == py) c = arrow[dir];
             row[x] = c;
@@ -553,6 +577,8 @@ void ps_automap_frame(uint64_t frame)
     memcpy(g_cur->cells, map, 256);                      /* doors / chests change: keep the latest */
     g_cur->index = floor;
     g_cur->flags[pos] |= VISITED | SEEN;
+    for (int i = 0; i < g_nobj; i++)                     /* hidden-at-start chests: remember once available */
+        if (g_obj[i].hidden && g_obj[i].floor == floor && sms_read8(g_obj[i].flag) != 0xFF) g_cur->flags[g_obj[i].pos] |= AVAIL;
     reveal_around(g_cur, px, py);
     {   /* arrived past stairs (or walked through a door): also show around the stairs/door cell */
         int bx = px - DX[dir], by = py - DY[dir];
