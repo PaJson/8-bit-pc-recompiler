@@ -55,6 +55,12 @@ static int text_right(uint32_t *b, int w, int h, int xr, int y, const char *s, u
 void ps_panel_draw(uint32_t *b, int w, int h)
 {
     for (int i = 0; i < w * h; i++) b[i] = BG;
+    if (sms_read8(0xC202) <= 3) {                      /* title / intro: no game data yet */
+        box(b, w, h, 8, 8, w - 8, h - 8);
+        hud_text_scaled(b, w, h, (w - 8 * 12) / 2, h / 2 - 30, "PHANTASY", CYAN, 2);
+        hud_text_scaled(b, w, h, (w - 4 * 12) / 2, h / 2 - 6, "STAR", CYAN, 2);
+        return;
+    }
     static const char *const names[4] = { "ALIS", "MYAU", "ODIN", "NOAH" };
     static const uint32_t pcol[4] = { 0xFFC85A78u, 0xFFD2B43Cu, 0xFF5A82C8u, 0xFF64B48Cu };
     int y = 8, n = sms_read8(0xC4F0) + 1;
