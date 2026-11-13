@@ -40,6 +40,8 @@ extern void     ps_automap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, 
 extern int      ps_automap_in_dungeon(void);
 extern void     ps_automap_set_view(int reveal_all, int show_secrets);
 extern void     ps_worldmap_init(void);
+extern void     ps_panel_draw(uint32_t *b, int w, int h);
+extern void     ps_panel_frame(uint64_t frame);
 extern void     ps_worldmap_frame(void);
 extern bool     ps_worldmap_valid(void);
 extern void     ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
@@ -68,6 +70,7 @@ static const char *const k_onoff[]      = { "OFF", "ON" };
 static int s_exp_i = 0, s_mes_i = 0, s_enc_i = 4, s_map_i = 0;   /* map side window off: the map is a HUD page */
 static int s_walk_i = 0;                       /* walk speed: 0 = x1 (original), 1 = x2, 2 = x4 */
 static int s_reveal_i = 0, s_secrets_i = 1;    /* dungeon map: explored / whole floor; secrets hidden / shown */
+static int s_panel_i = 0;                      /* widescreen side panel (party, meseta, map) off / on */
 static const char *s_ini_path = "ps_qol.ini";
 
 static unsigned exp_mult(void)  { return (unsigned)s_exp_i + 1; }
@@ -105,6 +108,7 @@ static void load_config(void)
         else if (!strcmp(key, "walk_speed")) s_walk_i = v >= 3 ? 2 : v >= 1.5 ? 1 : 0;
         else if (!strcmp(key, "map_reveal")) s_reveal_i = v != 0;
         else if (!strcmp(key, "map_secrets")) s_secrets_i = v != 0;
+        else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
         else if (!strcmp(key, "encounter_percent") && v >= 0) s_enc_i = nearest_enc((int)(v + 0.5));
     }
     fclose(f);
@@ -124,6 +128,7 @@ static void save_config(void)
     fprintf(f, "walk_speed         = %-6u ; 1 = original, 2 or 4 = faster walking on maps (vehicles x2 max)\n", walk_mult());
     fprintf(f, "map_reveal         = %d      ; dungeon map: 0 = explored cells only, 1 = the whole floor\n", s_reveal_i);
     fprintf(f, "map_secrets        = %d      ; dungeon map: 1 = mark secret walls, pits, chests, events; 0 = only where you have stood\n", s_secrets_i);
+    fprintf(f, "side_panel         = %d      ; widescreen window with a side panel: party, meseta, map (like SEGA AGES)\n", s_panel_i);
     fclose(f);
 }
 
@@ -204,6 +209,7 @@ int ps_walk_follow_y(void) { return s_walk_i ? follow((uint8_t)(g_z80.a - 2) != 
 /* ---- HUD ---- */
 static void on_enc_changed(void) { apply_overworld_rate(); }
 static void on_map_changed(void) { ps_automap_enable(s_map_i != 0); }
+static void on_panel_changed(void) { hud_set_panel_enabled(s_panel_i != 0); }
 static void on_view_changed(void) { ps_automap_set_view(s_reveal_i, s_secrets_i); }
 static const char *const k_reveal_names[]  = { "EXPLORED", "WHOLE FLOOR" };
 static const char *const k_secrets_names[] = { "HIDDEN", "SHOWN" };
@@ -215,6 +221,7 @@ static const HudOption k_opts[] = {
     { "ENCOUNTERS",        k_enc_names,  N_ENC,  &s_enc_i, on_enc_changed },
     { "MAP SIDE WINDOW",   k_onoff,      2,      &s_map_i, on_map_changed },
     { "WALK SPEED",        k_walk_names, 3,      &s_walk_i, NULL },
+    { "SIDE PANEL",        k_onoff,      2,      &s_panel_i, on_panel_changed },
     { "MAP REVEAL",        k_reveal_names, 2,    &s_reveal_i, on_view_changed },
     { "MAP SECRETS",       k_secrets_names, 2,   &s_secrets_i, on_view_changed },
 };
@@ -237,6 +244,7 @@ static int hud_info(char lines[][41], int max)
 /* MAP page: the dungeon map in / after a dungeon, the surroundings map on a planet or in a town
    (whichever of the two the party was in last) */
 static int s_map_ctx;                  /* 0 none yet, 1 dungeon, 2 planet / town */
+int ps_map_context(void) { return s_map_ctx == 2 && !ps_worldmap_valid() ? 0 : s_map_ctx; }
 static void map_page_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
 {
     if (s_map_ctx == 2 && ps_worldmap_valid()) ps_worldmap_hud_draw(fb, w, h, x0, y0, x1, y1);
@@ -273,6 +281,8 @@ void ps_on_post_reset(void)
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
     hud_set_info(hud_info);
     hud_set_on_close(save_config);
+    hud_set_panel(ps_panel_draw);
+    hud_set_panel_enabled(s_panel_i != 0);
 }
 
 void ps_on_frame_post(uint64_t frame)
@@ -281,6 +291,7 @@ void ps_on_frame_post(uint64_t frame)
     ps_worldmap_frame();
     {   uint8_t mode = sms_read8(0xC202);
         if (mode == 0x0B) s_map_ctx = 1; else if (mode == 0x09) s_map_ctx = 2; }
+    ps_panel_frame(frame);
 
     static uint16_t last_exp;           /* last EXP reward value we produced (0 = none yet) */
     static int      enc_base = -1, enc_written = -1;

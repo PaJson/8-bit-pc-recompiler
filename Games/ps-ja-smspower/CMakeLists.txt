@@ -5,4 +5,4 @@ include("${SMSGG_ROOT}/cmake/SmsGame.cmake")
 sms_add_game(PsJaSmspowerRecomp)
 
 # Phantasy Star QoL hooks (auto-map, EXP/Meseta/encounter options) shared by all PS builds.
-target_sources(PsJaSmspowerRecomp PRIVATE ../../Common/PhantasyStar/ps_automap.c ../../Common/PhantasyStar/ps_qol.c ../../Common/PhantasyStar/ps_worldmap.c)
+target_sources(PsJaSmspowerRecomp PRIVATE ../../Common/PhantasyStar/ps_automap.c ../../Common/PhantasyStar/ps_qol.c ../../Common/PhantasyStar/ps_worldmap.c ../../Common/PhantasyStar/ps_panel.c)

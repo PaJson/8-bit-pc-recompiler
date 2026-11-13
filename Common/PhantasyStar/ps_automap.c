@@ -305,6 +305,24 @@ void ps_automap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int
     }
 }
 
+/* Draw the current / last dungeon floor into any ARGB buffer (side panel): 16 x 16 cells of cs px
+   at (x, y). Returns false when no dungeon was explored yet. */
+static uint32_t *g_bfb; static int g_bw, g_bh;
+static void buf_fill(int x0, int y0, int x1, int y1, uint32_t rgb)
+{
+    if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > g_bw) x1 = g_bw; if (y1 > g_bh) y1 = g_bh;
+    for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) g_bfb[y * g_bw + x] = 0xFF000000u | rgb;
+}
+bool ps_automap_draw(uint32_t *fb, int w, int h, int x, int y, int cs)
+{
+    if (!g_cur) return false;
+    g_bfb = fb; g_bw = w; g_bh = h;
+    draw_map(buf_fill, x, y, cs);
+    return true;
+}
+int  ps_automap_floor(void) { return g_cur ? g_cur->index : -1; }
+bool ps_automap_here(void)  { return g_in_dungeon; }
+
 int  ps_automap_in_dungeon(void) { return sms_read8(RAM_GAME_MODE) == MODE_DUNGEON; }
 void ps_automap_set_view(int reveal_all, int show_secrets) { g_reveal_all = reveal_all; g_show_secrets = show_secrets; }
 
