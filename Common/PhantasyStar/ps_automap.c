@@ -155,7 +155,7 @@ typedef void (*FillFn)(int x0, int y0, int x1, int y1, uint32_t rgb);   /* [x0,x
 #define C_OPENED  0x6A6A6Au
 #define C_EVENT   0xF04848u
 #define C_YOU     0xEB3C3Cu
-#define C_NOSE    0xFFE678u
+#define C_EXIT    0x40E070u   /* corner mark: stairs/door that leads out (B03_DungeonTransitionData) */
 
 static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
 {
@@ -198,7 +198,7 @@ static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
     case K_EVENT: case K_EVENT_DONE:
         f(sx, sy, sx + e, sy + e, floor);           /* "!" */
         {   uint32_t c = k == K_EVENT ? C_EVENT : C_OPENED;
-            int bw = e >= 6 ? 2 : 1, x0 = sx + (e - bw) / 2;
+            int bw = e % 2 ? 1 : 2, x0 = sx + (e - bw) / 2;   /* centred for odd and even sizes */
             if (e >= 5) { f(x0, sy + 1, x0 + bw, sy + e - 3, c); f(x0, sy + e - 2, x0 + bw, sy + e - 1, c); }
             else f(x0, sy, x0 + bw, sy + e, c);
         }
@@ -223,13 +223,21 @@ static int draw_map(FillFn f, int mx, int my, int cs)
         }
         int sx = mx + x * cs, sy = my + y * cs;
         draw_glyph(f, k, (fl & VISITED) != 0, sx, sy, cs);
-        if (ev && (g_show_secrets || (fl & VISITED))) f(sx, sy, sx + 2, sy + 2, C_EVENT);   /* event corner */
+        if (ev && (g_show_secrets || (fl & VISITED))) f(sx, sy, sx + 2, sy + 2, C_EXIT);    /* exit / warp corner */
     }
-    if (g_in_dungeon) {                                  /* player: red square + yellow nose */
-        int cx = mx + g_cur_px * cs + cs / 2, cy = my + g_cur_py * cs + cs / 2, r = cs / 2 - 1; if (r < 1) r = 1;
-        f(cx - r, cy - r, cx + r, cy + r, C_YOU);
-        int nx = cx + DX[g_cur_dir] * r, ny = cy + DY[g_cur_dir] * r;
-        f(nx - 1, ny - 1, nx + 1, ny + 1, C_NOSE);
+    if (g_in_dungeon) {                                  /* player: arrow (head + shaft) pointing the facing way */
+        int sx = mx + g_cur_px * cs, sy = my + g_cur_py * cs, e = cs - 1, head = (e + 1) / 2;
+        for (int i = 0; i < e; i++) {                    /* row i, counted from the tip */
+            int wd = i < head ? (e % 2 ? 2 * i + 1 : 2 * i + 2) : (e % 2 ? 3 : 4); if (wd > e) wd = e;
+            int a = (e - wd) / 2;                        /* span [a, a+wd) across the arrow */
+            uint32_t c = C_YOU;
+            switch (g_cur_dir) {
+            case 0: f(sx + a, sy + i, sx + a + wd, sy + i + 1, c); break;                   /* north: tip at top */
+            case 2: f(sx + a, sy + e - 1 - i, sx + a + wd, sy + e - i, c); break;           /* south */
+            case 1: f(sx + e - 1 - i, sy + a, sx + e - i, sy + a + wd, c); break;           /* east: tip right */
+            default: f(sx + i, sy + a, sx + i + 1, sy + a + wd, c); break;                  /* west */
+            }
+        }
     }
     return seen;
 }
@@ -264,10 +272,12 @@ void ps_automap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int
     static const struct { int k; const char *t; } leg[] = {
         { K_UP, "STAIRS UP" }, { K_DOWN, "STAIRS DOWN" }, { K_DOOR, "DOOR" }, { K_LOCKED, "LOCKED DOOR" },
         { K_MAGIC, "MAGIC DOOR" }, { K_SECRET, "SECRET WALL" }, { K_PIT, "PIT" }, { K_CHEST, "CHEST" },
-        { K_EVENT, "EVENT/BATTLE" } };
+        { K_EVENT, "EVENT/BATTLE" }, { K_UP, "EXIT/WARP" } };
+    int ls = cs < 9 ? cs : 9;                            /* legend glyphs = the map's cell size */
     for (unsigned i = 0; i < sizeof leg / sizeof leg[0] && ty + 8 <= y1; i++, ty += 9) {
-        draw_glyph(hud_fill_rgb, leg[i].k, true, tx, ty, 8);
-        hud_text(fb, w, h, tx + 11, ty, leg[i].t, GREY);
+        draw_glyph(hud_fill_rgb, leg[i].k, true, tx, ty, ls);
+        if (i == sizeof leg / sizeof leg[0] - 1) hud_fill_rgb(tx, ty, tx + 2, ty + 2, C_EXIT);
+        hud_text(fb, w, h, tx + 12, ty, leg[i].t, GREY);
     }
 }
 
