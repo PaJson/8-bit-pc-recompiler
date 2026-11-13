@@ -45,6 +45,7 @@ static long g_df1 = -1;                         /* file offset of LABEL_DF1 */
 static long g_tile_src[2] = { -1, -1 };         /* packed tiles: [0] overworld, [1] towns */
 static uint8_t g_tiles[2][0x4000];              /* decoded tile patterns (VRAM image from 0) */
 static bool    g_tiles_ok[2];
+static bool    g_tiles_from_vram;               /* ROM uses another packer (2.5 retranslation): copy VRAM */
 
 static struct {
     bool    valid;
@@ -52,6 +53,8 @@ static struct {
     int     px, py;                             /* party, world pixels */
     uint8_t spr_pal[16];                        /* CRAM 16..31 while on the map (BG tiles may use it) */
 } g_area;
+
+bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh);
 
 static uint32_t g_img[AREA_W * AREA_H];         /* rendered 3x3 screens */
 static int      g_img_key = -1;
@@ -66,7 +69,7 @@ static long find(const uint8_t *pat, size_t n, size_t lim)
 
 static void decode_tiles(int which)
 {
-    if (g_tiles_ok[which] || g_tile_src[which] < 0) return;
+    if (g_tiles_ok[which] || g_tile_src[which] < 0 || g_tiles_from_vram) return;
     long o = g_tile_src[which];
     memset(g_tiles[which], 0, sizeof g_tiles[which]);
     for (int plane = 0; plane < 4; plane++) {
@@ -87,6 +90,7 @@ void ps_worldmap_init(void)
 {
     g_rom = glue_rom_image(&g_rom_n);
     g_area.valid = false; g_img_key = -1;
+    g_tiles_ok[0] = g_tiles_ok[1] = false; g_tiles_from_vram = false;
     if (!g_rom || g_rom_n < 0x10000) return;
     /* GameMode_LoadMap: ld hl,LABEL_DC1 ; add hl,de ; ld a,(hl) ; ld ($C308),a ; add a,a ; ld h,a ;
        add a,a ; ld l,a ; add a,a ; add a,l ; add a,h ; ld l,a ; ld h,0 ; ld de,LABEL_DF1 */
@@ -100,31 +104,56 @@ void ps_worldmap_init(void)
     if (j >= 0) {
         const uint8_t *a = g_rom + j + 7;
         for (int k = 0; k < 2; k++, a += 16)              /* second block follows call + jr (16 bytes) */
-            if (a[0] == 0x21 && a[1] == 0xFF && a[2] == 0xFF && a[3] == 0x36 && a[5] == 0x21 && a[8] == 0x11 && a[10] == 0x40)
+            if (a[0] == 0x21 && a[1] == 0xFF && a[2] == 0xFF && a[3] == 0x36 && a[5] == 0x21 && a[8] == 0x11 && a[10] == 0x40) {
                 g_tile_src[k] = bank_off(a[4], (unsigned)(a[6] | (a[7] << 8)));
+                /* the call must go to the standard unpacker (LABEL_3FA: ld b,4 ; push bc ; push de ;
+                   call ; pop de ; inc de ; pop bc ; djnz ; ret), else take the tiles from VRAM */
+                unsigned t = (unsigned)(a[12] | (a[13] << 8));
+                static const uint8_t u1[] = { 0x06, 0x04, 0xC5, 0xD5, 0xCD }, u2[] = { 0xD1, 0x13, 0xC1, 0x10, 0xF6, 0xC9 };
+                if (a[11] != 0xCD || t + 11 > g_rom_n || memcmp(g_rom + t, u1, sizeof u1) || memcmp(g_rom + t + 7, u2, sizeof u2))
+                    g_tiles_from_vram = true;
+            }
     }
     if (g_df1 < 0 || g_tile_src[0] < 0 || g_tile_src[1] < 0)
         fprintf(stderr, "[worldmap] map tables not found (df1 %ld, tiles %ld/%ld): no surroundings map\n",
                 g_df1, g_tile_src[0], g_tile_src[1]);
     else if (getenv("PS_WORLDMAP_DEBUG"))
-        fprintf(stderr, "[worldmap] LABEL_DF1 %04lX, tiles %05lX / %05lX\n", g_df1, g_tile_src[0], g_tile_src[1]);
+        fprintf(stderr, "[worldmap] LABEL_DF1 %04lX, tiles %05lX / %05lX%s\n", g_df1, g_tile_src[0], g_tile_src[1],
+                g_tiles_from_vram ? " (other packer: tiles copied from VRAM)" : "");
 }
 
 /* the current map state; only while the game is on a map (overworld / town) */
 void ps_worldmap_frame(void)
 {
-    if (g_df1 < 0 || sms_read8(RAM_GAME_MODE) != MODE_MAP) return;
+    static int in_map;                                   /* consecutive frames in map mode */
+    uint8_t mode = sms_read8(RAM_GAME_MODE);
+    in_map = mode == MODE_MAP ? in_map + 1 : 0;
+    if (g_df1 < 0 || mode != MODE_MAP) return;
+    /* GameMode_LoadMap sets the mode to $09 first and unpacks the tiles during its fade-out
+       (several frames), so copy them once the map has been running for a moment */
+    if (g_tiles_from_vram && in_map == 30) {
+        int which = sms_read8(0xC308) < 4 ? 0 : 1;
+        memcpy(g_tiles[which], g_vdp.vram, sizeof g_tiles[which]);
+        g_tiles_ok[which] = true; g_img_key = -1;
+    }
     int cam_x = sms_read8(0xC302) * SCR_W + sms_read8(0xC301);
     int cam_y = sms_read8(0xC306) * SCR_H + sms_read8(0xC305);
-    unsigned sat = (unsigned)(g_vdp.reg[5] & 0x7E) << 7;
-    int sy = g_vdp.vram[sat & 0x3FFF], sx = g_vdp.vram[(sat + 0x80) & 0x3FFF];
-    if (sy == 0xD0) { sx = 128; sy = 87; }               /* no sprites: the party is drawn at the centre */
+    /* the party leader's object ($C800, LABEL_576A): +2 = screen y, +4 = screen x of the 16 x 16 map
+       cell it stands on (the sprite is drawn 8 px higher). Not the sprite table: sprites are parked
+       off-screen during fades and some menus. */
+    int sx = 128, sy = 96;
+    if (sms_read8(0xC800) & 0x7F) { sx = sms_read8(0xC804); sy = sms_read8(0xC802); }
     g_area.tileset = sms_read8(0xC308);
     g_area.map = sms_read8(0xC309);
-    g_area.px = cam_x + sx + 8;                          /* centre of the 16 x 24 leader sprite */
-    g_area.py = cam_y + sy + 1 + 12;
+    g_area.px = cam_x + sx + 8;                          /* centre of that cell */
+    g_area.py = cam_y + sy + 8;
     memcpy(g_area.spr_pal, g_vdp.cram + 16, 16);
     g_area.valid = true;
+    {   /* test: PS_WORLDMAP_SELFTEST=1 renders the map every frame (soak tests run without the HUD) */
+        static int st = -1; if (st < 0) st = getenv("PS_WORLDMAP_SELFTEST") != NULL;
+        static uint32_t scratch[64 * 48];
+        if (st) ps_worldmap_draw(scratch, 64, 48, 0, 0, 64, 48);
+    }
 }
 
 static uint32_t sms_rgb(uint8_t c) { return (uint32_t)(c & 3) * 85u << 16 | (uint32_t)(c >> 2 & 3) * 85u << 8 | (uint32_t)(c >> 4 & 3) * 85u; }
@@ -149,8 +178,9 @@ static bool unpack_screen(const uint8_t *e, int sx, int sy, uint8_t out[192])
     return n == 192;
 }
 
-/* render the 3 x 3 screens around screen (csx, csy) into g_img */
-static void render_area(int tileset, int csx, int csy)
+/* render nw x nh screens (<= 3 x 3) with top-left screen (osx, osy) into g_img */
+static int g_nw = 3, g_nh = 3;
+static void render_area(int tileset, int osx, int osy, int nw, int nh)
 {
     const uint8_t *e = g_rom + g_df1 + tileset * 14;
     int which = tileset < 4 ? 0 : 1;
@@ -161,9 +191,9 @@ static void render_area(int tileset, int csx, int csy)
     for (int k = 0; k < 16; k++) pal[k] = sms_rgb(po + k < (long)g_rom_n ? g_rom[po + k] : 0);
     for (int k = 0; k < 16; k++) pal[16 + k] = sms_rgb(g_area.spr_pal[k]);
     long mt_base = bank_off(e[9], 0x8000);
-    for (int gy = 0; gy < 3; gy++) for (int gx = 0; gx < 3; gx++) {
+    for (int gy = 0; gy < nh; gy++) for (int gx = 0; gx < nw; gx++) {
         uint8_t scr[192];
-        bool ok = unpack_screen(e, (csx + gx - 1 + 8) & 7, (csy + gy - 1 + 8) & 7, scr);
+        bool ok = unpack_screen(e, (osx + gx) & 7, (osy + gy) & 7, scr);
         for (int my = 0; my < 12; my++) for (int mx = 0; mx < 16; mx++) {
             long mo = mt_base + scr[my * 16 + mx] * 8;
             for (int q = 0; q < 4; q++) {
@@ -188,21 +218,57 @@ static void render_area(int tileset, int csx, int csy)
     }
 }
 
+/* screen table of the current tileset as 8 x 8 pointers; returns the most common one (filler) */
+static unsigned screen_table(unsigned ptr[64])
+{
+    const uint8_t *e = g_rom + g_df1 + g_area.tileset * 14;
+    long tbl = bank_off(e[2], (unsigned)(e[0] | (e[1] << 8)));
+    unsigned filler = 0; int best = -1;
+    for (int i = 0; i < 64; i++) {
+        long o = tbl + ((i >> 3) * 9 + (i & 7)) * 2;
+        ptr[i] = o + 1 < (long)g_rom_n ? (unsigned)(g_rom[o] | (g_rom[o + 1] << 8)) : 0;
+    }
+    for (int i = 0; i < 64; i++) { int n = 0; for (int k = 0; k < 64; k++) n += ptr[k] == ptr[i]; if (n > best) { best = n; filler = ptr[i]; } }
+    return filler;
+}
+
 /* make sure g_img shows the area around the party; returns the party position inside g_img */
 static bool prepare(int *rx, int *ry)
 {
     if (!g_area.valid || g_df1 < 0) return false;
+    if (g_tiles_from_vram && !g_tiles_ok[g_area.tileset < 4 ? 0 : 1]) return false;
     int px = ((g_area.px % 2048) + 2048) % 2048, py = ((g_area.py % 1536) + 1536) % 1536;
     int csx = px / SCR_W, csy = py / SCR_H;
-    int key = g_area.tileset << 16 | csy << 8 | csx;
-    if (key != g_img_key) { render_area(g_area.tileset, csx, csy); g_img_key = key; }
-    *rx = SCR_W + px % SCR_W; *ry = SCR_H + py % SCR_H;
+    int osx = csx - 1, osy = csy - 1, nw = 3, nh = 3;    /* planets: 3 x 3 centred on the party's screen */
+    if (g_area.tileset >= 4) {
+        /* towns: a few screens in a table full of one filler screen (several towns share a table).
+           Show the town = the screens connected to the party's screen, at most 3 x 3 around it. */
+        unsigned ptr[64], filler = screen_table(ptr);
+        bool in[3][3] = { { false } };
+        if (ptr[csy * 8 + csx] != filler) {
+            in[1][1] = true;
+            for (int pass = 0; pass < 4; pass++)                  /* grow within the 3 x 3 box */
+                for (int gy = 0; gy < 3; gy++) for (int gx = 0; gx < 3; gx++) {
+                    if (in[gy][gx] || ptr[((csy + gy - 1) & 7) * 8 + ((csx + gx - 1) & 7)] == filler) continue;
+                    if ((gx > 0 && in[gy][gx - 1]) || (gx < 2 && in[gy][gx + 1]) || (gy > 0 && in[gy - 1][gx]) || (gy < 2 && in[gy + 1][gx]))
+                        in[gy][gx] = true;
+                }
+            int x0 = 3, x1 = -1, y0 = 3, y1 = -1;
+            for (int gy = 0; gy < 3; gy++) for (int gx = 0; gx < 3; gx++) if (in[gy][gx]) {
+                if (gx < x0) x0 = gx; if (gx > x1) x1 = gx; if (gy < y0) y0 = gy; if (gy > y1) y1 = gy;
+            }
+            osx = csx - 1 + x0; osy = csy - 1 + y0; nw = x1 - x0 + 1; nh = y1 - y0 + 1;
+        }
+    }
+    int key = g_area.tileset << 16 | (osy & 7) << 12 | (osx & 7) << 8 | nh << 4 | nw;
+    if (key != g_img_key) { render_area(g_area.tileset, osx, osy, nw, nh); g_img_key = key; g_nw = nw; g_nh = nh; }
+    *rx = (csx - osx) * SCR_W + px % SCR_W; *ry = (csy - osy) * SCR_H + py % SCR_H;
     return true;
 }
 
 bool ps_worldmap_valid(void) { return g_area.valid && g_df1 >= 0; }
 
-/* debug: write the full-size 3x3 render as a PPM (PS_WORLDMAP_PPM=<file>, written when the HUD page draws) */
+/* debug: write the full-size render as a PPM (PS_WORLDMAP_PPM=<file>, written when the map is first drawn) */
 static void debug_ppm(void)
 {
     const char *path = getenv("PS_WORLDMAP_PPM");
@@ -214,7 +280,7 @@ static void debug_ppm(void)
     fclose(f);
 }
 
-static const char *area_name(void)
+const char *ps_worldmap_area_name(void)
 {
     switch (g_area.tileset) {
     case 0: return "PALMA";
@@ -224,52 +290,71 @@ static const char *area_name(void)
     }
 }
 
-/* HUD page: the 3x3 screens scaled down 4:1 (box filter), screen grid, the party marker */
-void ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
+/* Draw the map fitted (aspect kept, centred) into the box (bx, by, bw, bh) of an ARGB buffer: area
+   average when scaling down, nearest when scaling up, darkened screen boundaries, party marker.
+   Returns false (nothing drawn) when there is no map yet. */
+bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh)
 {
-    const uint32_t GREY = 0xFFA0A0B0, CYAN = 0xFF60D0FF, WHITE = 0xFFFFFFFF;
     int rx, ry;
-    if (!prepare(&rx, &ry)) {
-        hud_text(fb, w, h, x0 + 8, y0 + 4, "NO MAP YET", GREY);
-        hud_text(fb, w, h, x0 + 8, y0 + 18, "SHOWN ONCE YOU ARE ON A PLANET", GREY);
-        hud_text(fb, w, h, x0 + 8, y0 + 28, "OR IN A TOWN.", GREY);
-        return;
-    }
+    if (bw < 8 || bh < 8 || !prepare(&rx, &ry)) return false;
     static bool dumped; if (!dumped) { debug_ppm(); dumped = true; }
-    /* fit 4:3 into the page, leaving an info column of ~9 characters */
-    int mh = y1 - y0 - 2, mw = mh * 4 / 3;
-    if (mw > x1 - x0 - 60) { mw = x1 - x0 - 60; mh = mw * 3 / 4; }
-    mw = mh * 4 / 3;
-    if (mw < 48) return;
-    int mx = x0 + 2, my = y0 + 1;
-    hud_fill(fb, w, h, mx - 1, my - 1, mx + mw + 1, my + mh + 1, 0xFF0C0C12u, false);
-    for (int y = 0; y < mh; y++) {
+    int sw = g_nw * SCR_W, sh = g_nh * SCR_H, dw, dh;
+    if ((long)sw * bh > (long)bw * sh) { dw = bw; dh = (int)((long)bw * sh / sw); }
+    else { dh = bh; dw = (int)((long)bh * sw / sh); }
+    int mx = bx + (bw - dw) / 2, my = by + (bh - dh) / 2;
+    for (int y = 0; y < dh; y++) {
         int yy = my + y; if (yy < 0 || yy >= h) continue;
-        int sy0 = y * AREA_H / mh, sy1 = (y + 1) * AREA_H / mh;
-        for (int x = 0; x < mw; x++) {
+        int sy0 = (int)((long)y * sh / dh), sy1 = (int)((long)(y + 1) * sh / dh); if (sy1 <= sy0) sy1 = sy0 + 1;
+        for (int x = 0; x < dw; x++) {
             int xx = mx + x; if (xx < 0 || xx >= w) continue;
-            int sx0 = x * AREA_W / mw, sx1 = (x + 1) * AREA_W / mw;
+            int sx0 = (int)((long)x * sw / dw), sx1 = (int)((long)(x + 1) * sw / dw); if (sx1 <= sx0) sx1 = sx0 + 1;
             unsigned r = 0, g = 0, b = 0, n = 0;          /* area average of the source block */
             for (int sy = sy0; sy < sy1; sy++) for (int sx = sx0; sx < sx1; sx++, n++) {
                 uint32_t c = g_img[sy * AREA_W + sx];
                 r += c >> 16 & 255; g += c >> 8 & 255; b += c & 255;
             }
-            if (n) { r /= n; g /= n; b /= n; }
-            bool grid = (sx0 < SCR_W && sx1 > SCR_W) || (sx0 < 2 * SCR_W && sx1 > 2 * SCR_W) || sx0 == SCR_W || sx0 == 2 * SCR_W
-                     || (sy0 < SCR_H && sy1 > SCR_H) || (sy0 < 2 * SCR_H && sy1 > 2 * SCR_H) || sy0 == SCR_H || sy0 == 2 * SCR_H;
-            if (grid) { r = r * 3 / 5; g = g * 3 / 5; b = b * 3 / 5; }   /* screen boundaries */
+            r /= n; g /= n; b /= n;
+            bool grid = false;                            /* screen boundaries */
+            for (int k = 1; k < g_nw; k++) grid |= sx0 <= k * SCR_W && sx1 > k * SCR_W && (sx0 == k * SCR_W || sx1 - sx0 > 1 || dw <= sw);
+            for (int k = 1; k < g_nh; k++) grid |= sy0 <= k * SCR_H && sy1 > k * SCR_H && (sy0 == k * SCR_H || sy1 - sy0 > 1 || dh <= sh);
+            if (grid) { r = r * 3 / 5; g = g * 3 / 5; b = b * 3 / 5; }
             fb[yy * w + xx] = 0xFF000000u | r << 16 | g << 8 | b;
         }
     }
-    {   /* party: red square with a white rim */
-        int cx = mx + rx * mw / AREA_W, cy = my + ry * mh / AREA_H;
-        hud_fill(fb, w, h, cx - 3, cy - 3, cx + 4, cy + 4, 0xFFFFFFFFu, false);
-        hud_fill(fb, w, h, cx - 2, cy - 2, cx + 3, cy + 3, 0xFFEB3C3Cu, false);
+    {   /* party: red square with a white rim, ~1/40 of the map width (at least 7 px) */
+        int cx = mx + (int)((long)rx * dw / sw), cy = my + (int)((long)ry * dh / sh);
+        int r = dw / 80; if (r < 2) r = 2;
+        hud_fill(fb, w, h, cx - r - 1, cy - r - 1, cx + r + 2, cy + r + 2, 0xFFFFFFFFu, false);
+        hud_fill(fb, w, h, cx - r, cy - r, cx + r + 1, cy + r + 1, 0xFFEB3C3Cu, false);
     }
-    int tx = mx + mw + 6, ty = my;
-    hud_text(fb, w, h, tx, ty, area_name(), CYAN); ty += 12;
+    return true;
+}
+
+void ps_worldmap_screen(int *sx, int *sy)
+{
+    *sx = (((g_area.px % 2048) + 2048) % 2048) / SCR_W;
+    *sy = (((g_area.py % 1536) + 1536) % 1536) / SCR_H;
+}
+
+/* HUD page: the map in a 4:3 box, an info column to the right */
+void ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
+{
+    const uint32_t GREY = 0xFFA0A0B0, CYAN = 0xFF60D0FF, WHITE = 0xFFFFFFFF;
+    int bh = y1 - y0 - 2, bw = bh * 4 / 3;
+    if (bw > x1 - x0 - 60) { bw = x1 - x0 - 60; bh = bw * 3 / 4; }
+    int bx = x0 + 2, by = y0 + 1;
+    hud_fill(fb, w, h, bx - 1, by - 1, bx + bw + 1, by + bh + 1, 0xFF0C0C12u, false);
+    if (!ps_worldmap_draw(fb, w, h, bx, by, bw, bh)) {
+        hud_text(fb, w, h, x0 + 8, y0 + 4, "NO MAP YET", GREY);
+        hud_text(fb, w, h, x0 + 8, y0 + 18, "SHOWN ONCE YOU ARE ON A PLANET", GREY);
+        hud_text(fb, w, h, x0 + 8, y0 + 28, "OR IN A TOWN.", GREY);
+        return;
+    }
+    int tx = bx + bw + 6, ty = by, sx, sy;
+    hud_text(fb, w, h, tx, ty, ps_worldmap_area_name(), CYAN); ty += 12;
     char buf[16];
-    snprintf(buf, sizeof buf, "%d,%d", (((g_area.px % 2048) + 2048) % 2048) / SCR_W, (((g_area.py % 1536) + 1536) % 1536) / SCR_H);
+    ps_worldmap_screen(&sx, &sy);
+    snprintf(buf, sizeof buf, "%d,%d", sx, sy);
     hud_text(fb, w, h, tx, ty, "SCREEN", GREY); ty += 9;
     hud_text(fb, w, h, tx, ty, buf, WHITE);
 }
