@@ -45,6 +45,7 @@ extern void     ps_panel_frame(uint64_t frame);
 extern void     ps_worldmap_frame(void);
 extern bool     ps_worldmap_valid(void);
 extern void     ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
+extern void     ps_worldmap_hud_key(int key);
 
 #define RAM_GAME_MODE 0xC202
 #define RAM_EXP       0xC2D0
@@ -245,6 +246,7 @@ static int hud_info(char lines[][41], int max)
    (whichever of the two the party was in last) */
 static int s_map_ctx;                  /* 0 none yet, 1 dungeon, 2 planet / town */
 int ps_map_context(void) { return s_map_ctx == 2 && !ps_worldmap_valid() ? 0 : s_map_ctx; }
+static void map_page_key(int key) { if (s_map_ctx == 2) ps_worldmap_hud_key(key); }   /* Up/Down: area / planet */
 static void map_page_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
 {
     if (s_map_ctx == 2 && ps_worldmap_valid()) ps_worldmap_hud_draw(fb, w, h, x0, y0, x1, y1);
@@ -266,7 +268,7 @@ void ps_on_post_reset(void)
     ps_automap_init();
     ps_worldmap_init();
     s_map_ctx = 0;
-    if (!pages_added) { hud_add_page("MAP", map_page_draw, NULL); pages_added = true; }
+    if (!pages_added) { hud_add_page("MAP", map_page_draw, map_page_key); pages_added = true; }
     hud_set_open_page(hud_open_page);
     size_t n = 0; uint8_t *rom = glue_rom_image(&n);
     if (rom && n >= OVERWORLD_RATE_TABLE_ROM_OFFSET + OVERWORLD_RATE_TABLE_SIZE

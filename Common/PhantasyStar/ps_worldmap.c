@@ -58,6 +58,8 @@ bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh
 
 static uint32_t g_img[AREA_W * AREA_H];         /* rendered 3x3 screens */
 static int      g_img_key = -1;
+static int      g_planet_ts = -1;              /* tileset of the cached whole-planet image */
+static int      g_view;                        /* HUD page: 0 area, 1 whole planet (test: PS_MAP_VIEW=1) */
 
 static long bank_off(int bank, unsigned addr) { return (long)bank * 0x4000 + (long)(addr - 0x8000); }
 
@@ -89,7 +91,8 @@ static void decode_tiles(int which)
 void ps_worldmap_init(void)
 {
     g_rom = glue_rom_image(&g_rom_n);
-    g_area.valid = false; g_img_key = -1;
+    g_area.valid = false; g_img_key = -1; g_planet_ts = -1;
+    { const char *v = getenv("PS_MAP_VIEW"); g_view = v ? atoi(v) & 1 : 0; }
     g_tiles_ok[0] = g_tiles_ok[1] = false; g_tiles_from_vram = false;
     if (!g_rom || g_rom_n < 0x10000) return;
     /* GameMode_LoadMap: ld hl,LABEL_DC1 ; add hl,de ; ld a,(hl) ; ld ($C308),a ; add a,a ; ld h,a ;
@@ -134,7 +137,7 @@ void ps_worldmap_frame(void)
     if (g_tiles_from_vram && in_map == 30) {
         int which = sms_read8(0xC308) < 4 ? 0 : 1;
         memcpy(g_tiles[which], g_vdp.vram, sizeof g_tiles[which]);
-        g_tiles_ok[which] = true; g_img_key = -1;
+        g_tiles_ok[which] = true; g_img_key = -1; g_planet_ts = -1;
     }
     int cam_x = sms_read8(0xC302) * SCR_W + sms_read8(0xC301);
     int cam_y = sms_read8(0xC306) * SCR_H + sms_read8(0xC305);
@@ -178,44 +181,77 @@ static bool unpack_screen(const uint8_t *e, int sx, int sy, uint8_t out[192])
     return n == 192;
 }
 
-/* render nw x nh screens (<= 3 x 3) with top-left screen (osx, osy) into g_img */
-static int g_nw = 3, g_nh = 3;
-static void render_area(int tileset, int osx, int osy, int nw, int nh)
+/* palette + tiles + metatile base of a tileset */
+typedef struct { const uint8_t *e, *tiles; uint32_t pal[32]; long mt_base; } TileSetView;
+static void tileset_view(int tileset, TileSetView *v)
 {
-    const uint8_t *e = g_rom + g_df1 + tileset * 14;
+    v->e = g_rom + g_df1 + tileset * 14;
     int which = tileset < 4 ? 0 : 1;
     decode_tiles(which);
-    const uint8_t *tiles = g_tiles[which];
-    uint32_t pal[32];
-    long po = (long)(e[10] | (e[11] << 8));
-    for (int k = 0; k < 16; k++) pal[k] = sms_rgb(po + k < (long)g_rom_n ? g_rom[po + k] : 0);
-    for (int k = 0; k < 16; k++) pal[16 + k] = sms_rgb(g_area.spr_pal[k]);
-    long mt_base = bank_off(e[9], 0x8000);
-    for (int gy = 0; gy < nh; gy++) for (int gx = 0; gx < nw; gx++) {
-        uint8_t scr[192];
-        bool ok = unpack_screen(e, (osx + gx) & 7, (osy + gy) & 7, scr);
-        for (int my = 0; my < 12; my++) for (int mx = 0; mx < 16; mx++) {
-            long mo = mt_base + scr[my * 16 + mx] * 8;
-            for (int q = 0; q < 4; q++) {
-                int ox = gx * SCR_W + mx * 16 + (q & 1) * 8, oy = gy * SCR_H + my * 16 + (q >> 1) * 8;
-                if (!ok || mo + q * 2 + 1 >= (long)g_rom_n) {
-                    for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) g_img[(oy + y) * AREA_W + ox + x] = 0;
-                    continue;
-                }
-                uint8_t lo = g_rom[mo + q * 2], hi = g_rom[mo + q * 2 + 1];
-                int tile = lo | (hi & 1) << 8, pb = (hi & 8) ? 16 : 0;
-                const uint8_t *t = tiles + tile * 32;
-                for (int y = 0; y < 8; y++) {
-                    const uint8_t *row = t + ((hi & 4) ? 7 - y : y) * 4;
-                    for (int x = 0; x < 8; x++) {
-                        int b = (hi & 2) ? x : 7 - x;
-                        int c = ((row[0] >> b) & 1) | ((row[1] >> b) & 1) << 1 | ((row[2] >> b) & 1) << 2 | ((row[3] >> b) & 1) << 3;
-                        g_img[(oy + y) * AREA_W + ox + x] = pal[pb + c];
-                    }
+    v->tiles = g_tiles[which];
+    long po = (long)(v->e[10] | (v->e[11] << 8));
+    for (int k = 0; k < 16; k++) v->pal[k] = sms_rgb(po + k < (long)g_rom_n ? g_rom[po + k] : 0);
+    for (int k = 0; k < 16; k++) v->pal[16 + k] = sms_rgb(g_area.spr_pal[k]);
+    v->mt_base = bank_off(v->e[9], 0x8000);
+}
+
+/* draw screen (sx, sy) at full size into dst (stride in pixels) */
+static void draw_screen(const TileSetView *v, int sx, int sy, uint32_t *dst, int stride)
+{
+    uint8_t scr[192];
+    bool ok = unpack_screen(v->e, sx & 7, sy & 7, scr);
+    for (int my = 0; my < 12; my++) for (int mx = 0; mx < 16; mx++) {
+        long mo = v->mt_base + scr[my * 16 + mx] * 8;
+        for (int q = 0; q < 4; q++) {
+            uint32_t *o = dst + (my * 16 + (q >> 1) * 8) * stride + mx * 16 + (q & 1) * 8;
+            if (!ok || mo + q * 2 + 1 >= (long)g_rom_n) {
+                for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) o[y * stride + x] = 0;
+                continue;
+            }
+            uint8_t lo = g_rom[mo + q * 2], hi = g_rom[mo + q * 2 + 1];
+            int tile = lo | (hi & 1) << 8, pb = (hi & 8) ? 16 : 0;
+            const uint8_t *t = v->tiles + tile * 32;
+            for (int y = 0; y < 8; y++) {
+                const uint8_t *row = t + ((hi & 4) ? 7 - y : y) * 4;
+                for (int x = 0; x < 8; x++) {
+                    int b = (hi & 2) ? x : 7 - x;
+                    int c = ((row[0] >> b) & 1) | ((row[1] >> b) & 1) << 1 | ((row[2] >> b) & 1) << 2 | ((row[3] >> b) & 1) << 3;
+                    o[y * stride + x] = v->pal[pb + c];
                 }
             }
         }
     }
+}
+
+/* render nw x nh screens (<= 3 x 3) with top-left screen (osx, osy) into g_img */
+static int g_nw = 3, g_nh = 3;
+static void render_area(int tileset, int osx, int osy, int nw, int nh)
+{
+    TileSetView v; tileset_view(tileset, &v);
+    for (int gy = 0; gy < nh; gy++) for (int gx = 0; gx < nw; gx++)
+        draw_screen(&v, osx + gx, osy + gy, g_img + gy * SCR_H * AREA_W + gx * SCR_W, AREA_W);
+}
+
+/* the whole planet (8 x 8 screens) at 1/4 size: 512 x 384, rendered once per tileset */
+#define PLANET_W (8 * SCR_W / 4)
+#define PLANET_H (8 * SCR_H / 4)
+static uint32_t g_planet[PLANET_W * PLANET_H];
+static void render_planet(int tileset)
+{
+    static uint32_t scr[SCR_W * SCR_H];
+    TileSetView v; tileset_view(tileset, &v);
+    for (int sy = 0; sy < 8; sy++) for (int sx = 0; sx < 8; sx++) {
+        draw_screen(&v, sx, sy, scr, SCR_W);
+        for (int y = 0; y < SCR_H / 4; y++) for (int x = 0; x < SCR_W / 4; x++) {
+            unsigned r = 0, g = 0, b = 0;
+            for (int k = 0; k < 16; k++) {
+                uint32_t c = scr[(y * 4 + (k >> 2)) * SCR_W + x * 4 + (k & 3)];
+                r += c >> 16 & 255; g += c >> 8 & 255; b += c & 255;
+            }
+            g_planet[(sy * SCR_H / 4 + y) * PLANET_W + sx * SCR_W / 4 + x] = (r / 16) << 16 | (g / 16) << 8 | (b / 16);
+        }
+    }
+    g_planet_ts = tileset;
 }
 
 /* screen table of the current tileset as 8 x 8 pointers; returns the most common one (filler) */
@@ -290,46 +326,74 @@ const char *ps_worldmap_area_name(void)
     }
 }
 
-/* Draw the map fitted (aspect kept, centred) into the box (bx, by, bw, bh) of an ARGB buffer: area
-   average when scaling down, nearest when scaling up, darkened screen boundaries, party marker.
-   Returns false (nothing drawn) when there is no map yet. */
-bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh)
+/* Fit src (sw x sh, stride) into the box keeping the aspect (centred): area average when scaling
+   down, nearest when scaling up; source lines at multiples of (gx, gy) are darkened (screen grid,
+   0 = none). Returns the destination rectangle. */
+static void blit_fit(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh,
+                     const uint32_t *src, int stride, int sw, int sh, int gx, int gy, int dark,
+                     int *omx, int *omy, int *odw, int *odh)
 {
-    int rx, ry;
-    if (bw < 8 || bh < 8 || !prepare(&rx, &ry)) return false;
-    static bool dumped; if (!dumped) { debug_ppm(); dumped = true; }
-    int sw = g_nw * SCR_W, sh = g_nh * SCR_H, dw, dh;
+    int dw, dh;
     if ((long)sw * bh > (long)bw * sh) { dw = bw; dh = (int)((long)bw * sh / sw); }
     else { dh = bh; dw = (int)((long)bh * sw / sh); }
     int mx = bx + (bw - dw) / 2, my = by + (bh - dh) / 2;
     for (int y = 0; y < dh; y++) {
         int yy = my + y; if (yy < 0 || yy >= h) continue;
         int sy0 = (int)((long)y * sh / dh), sy1 = (int)((long)(y + 1) * sh / dh); if (sy1 <= sy0) sy1 = sy0 + 1;
+        bool gyl = false;
+        if (gy) for (int k = gy; k < sh; k += gy) gyl |= sy0 <= k && sy1 > k && (sy0 == k || sy1 - sy0 > 1 || dh <= sh);
         for (int x = 0; x < dw; x++) {
             int xx = mx + x; if (xx < 0 || xx >= w) continue;
             int sx0 = (int)((long)x * sw / dw), sx1 = (int)((long)(x + 1) * sw / dw); if (sx1 <= sx0) sx1 = sx0 + 1;
-            unsigned r = 0, g = 0, b = 0, n = 0;          /* area average of the source block */
+            unsigned r = 0, g = 0, b = 0, n = 0;
             for (int sy = sy0; sy < sy1; sy++) for (int sx = sx0; sx < sx1; sx++, n++) {
-                uint32_t c = g_img[sy * AREA_W + sx];
+                uint32_t c = src[sy * stride + sx];
                 r += c >> 16 & 255; g += c >> 8 & 255; b += c & 255;
             }
             r /= n; g /= n; b /= n;
-            bool grid = false;                            /* screen boundaries */
-            for (int k = 1; k < g_nw; k++) grid |= sx0 <= k * SCR_W && sx1 > k * SCR_W && (sx0 == k * SCR_W || sx1 - sx0 > 1 || dw <= sw);
-            for (int k = 1; k < g_nh; k++) grid |= sy0 <= k * SCR_H && sy1 > k * SCR_H && (sy0 == k * SCR_H || sy1 - sy0 > 1 || dh <= sh);
-            if (grid) { r = r * 3 / 5; g = g * 3 / 5; b = b * 3 / 5; }
+            bool grid = gyl;
+            if (gx && !grid) for (int k = gx; k < sw; k += gx) grid |= sx0 <= k && sx1 > k && (sx0 == k || sx1 - sx0 > 1 || dw <= sw);
+            if (grid) { r = r * (unsigned)(100 - dark) / 100; g = g * (unsigned)(100 - dark) / 100; b = b * (unsigned)(100 - dark) / 100; }
             fb[yy * w + xx] = 0xFF000000u | r << 16 | g << 8 | b;
         }
     }
-    {   /* party: red square, ~1/40 of the map width (at least 7 px), rim alternating white / black
-           every 20 draws (the panel and the HUD page redraw every presented frame) */
-        static unsigned calls;
-        uint32_t rim = (calls++ / 20) & 1 ? 0xFF000000u : 0xFFFFFFFFu;
-        int cx = mx + (int)((long)rx * dw / sw), cy = my + (int)((long)ry * dh / sh);
-        int r = dw / 80; if (r < 2) r = 2;
-        hud_fill(fb, w, h, cx - r - 1, cy - r - 1, cx + r + 2, cy + r + 2, rim, false);
-        hud_fill(fb, w, h, cx - r, cy - r, cx + r + 1, cy + r + 1, 0xFFEB3C3Cu, false);
-    }
+    *omx = mx; *omy = my; *odw = dw; *odh = dh;
+}
+
+/* party: red square, ~1/40 of the map width (at least 5 px), rim alternating white / black every
+   20 draws (the panel and the HUD page redraw every presented frame) */
+static void party_marker(uint32_t *fb, int w, int h, int cx, int cy, int dw)
+{
+    static unsigned calls;
+    uint32_t rim = (calls++ / 20) & 1 ? 0xFF000000u : 0xFFFFFFFFu;
+    int r = dw / 80; if (r < 2) r = 2;
+    hud_fill(fb, w, h, cx - r - 1, cy - r - 1, cx + r + 2, cy + r + 2, rim, false);
+    hud_fill(fb, w, h, cx - r, cy - r, cx + r + 1, cy + r + 1, 0xFFEB3C3Cu, false);
+}
+
+/* Draw the surroundings map fitted into the box (bx, by, bw, bh) of an ARGB buffer, with the party
+   marker. Returns false (nothing drawn) when there is no map yet. */
+bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh)
+{
+    int rx, ry, mx, my, dw, dh;
+    if (bw < 8 || bh < 8 || !prepare(&rx, &ry)) return false;
+    static bool dumped; if (!dumped) { debug_ppm(); dumped = true; }
+    int sw = g_nw * SCR_W, sh = g_nh * SCR_H;
+    blit_fit(fb, w, h, bx, by, bw, bh, g_img, AREA_W, sw, sh, SCR_W, SCR_H, 40, &mx, &my, &dw, &dh);
+    party_marker(fb, w, h, mx + (int)((long)rx * dw / sw), my + (int)((long)ry * dh / sh), dw);
+    return true;
+}
+
+/* The whole planet (planets only), faint screen grid, party marker. */
+bool ps_worldmap_draw_planet(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh)
+{
+    int mx, my, dw, dh;
+    if (bw < 8 || bh < 8 || !g_area.valid || g_df1 < 0 || g_area.tileset >= 4) return false;
+    if (g_tiles_from_vram && !g_tiles_ok[0]) return false;
+    if (g_planet_ts != g_area.tileset) render_planet(g_area.tileset);
+    blit_fit(fb, w, h, bx, by, bw, bh, g_planet, PLANET_W, PLANET_W, PLANET_H, PLANET_W / 8, PLANET_H / 8, 20, &mx, &my, &dw, &dh);
+    int px = ((g_area.px % 2048) + 2048) % 2048, py = ((g_area.py % 1536) + 1536) % 1536;
+    party_marker(fb, w, h, mx + (int)((long)px * dw / 2048), my + (int)((long)py * dh / 1536), dw);
     return true;
 }
 
@@ -339,15 +403,20 @@ void ps_worldmap_screen(int *sx, int *sy)
     *sy = (((g_area.py % 1536) + 1536) % 1536) / SCR_H;
 }
 
+/* HUD page view: 0 = the screens around the party, 1 = the whole planet; Up/Down switch */
+void ps_worldmap_hud_key(int key) { if (key == HUD_KEY_UP || key == HUD_KEY_DOWN) g_view ^= 1; }
+
 /* HUD page: the map in a 4:3 box, an info column to the right */
 void ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
 {
-    const uint32_t GREY = 0xFFA0A0B0, CYAN = 0xFF60D0FF, WHITE = 0xFFFFFFFF;
+    const uint32_t GREY = 0xFFA0A0B0, CYAN = 0xFF60D0FF, WHITE = 0xFFFFFFFF, YEL = 0xFFFFD040;
     int bh = y1 - y0 - 2, bw = bh * 4 / 3;
     if (bw > x1 - x0 - 60) { bw = x1 - x0 - 60; bh = bw * 3 / 4; }
     int bx = x0 + 2, by = y0 + 1;
     hud_fill(fb, w, h, bx - 1, by - 1, bx + bw + 1, by + bh + 1, 0xFF0C0C12u, false);
-    if (!ps_worldmap_draw(fb, w, h, bx, by, bw, bh)) {
+    bool planet = g_view == 1 && g_area.valid && g_area.tileset < 4;
+    bool ok = planet ? ps_worldmap_draw_planet(fb, w, h, bx, by, bw, bh) : ps_worldmap_draw(fb, w, h, bx, by, bw, bh);
+    if (!ok) {
         hud_text(fb, w, h, x0 + 8, y0 + 4, "NO MAP YET", GREY);
         hud_text(fb, w, h, x0 + 8, y0 + 18, "SHOWN ONCE YOU ARE ON A PLANET", GREY);
         hud_text(fb, w, h, x0 + 8, y0 + 28, "OR IN A TOWN.", GREY);
@@ -359,5 +428,10 @@ void ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
     ps_worldmap_screen(&sx, &sy);
     snprintf(buf, sizeof buf, "%d,%d", sx, sy);
     hud_text(fb, w, h, tx, ty, "SCREEN", GREY); ty += 9;
-    hud_text(fb, w, h, tx, ty, buf, WHITE);
+    hud_text(fb, w, h, tx, ty, buf, WHITE); ty += 14;
+    if (g_area.tileset < 4) {
+        hud_text(fb, w, h, tx, ty, planet ? "PLANET" : "AREA", YEL); ty += 9;
+        hud_text(fb, w, h, tx, ty, "UP/DOWN", GREY); ty += 9;
+        hud_text(fb, w, h, tx, ty, planet ? "= AREA" : "= PLANET", GREY);
+    }
 }
