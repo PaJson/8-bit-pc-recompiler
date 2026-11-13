@@ -499,9 +499,6 @@ void ps_automap_enable(bool on)       /* the side window (the HUD page is always
     if (!on) window_hide();
 }
 
-/* line of sight stops at anything that looks like a wall (walls, doors, secret walls) */
-static bool blocks_view(uint8_t cell) { int t = cell & 7; return t == 1 || t >= 4; }
-
 /* Stairs / doors: the game moves the party 2 cells (past the stairs or door), so the party never
    stands on them. Reveal the 3x3 around such a cell when the party arrives next to it. */
 static bool is_passage(uint8_t cell) { int t = cell & 7; return t >= 2 && t <= 6; }
@@ -565,13 +562,19 @@ void ps_automap_frame(uint64_t frame)
             reveal_around(g_cur, bx, by);
     }
     g_last_pos = pos;
-    {   /* line of sight straight ahead */
-        int x = px, y = py;
-        for (int i = 0; i < 16; i++) {
-            x += DX[g_cur_dir]; y += DY[g_cur_dir];
+    {   /* what the 3D view shows (LABEL_6AED / LABEL_6C46, cell offsets LABEL_6C06): cells 1..3 ahead,
+           each with its left/right neighbours while the way is open; the first non-empty cell ahead
+           is drawn as a front face and ends the view; the 4th cell ahead only shows if it is not empty */
+        int lx = DY[dir], ly = -DX[dir];                 /* left of the facing direction */
+        for (int d = 1; d <= 4; d++) {
+            int x = px + DX[dir] * d, y = py + DY[dir] * d;
             if (x < 0 || x > 15 || y < 0 || y > 15) break;
+            bool open = (map[y * 16 + x] & 7) == 0;
+            if (d == 4) { if (!open) reveal(g_cur, x, y, SEEN); break; }
             reveal(g_cur, x, y, SEEN);
-            if (blocks_view(map[y * 16 + x])) break;
+            if (!open) break;
+            reveal(g_cur, x + lx, y + ly, SEEN);
+            reveal(g_cur, x - lx, y - ly, SEEN);
         }
     }
     ascii_dump(g_cur_px, g_cur_py, g_cur_dir);
