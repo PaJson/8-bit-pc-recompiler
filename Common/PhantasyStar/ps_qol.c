@@ -39,6 +39,10 @@ extern void     ps_automap_init(void);
 extern void     ps_automap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
 extern int      ps_automap_in_dungeon(void);
 extern void     ps_automap_set_view(int reveal_all, int show_secrets);
+extern void     ps_worldmap_init(void);
+extern void     ps_worldmap_frame(void);
+extern bool     ps_worldmap_valid(void);
+extern void     ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
 
 #define RAM_GAME_MODE 0xC202
 #define RAM_EXP       0xC2D0
@@ -230,6 +234,15 @@ static int hud_info(char lines[][41], int max)
     return n;
 }
 
+/* MAP page: the dungeon map in / after a dungeon, the surroundings map on a planet or in a town
+   (whichever of the two the party was in last) */
+static int s_map_ctx;                  /* 0 none yet, 1 dungeon, 2 planet / town */
+static void map_page_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
+{
+    if (s_map_ctx == 2 && ps_worldmap_valid()) ps_worldmap_hud_draw(fb, w, h, x0, y0, x1, y1);
+    else ps_automap_hud_draw(fb, w, h, x0, y0, x1, y1);
+}
+
 static int hud_open_page(void)   /* in a dungeon: the map (test: PS_HUD_PAGE=n forces a page) */
 {
     const char *e = getenv("PS_HUD_PAGE");
@@ -243,7 +256,9 @@ void ps_on_post_reset(void)
     init_names();
     load_config();
     ps_automap_init();
-    if (!pages_added) { hud_add_page("MAP", ps_automap_hud_draw, NULL); pages_added = true; }
+    ps_worldmap_init();
+    s_map_ctx = 0;
+    if (!pages_added) { hud_add_page("MAP", map_page_draw, NULL); pages_added = true; }
     hud_set_open_page(hud_open_page);
     size_t n = 0; uint8_t *rom = glue_rom_image(&n);
     if (rom && n >= OVERWORLD_RATE_TABLE_ROM_OFFSET + OVERWORLD_RATE_TABLE_SIZE
@@ -263,6 +278,9 @@ void ps_on_post_reset(void)
 void ps_on_frame_post(uint64_t frame)
 {
     ps_automap_frame(frame);
+    ps_worldmap_frame();
+    {   uint8_t mode = sms_read8(0xC202);
+        if (mode == 0x0B) s_map_ctx = 1; else if (mode == 0x09) s_map_ctx = 2; }
 
     static uint16_t last_exp;           /* last EXP reward value we produced (0 = none yet) */
     static int      enc_base = -1, enc_written = -1;
