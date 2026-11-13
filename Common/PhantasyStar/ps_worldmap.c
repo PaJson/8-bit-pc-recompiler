@@ -59,6 +59,7 @@ bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh
 static uint32_t g_img[AREA_W * AREA_H];         /* rendered 3x3 screens */
 static int      g_img_key = -1;
 static int      g_planet_ts = -1;              /* tileset of the cached whole-planet image */
+static unsigned  g_gen;                        /* bumped whenever g_img / g_planet is re-rendered */
 static int      g_view;                        /* HUD page: 0 area, 1 whole planet (test: PS_MAP_VIEW=1) */
 
 static long bank_off(int bank, unsigned addr) { return (long)bank * 0x4000 + (long)(addr - 0x8000); }
@@ -228,6 +229,7 @@ static int g_nw = 3, g_nh = 3;
 static void render_area(int tileset, int osx, int osy, int nw, int nh)
 {
     TileSetView v; tileset_view(tileset, &v);
+    g_gen++;
     for (int gy = 0; gy < nh; gy++) for (int gx = 0; gx < nw; gx++)
         draw_screen(&v, osx + gx, osy + gy, g_img + gy * SCR_H * AREA_W + gx * SCR_W, AREA_W);
 }
@@ -251,7 +253,7 @@ static void render_planet(int tileset)
             g_planet[(sy * SCR_H / 4 + y) * PLANET_W + sx * SCR_W / 4 + x] = (r / 16) << 16 | (g / 16) << 8 | (b / 16);
         }
     }
-    g_planet_ts = tileset;
+    g_planet_ts = tileset; g_gen++;
 }
 
 /* screen table of the current tileset as 8 x 8 pointers; returns the most common one (filler) */
@@ -360,6 +362,34 @@ static void blit_fit(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh,
     *omx = mx; *omy = my; *odw = dw; *odh = dh;
 }
 
+/* The scaled image only changes when the source is re-rendered or the box changes: keep the last
+   few results (HUD page and side panel use different sizes) and copy them instead of re-scaling. */
+typedef struct { long long key; int bw, bh, ox, oy, dw, dh; uint32_t px[256 * 256]; } BlitCache;
+static BlitCache g_bc[3];
+static int       g_bc_next;
+static void blit_cached(long long key, uint32_t *fb, int w, int h, int bx, int by, int bw, int bh,
+                        const uint32_t *src, int stride, int sw, int sh, int gx, int gy, int dark,
+                        int *mx, int *my, int *dw, int *dh)
+{
+    key = key ^ ((long long)g_gen << 40);
+    for (int i = 0; i < 3; i++) {
+        BlitCache *c = &g_bc[i];
+        if (c->dw > 0 && c->key == key && c->bw == bw && c->bh == bh) {
+            *mx = bx + c->ox; *my = by + c->oy; *dw = c->dw; *dh = c->dh;
+            for (int y = 0; y < c->dh; y++) {
+                int yy = *my + y; if (yy < 0 || yy >= h) continue;
+                for (int x = 0; x < c->dw; x++) { int xx = *mx + x; if (xx >= 0 && xx < w) fb[yy * w + xx] = c->px[y * c->dw + x]; }
+            }
+            return;
+        }
+    }
+    blit_fit(fb, w, h, bx, by, bw, bh, src, stride, sw, sh, gx, gy, dark, mx, my, dw, dh);
+    if (*dw * *dh > 256 * 256 || *mx < 0 || *my < 0 || *mx + *dw > w || *my + *dh > h) return;
+    BlitCache *c = &g_bc[g_bc_next++ % 3];
+    c->key = key; c->bw = bw; c->bh = bh; c->ox = *mx - bx; c->oy = *my - by; c->dw = *dw; c->dh = *dh;
+    for (int y = 0; y < *dh; y++) memcpy(c->px + y * *dw, fb + (*my + y) * w + *mx, (size_t)*dw * 4);
+}
+
 /* party: red square, ~1/40 of the map width (at least 5 px), rim alternating white / black every
    20 draws (the panel and the HUD page redraw every presented frame) */
 static void party_marker(uint32_t *fb, int w, int h, int cx, int cy, int dw)
@@ -379,7 +409,7 @@ bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh
     if (bw < 8 || bh < 8 || !prepare(&rx, &ry)) return false;
     static bool dumped; if (!dumped) { debug_ppm(); dumped = true; }
     int sw = g_nw * SCR_W, sh = g_nh * SCR_H;
-    blit_fit(fb, w, h, bx, by, bw, bh, g_img, AREA_W, sw, sh, SCR_W, SCR_H, 40, &mx, &my, &dw, &dh);
+    blit_cached(g_img_key, fb, w, h, bx, by, bw, bh, g_img, AREA_W, sw, sh, SCR_W, SCR_H, 40, &mx, &my, &dw, &dh);
     party_marker(fb, w, h, mx + (int)((long)rx * dw / sw), my + (int)((long)ry * dh / sh), dw);
     return true;
 }
@@ -391,7 +421,7 @@ bool ps_worldmap_draw_planet(uint32_t *fb, int w, int h, int bx, int by, int bw,
     if (bw < 8 || bh < 8 || !g_area.valid || g_df1 < 0 || g_area.tileset >= 4) return false;
     if (g_tiles_from_vram && !g_tiles_ok[0]) return false;
     if (g_planet_ts != g_area.tileset) render_planet(g_area.tileset);
-    blit_fit(fb, w, h, bx, by, bw, bh, g_planet, PLANET_W, PLANET_W, PLANET_H, PLANET_W / 8, PLANET_H / 8, 20, &mx, &my, &dw, &dh);
+    blit_cached(0x40000000LL | g_planet_ts, fb, w, h, bx, by, bw, bh, g_planet, PLANET_W, PLANET_W, PLANET_H, PLANET_W / 8, PLANET_H / 8, 20, &mx, &my, &dw, &dh);
     int px = ((g_area.px % 2048) + 2048) % 2048, py = ((g_area.py % 1536) + 1536) % 1536;
     party_marker(fb, w, h, mx + (int)((long)px * dw / 2048), my + (int)((long)py * dh / 1536), dw);
     return true;
