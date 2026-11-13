@@ -1,0 +1,35 @@
+# ROMs and anything derived from them (never commit)
+ROMs/
+*.sms
+*.gg
+*.sav
+*.automap
+Games/*/generated/
+Games/*/build*/
+Games/*/saves/
+
+# Logs, test output, personal settings
+*.log
+dispatch_manifest.txt
+ps_qol.ini
+*.ppm
+*.png
+*.wav
+*.ram
+*.vram
+*.cram
+*.regs
+
+# Separate repos and third-party tools/data (not ours)
+Recomp/
+Disasm/
+Emulicious/
+Masterlator/
+Patchers/
+ROMPatches/
+
+# Build/tool leftovers
+*.exe
+*.o
+__pycache__/
+*.pyc
