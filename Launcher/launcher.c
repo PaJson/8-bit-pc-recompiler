@@ -10,6 +10,12 @@
  *
  * Background: the first .jpg/.png/.bmp in Images/ (the user's own picture, not part of the repo) or
  * `background = <path>` in launcher.ini; without one a generic background is drawn (no logos).
+ * Game art (optional, also the user's own, see runner/art.h): Images/<title> (front).jpg|png = the
+ * cover shown beside the list for the selected game (background dimmed behind it, cross-fade),
+ * Images/<title> (logo).png = its title logo (white outline added) above the details. <title> is
+ * matched against the game's name / ROM file name ("Phantasy Star" = every Phantasy Star entry);
+ * `art.<slug> = <title>` in launcher.ini picks a title by hand. Files named "<x> (<kind>)" are
+ * never taken as the background.
  * Text uses the engine HUD font (runner/hud.c). Images are decoded with GDI+ (part of Windows).
  *
  * Keys: Up/Down (PgUp/PgDn, Home/End) select, Enter/Space play (build first if needed), R rebuild,
@@ -29,6 +35,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include "hud.h"
+#include "art.h"
 
 /* ---------------- GDI+ flat API (declared here: mingw's gdiplus headers are C++) ---------------- */
 typedef struct { UINT32 GdiplusVersion; void *DebugEventCallback; BOOL SuppressBackgroundThread; BOOL SuppressExternalCodecs; } GpStartupInput;
@@ -71,6 +78,8 @@ static char g_bg_path[MAX_PATH];
 static bool g_panel_left;
 static int  g_game_scale = 3;
 static bool g_fullscreen;
+#define MAX_ART_MAP 32
+static char g_art_slug[MAX_ART_MAP][64], g_art_title[MAX_ART_MAP][160]; static int g_nart_map;
 
 static bool is_dir(const char *p) { DWORD a = GetFileAttributesA(p); return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY); }
 static bool is_file(const char *p) { DWORD a = GetFileAttributesA(p); return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY); }
@@ -104,6 +113,10 @@ static void load_ini(void)
         } else if (!strcmp(k, "panel")) g_panel_left = !strcmp(v, "left");
         else if (!strcmp(k, "window_scale")) { int s = atoi(v); if (s >= 1 && s <= 8) g_game_scale = s; }
         else if (!strcmp(k, "fullscreen")) g_fullscreen = atoi(v) != 0;
+        else if (!strncmp(k, "art.", 4) && k[4] && v[0] && g_nart_map < MAX_ART_MAP) {
+            snprintf(g_art_slug[g_nart_map], sizeof g_art_slug[0], "%s", k + 4);
+            snprintf(g_art_title[g_nart_map], sizeof g_art_title[0], "%s", v); g_nart_map++;
+        }
     }
     fclose(f);
 }
@@ -117,7 +130,14 @@ static void find_background(void)
     for (int i = 0; i < 4 && !g_bg_path[0]; i++) {
         char pat[MAX_PATH]; snprintf(pat, sizeof pat, "%s\\Images\\%s", g_root, ext[i]);
         WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pat, &fd);
-        if (h != INVALID_HANDLE_VALUE) { snprintf(g_bg_path, sizeof g_bg_path, "%s\\Images\\%s", g_root, fd.cFileName); FindClose(h); }
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {                                                /* not game art: "<title> (front|full|logo|back).ext" */
+            const char *f = fd.cFileName, *dot = strrchr(f, '.');
+            size_t stem = dot ? (size_t)(dot - f) : strlen(f);
+            if (stem > 0 && f[stem - 1] == ')' && (strstr(f, " (front)") || strstr(f, " (full)") || strstr(f, " (logo)") || strstr(f, " (back)"))) continue;
+            snprintf(g_bg_path, sizeof g_bg_path, "%s\\Images\\%s", g_root, f); break;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
     }
 }
 
@@ -125,6 +145,7 @@ static void find_background(void)
 enum { ST_READY, ST_NOT_BUILT, ST_NO_PROFILE };
 typedef struct {
     char slug[64], name[160], dir[MAX_PATH], rom[MAX_PATH], exe[MAX_PATH], romfile[200];
+    char cover[MAX_PATH], logo[MAX_PATH];        /* optional art (Images/), "" = none */
     int  state;
 } Game;
 static Game *g_games; static int g_ngames, g_capgames;
@@ -190,6 +211,18 @@ static void add_unprofiled_roms(const char *dir, int depth)
     FindClose(h);
 }
 
+static bool g_any_logo;
+static void find_art(Game *g)
+{
+    char dir[MAX_PATH]; snprintf(dir, sizeof dir, "%s\\Images", g_root);
+    const char *name = g->name; char stem[200];
+    snprintf(stem, sizeof stem, "%s", g->romfile); char *dot = strrchr(stem, '.'); if (dot) *dot = 0;
+    for (int i = 0; i < g_nart_map; i++) if (g->slug[0] && !_stricmp(g_art_slug[i], g->slug)) name = g_art_title[i];
+    if (!art_find(dir, name, "front", g->cover, sizeof g->cover)) art_find(dir, stem, "front", g->cover, sizeof g->cover);
+    if (!art_find(dir, name, "logo", g->logo, sizeof g->logo)) art_find(dir, stem, "logo", g->logo, sizeof g->logo);
+    if (g->logo[0]) g_any_logo = true;
+}
+
 static void scan_games(void)
 {
     g_ngames = 0;
@@ -222,6 +255,8 @@ static void scan_games(void)
     }
     char roms[MAX_PATH]; snprintf(roms, sizeof roms, "%s\\ROMs", g_root);
     add_unprofiled_roms(roms, 1);
+    g_any_logo = false;
+    for (int i = 0; i < g_ngames; i++) find_art(&g_games[i]);
     qsort(g_games, (size_t)g_ngames, sizeof(Game), cmp_games);
 }
 
@@ -458,7 +493,7 @@ static void fill(int x0, int y0, int x1, int y1, uint32_t argb)
         for (int x = x0 < 0 ? 0 : x0; x < x1 && x < g_ui_w; x++) g_ui[(size_t)y * g_ui_w + x] = argb;
 }
 
-typedef struct { int x0, y0, x1, y1, row_y, row_h, rows, sc; } Layout;
+typedef struct { int x0, y0, x1, y1, row_y, row_h, rows, sc, logo_y, logo_h; } Layout;
 static Layout layout(int w, int h)
 {
     Layout L; int sc = w >= 2400 ? 4 : w >= 1600 ? 3 : 2; if (h < 600) sc = 2; if (w < 900) sc = 1;
@@ -468,7 +503,9 @@ static Layout layout(int w, int h)
     L.y0 = h * 4 / 100; L.y1 = h - h * 4 / 100;
     L.row_h = 11 * sc;
     L.row_y = L.y0 + 30 * sc;
-    int bottom = L.y1 - 64 * sc;
+    L.logo_h = g_any_logo ? 40 * sc : 0;                         /* logo box above the details */
+    L.logo_y = L.y1 - 64 * sc - L.logo_h;
+    int bottom = L.y1 - 64 * sc - (L.logo_h ? L.logo_h + 6 * sc : 0);
     L.rows = (bottom - L.row_y) / L.row_h; if (L.rows < 1) L.rows = 1;
     return L;
 }
@@ -520,7 +557,8 @@ static void draw_ui(void)
     if (g_top + L.rows < g_ngames) text(L.x1 - 14 * sc, L.row_y + L.rows * L.row_h - 2 * sc, "v", 0xFF60D0FF, sc);
     /* details */
     int dy = L.y1 - 60 * sc;
-    fill(L.x0 + 3 * sc, dy - 4 * sc, L.x1 - 3 * sc, dy - 3 * sc, 0x8060D0FF);
+    int sep = L.logo_h ? L.logo_y - 4 * sc : dy - 4 * sc;
+    fill(L.x0 + 3 * sc, sep, L.x1 - 3 * sc, sep + sc / 2 + 1, 0x8060D0FF);
     if (g_sel >= 0 && g_sel < g_ngames) {
         const Game *g = &g_games[g_sel];
         char line[260];
@@ -539,6 +577,123 @@ static void draw_ui(void)
     SDL_UpdateTexture(g_ui_tex, NULL, g_ui, w * 4);
 }
 
+/* ---------------- game art: covers and logos as scaled textures (cached), cross-fade ---------------- */
+typedef struct { char path[MAX_PATH]; bool logo, failed; int bw, bh; SDL_Texture *tex; float dw, dh; Uint32 used; } ArtTex;
+#define N_ART 24
+static ArtTex g_art[N_ART]; static Uint32 g_art_clock;
+static bool g_no_fade;                                   /* test shots: no fade */
+
+/* the picture fitted into bw x bh output pixels (logos with the white outline); loaded on first use */
+static ArtTex *art_tex(const char *path, bool logo, int bw, int bh, bool load)
+{
+    if (!path || !path[0] || bw < 8 || bh < 8) return NULL;
+    ArtTex *lru = &g_art[0];
+    for (int i = 0; i < N_ART; i++) {
+        ArtTex *a = &g_art[i];
+        if (a->path[0] && a->bw == bw && a->bh == bh && a->logo == logo && !strcmp(a->path, path)) { a->used = ++g_art_clock; return a->failed ? NULL : a; }
+        if (a->used < lru->used) lru = a;
+    }
+    if (!load) return NULL;
+    if (lru->tex) SDL_DestroyTexture(lru->tex);
+    memset(lru, 0, sizeof *lru);
+    snprintf(lru->path, sizeof lru->path, "%s", path); lru->logo = logo; lru->bw = bw; lru->bh = bh; lru->used = ++g_art_clock;
+    int w = 0, h = 0; uint32_t *img = load_image(path, &w, &h);
+    if (!img) img = art_load(path, &w, &h);
+    if (img && logo) {
+        int r = (w > h ? w : h) / 100, ow, oh; if (r < 2) r = 2;
+        uint32_t *o = art_outline(img, w, h, r, 0xFFFFFFFFu, &ow, &oh);
+        free(img); img = o; w = ow; h = oh;
+    }
+    if (!img || w < 1 || h < 1) { free(img); lru->failed = true; return NULL; }
+    double sx = (double)bw / w, sy = (double)bh / h, sc = sx < sy ? sx : sy;
+    lru->dw = (float)(w * sc); lru->dh = (float)(h * sc);
+    int tw = w, th = h; uint32_t *px = img;
+    if (sc < 1) {                                        /* shrink in software (area average): sharp */
+        tw = (int)(w * sc + 0.5); th = (int)(h * sc + 0.5); if (tw < 1) tw = 1; if (th < 1) th = 1;
+        px = art_shrink(img, w, h, tw, th);
+    }
+    if (px) {
+        lru->tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, tw, th);
+        if (lru->tex) { SDL_UpdateTexture(lru->tex, NULL, px, tw * 4); SDL_SetTextureBlendMode(lru->tex, SDL_BLENDMODE_BLEND); SDL_SetTextureScaleMode(lru->tex, SDL_ScaleModeLinear); }
+    }
+    if (px != img) free(px);
+    free(img);
+    if (!lru->tex) { lru->failed = true; return NULL; }
+    return lru;
+}
+
+typedef struct { char cur[MAX_PATH], prev[MAX_PATH]; Uint32 t; } Fade;
+static Fade g_fade_cover, g_fade_logo;
+#define FADE_MS 180
+static void fade_set(Fade *f, const char *path)
+{
+    if (!strcmp(f->cur, path)) return;
+    snprintf(f->prev, sizeof f->prev, "%s", f->cur); snprintf(f->cur, sizeof f->cur, "%s", path);
+    f->t = g_no_fade ? 0 : SDL_GetTicks();
+}
+static float fade_a(const Fade *f)
+{
+    if (g_no_fade || !f->t) return 1.f;
+    Uint32 d = SDL_GetTicks() - f->t;
+    return d >= FADE_MS ? 1.f : (float)d / FADE_MS;
+}
+
+/* the cover box: the area beside the panel, 86 % wide, 84 % of the window height */
+static void cover_box(int w, int h, const Layout *L, int *bx, int *by, int *bw, int *bh)
+{
+    int ax0 = g_panel_left ? L->x1 : 0, ax1 = g_panel_left ? w : L->x0;
+    *bw = (ax1 - ax0) * 86 / 100; *bh = h * 84 / 100;
+    *bx = ax0 + ((ax1 - ax0) - *bw) / 2; *by = (h - *bh) / 2;
+}
+static void logo_box(const Layout *L, int *bx, int *by, int *bw, int *bh)
+{
+    *bx = L->x0 + 8 * L->sc; *bw = L->x1 - L->x0 - 16 * L->sc; *by = L->logo_y; *bh = L->logo_h;
+}
+
+static void draw_cover(const char *path, float a, int bx, int by, int bw, int bh, int sc)
+{
+    if (a <= 0.001f) return;
+    ArtTex *t = art_tex(path, false, bw, bh, true);
+    if (!t) return;
+    SDL_FRect d = { bx + (bw - t->dw) / 2, by + (bh - t->dh) / 2, t->dw, t->dh };
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    for (int i = 12; i >= 1; i--) {                       /* soft shadow, a little lower */
+        float e = (float)(i * sc);
+        SDL_FRect r = { d.x - e, d.y - e + 3 * sc, d.w + 2 * e, d.h + 2 * e };
+        SDL_SetRenderDrawColor(g_ren, 0, 0, 0, (Uint8)(14 * a));
+        SDL_RenderFillRectF(g_ren, &r);
+    }
+    SDL_FRect o = { d.x - 1, d.y - 1, d.w + 2, d.h + 2 };
+    SDL_SetRenderDrawColor(g_ren, 0, 0, 0, (Uint8)(170 * a));
+    SDL_RenderFillRectF(g_ren, &o);
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_NONE);
+    SDL_SetTextureAlphaMod(t->tex, (Uint8)(255 * a));
+    SDL_RenderCopyF(g_ren, t->tex, NULL, &d);
+}
+static void draw_logo(const char *path, float a, int bx, int by, int bw, int bh)
+{
+    if (a <= 0.001f) return;
+    ArtTex *t = art_tex(path, true, bw, bh, true);
+    if (!t) return;
+    SDL_FRect d = { bx + (bw - t->dw) / 2, by + (bh - t->dh) / 2, t->dw, t->dh };
+    SDL_SetTextureAlphaMod(t->tex, (Uint8)(255 * a));
+    SDL_RenderCopyF(g_ren, t->tex, NULL, &d);
+}
+
+/* idle: prepare one not yet cached picture per call (every game's cover and logo at the current size) */
+static void art_warm(void)
+{
+    int w, h; SDL_GetRendererOutputSize(g_ren, &w, &h);
+    Layout L = layout(w, h);
+    int cx, cy, cw, ch, lx, ly, lw, lh;
+    cover_box(w, h, &L, &cx, &cy, &cw, &ch); logo_box(&L, &lx, &ly, &lw, &lh);
+    for (int i = 0; i < g_ngames; i++) {
+        const Game *g = &g_games[i];
+        if (g->cover[0] && !art_tex(g->cover, false, cw, ch, false)) { art_tex(g->cover, false, cw, ch, true); return; }
+        if (g->logo[0] && L.logo_h && !art_tex(g->logo, true, lw, lh, false)) { art_tex(g->logo, true, lw, lh, true); return; }
+    }
+}
+
 static void render(void)
 {
     make_background();
@@ -555,7 +710,30 @@ static void render(void)
         }
         SDL_RenderCopy(g_ren, g_bg_tex, &src, NULL);
     }
+    Layout L = layout(w, h);
+    const Game *sel = (g_sel >= 0 && g_sel < g_ngames) ? &g_games[g_sel] : NULL;
+    fade_set(&g_fade_cover, sel ? sel->cover : "");
+    fade_set(&g_fade_logo, sel ? sel->logo : "");
+    {   /* cover: background dimmed behind it, cross-fade from the previous one */
+        float a = fade_a(&g_fade_cover);
+        float dim = (g_fade_cover.cur[0] ? a : 0.f) + (g_fade_cover.prev[0] ? 1.f - a : 0.f);
+        if (dim > 0.001f) {
+            SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(g_ren, 2, 6, 16, (Uint8)(120 * dim));
+            SDL_RenderFillRect(g_ren, NULL);
+            SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_NONE);
+        }
+        int bx, by, bw, bh; cover_box(w, h, &L, &bx, &by, &bw, &bh);
+        draw_cover(g_fade_cover.prev, 1.f - a, bx, by, bw, bh, L.sc);
+        draw_cover(g_fade_cover.cur, a, bx, by, bw, bh, L.sc);
+    }
     if (g_ui_tex) SDL_RenderCopy(g_ren, g_ui_tex, NULL, NULL);
+    if (L.logo_h) {
+        float a = fade_a(&g_fade_logo);
+        int bx, by, bw, bh; logo_box(&L, &bx, &by, &bw, &bh);
+        draw_logo(g_fade_logo.prev, 1.f - a, bx, by, bw, bh);
+        draw_logo(g_fade_logo.cur, a, bx, by, bw, bh);
+    }
     SDL_RenderPresent(g_ren);
 }
 
@@ -609,7 +787,7 @@ int main(int argc, char **argv)
     scan_games();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-    g_win = SDL_CreateWindow("Master System Recomp - Launcher", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+    g_win = SDL_CreateWindow("SEGA Master System PC Re-compiler", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
     if (!g_win) return 1;
     g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -619,6 +797,7 @@ int main(int argc, char **argv)
         const char *shot = getenv("LAUNCHER_SHOT");
         if (shot) {
             const char *sel = getenv("LAUNCHER_SEL"); if (sel) g_sel = atoi(sel);
+            g_no_fade = true;
             render(); render();
             int w, h; SDL_GetRendererOutputSize(g_ren, &w, &h);
             uint32_t *px = (uint32_t *)malloc((size_t)w * h * 4);
@@ -704,6 +883,7 @@ int main(int argc, char **argv)
         if (exit_after && was && !g_proc_kind) { fprintf(stderr, "[launcher] %s\n", g_status[0] ? g_status : "game ended"); quit = true; }
         if (g_proc_kind == 1) { SDL_Delay(100); continue; }        /* game running: launcher hidden */
         render();
+        art_warm();
         SDL_Delay(g_proc_kind ? 30 : 15);
     }
     if (g_proc_kind == 2) TerminateProcess(g_proc.hProcess, 1);

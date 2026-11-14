@@ -197,8 +197,12 @@ void ps_panel_draw(uint32_t *b, int w, int h)
     /* title / intro, or nothing loaded yet (the CONTINUE question comes before any party data) */
     if (!slot && (sms_read8(0xC202) <= 3 || rd(0xC405) == 0)) {
         box(b, w, h, 8, 8, w - 8, h - 8);
-        hud_text_scaled(b, w, h, (w - 8 * 12) / 2, h / 2 - 30, "PHANTASY", CYAN, 2);
-        hud_text_scaled(b, w, h, (w - 4 * 12) / 2, h / 2 - 6, "STAR", CYAN, 2);
+        if (hud_logo(NULL, NULL))                      /* the user's Images/<title> (logo).png */
+            hud_draw_logo(b, w, h, HUD_SPACE_PANEL, 24.f, (float)(h / 2 - 70), (float)(w - 48), 120.f, true);
+        else {
+            hud_text_scaled(b, w, h, (w - 8 * 12) / 2, h / 2 - 30, "PHANTASY", CYAN, 2);
+            hud_text_scaled(b, w, h, (w - 4 * 12) / 2, h / 2 - 6, "STAR", CYAN, 2);
+        }
         return;
     }
     static const char *const names[4] = { "ALIS", "MYAU", "ODIN", "NOAH" };

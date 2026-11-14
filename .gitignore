@@ -41,7 +41,7 @@ Games/*/build_log.txt
 # user bug reports (screenshots / recordings of the game)
 Bugs/
 
-# the user's own launcher artwork (Images/Background.jpg is used if present; never committed)
+# the user's own artwork: launcher background, game covers "(front)" and logos "(logo)" (never committed)
 Images/
 
 # launcher: local settings and build output

@@ -6,7 +6,7 @@ set(SMSGG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../Recomp/smsggrecomp" CACHE PATH "s
 
 find_package(SDL2 CONFIG REQUIRED)
 
-add_executable(Launcher WIN32 launcher.c "${SMSGG_ROOT}/runner/hud.c")
+add_executable(Launcher WIN32 launcher.c "${SMSGG_ROOT}/runner/hud.c" "${SMSGG_ROOT}/runner/art.c")
 target_include_directories(Launcher PRIVATE "${SMSGG_ROOT}/runner")
 target_compile_options(Launcher PRIVATE -Wall -Wextra -Wno-format-truncation -Wno-missing-field-initializers -O2)
 if (TARGET SDL2::SDL2main)

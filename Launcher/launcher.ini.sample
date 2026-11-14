@@ -3,3 +3,9 @@
 ; panel        = right                  ; game list on the right or left
 ; window_scale = 3                      ; window size of the games (x 256 x 192)
 ; fullscreen   = 0                      ; 1 = start the launcher fullscreen (F11 toggles)
+;
+; Game art (optional, your own pictures in Images\, never committed):
+;   "<title> (front).jpg|png" = cover shown beside the list, "<title> (logo).png" = title logo (transparent PNG;
+;   a white outline is added) above the details and in the game's HUD. <title> is matched against the game name /
+;   ROM file name: "Phantasy Star" fits every "Phantasy Star (...)" entry, but "Sonic the Hedgehog" not "... 2".
+; art.<slug>   = Phantasy Star          ; pick the title for one game folder (Games\<slug>) by hand
