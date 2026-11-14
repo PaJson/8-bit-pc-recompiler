@@ -4,8 +4,9 @@
 exp_multiplier     = 1      ; battle EXP reward multiplier, 1..100 (capped so no character overflows 65535 EXP)
 meseta_multiplier  = 1      ; battle Meseta reward multiplier, 1..100 (money still tops out at 65535)
 encounter_percent  = 100    ; random encounter chance: 100 = original, 50 = half, 0 = none (up to 200)
-automap            = 0      ; extra auto-map side window (the map is always on the HUD MAP page: F1 / pad Back, in a dungeon it opens there)
+automap            = 0      ; extra auto-map side window (the map is always on the HUD MAP page: F1 / pad Back opens on it)
 walk_speed         = 1      ; 1 = original, 2 or 4 = faster walking on maps (vehicles: x2 max); all builds except the 2.5 retranslations
 map_reveal         = 0      ; dungeon map: 0 = explored cells only, 1 = the whole floor
 map_secrets        = 1      ; dungeon map: 1 = mark secret walls, pits, chests, events (like the SEGA AGES map); 0 = only where you have stood
 side_panel         = 0      ; 1 = widescreen window with a side panel: party, meseta, map (like SEGA AGES; HUD option SIDE PANEL)
+fast_forward       = 4      ; speed while TAB / gamepad RT is held (LT is always x0.5): 0.5 (slow motion), 1, 2 or 4 (HUD option FAST FORWARD)

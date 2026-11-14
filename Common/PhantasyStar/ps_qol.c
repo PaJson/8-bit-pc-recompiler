@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "hud.h"
 
 extern uint8_t  sms_read8(uint16_t addr);
@@ -108,6 +109,10 @@ static int s_reveal_i = 0, s_secrets_i = 1;    /* dungeon map: explored / whole 
 static int s_panel_i = 0;                      /* widescreen side panel (party, meseta, map) off / on */
 static int s_hover_i = 0;                      /* hovercraft also drives on land: off / on */
 static int s_bgm_i = 100, s_sfx_i = 100;       /* music / sound effects volume, percent */
+static const double k_ff_vals[] = { 0.5, 1, 2, 4 };   /* fast-forward speed while TAB / pad RT is held */
+static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
+#define N_FF 4
+static int s_ff_i = 3;
 static const char *s_ini_path = "ps_qol.ini";
 
 static unsigned exp_mult(void)  { return (unsigned)s_exp_i; }
@@ -154,6 +159,10 @@ static void load_config(void)
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "encounter_percent") && v >= 0) s_enc_i = nearest_enc((int)(v + 0.5));
+        else if (!strcmp(key, "fast_forward") && v > 0) {
+            s_ff_i = 0;
+            for (int i = 1; i < N_FF; i++) if (fabs(k_ff_vals[i] - v) < fabs(k_ff_vals[s_ff_i] - v)) s_ff_i = i;
+        }
     }
     fclose(f);
     fprintf(stderr, "[ps_qol] exp x%u  meseta x%u  damage dealt %d%% received %d%%  encounters %d%%  automap %d  walk x%u (from %s)\n",
@@ -179,6 +188,7 @@ static void save_config(void)
     fprintf(f, "hovercraft_land    = %d      ; 1 = the hovercraft also drives on land like the Land Rover (board it anywhere)\n", s_hover_i);
     fprintf(f, "music_volume       = %-6d ; music volume in percent (0..100)\n", s_bgm_i);
     fprintf(f, "sfx_volume         = %-6d ; sound effects volume in percent (0..100)\n", s_sfx_i);
+    fprintf(f, "fast_forward       = %-6g ; speed while TAB / pad RT is held (LT = x0.5): 0.5, 1, 2 or 4 (default 4)\n", k_ff_vals[s_ff_i]);
     fclose(f);
 }
 
@@ -366,11 +376,102 @@ int ps_hover_board(void)
     return how ? 1 : 0;                        /* 1: board (ld a,$08 ; ld ($C30E),a ...) */
 }
 
+/* ---- quick vehicles: LB / key C = Land Rover (Ice Digger on Dezoris), RB / key V = hovercraft ----
+ * The game's own rules, without the menu and the landscape screen. Using a vehicle item
+ * (ItemUse_LandRover / _Hovercraft / _IceDigger, PlayerMenu_Item):
+ *   - getting in: only on a planet ($C308 < 4; Ice Digger: $C308 = 2) and with the item in the
+ *     inventory; the search for a spot (LABEL_7656 Land Rover / Ice Digger: walkable cells, shifts
+ *     the party by up to one cell; LABEL_76C1 hovercraft: water next to the party; with HOVERCRAFT
+ *     ON LAND also LABEL_7656, as ps_hover_board) must succeed -> $C30E = 4 / 12 / 8. Using another
+ *     vehicle's item while driving is the same boarding (the game switches vehicles directly).
+ *   - getting out: the item of the vehicle you are in -> LABEL_7656 (Land Rover / Ice Digger) or
+ *     LABEL_7732 (hovercraft: land next to it, by the facing direction $C2D7) -> $C30E = 0.
+ *   The menu then goes back through GameMode_LoadInteraction / _Interaction to GameMode_LoadMap,
+ *   which builds the party / vehicle object for $C30E. We do the RAM writes of that path (LABEL_B41,
+ *   LoadInteraction's camera fraction reset, the Interaction exit) and set GameMode_LoadMap: one fade
+ *   out / in like Fly. The Interaction_Type check of the item code always passes there (LoadInteraction
+ *   makes it non-zero), so it is not repeated. Runs in the ps_fly_go hook (GameMode_Map, standing
+ *   still, after the battle check); a refused press does nothing. Test env PS_VEH_PRESS=frame:n,...
+ *   (n = 1 Land Rover, 2 hovercraft), PS_VEH_LOG=1. */
+#define RAM_INV   0xC4C0
+#define RAM_INV_N 0xC4E2
+static uint16_t s_exit_fn;                     /* LABEL_7732 */
+static int s_veh_pending, s_veh_age;           /* 1 = LB action, 2 = RB action */
+static void vehicle_init(void)
+{
+    long x = find_rom("3a d7 c2 e6 03 4f 87 81 87 4f 06 08");
+    s_exit_fn = x > 0 ? (uint16_t)x : 0;
+    if (!s_exit_fn || !s_water_fn || !s_rover_fn || !s_it_addr) s_exit_fn = 0;
+    if (!s_exit_fn)
+        fprintf(stderr, "[ps_qol] vehicle routines not found: quick vehicles disabled\n");
+}
+static bool has_item(uint8_t id)
+{
+    int n = sms_read8(RAM_INV_N); if (n > 24) n = 24;
+    for (int i = 0; i < n; i++) if (sms_read8((uint16_t)(RAM_INV + i)) == id) return true;
+    return false;
+}
+static void vehicle_frame(uint64_t frame)
+{
+    static uint8_t last;
+    uint8_t m = hud_extra_buttons();
+    {   static const char *e = (const char *)1; if (e == (const char *)1) e = getenv("PS_VEH_PRESS");   /* test */
+        for (const char *p = e; p && *p; ) {
+            unsigned long long f = strtoull(p, (char **)&p, 10);
+            int k = *p == ':' ? atoi(p + 1) : 0;
+            if (f == frame && (k == 1 || k == 2)) m |= (uint8_t)k;
+            p = strchr(p, ','); if (p) p++;
+        } }
+    uint8_t rise = (uint8_t)(m & ~last); last = m;
+    if (rise & HUD_EXTRA_1) { s_veh_pending = 1; s_veh_age = 0; }
+    else if (rise & HUD_EXTRA_2) { s_veh_pending = 2; s_veh_age = 0; }
+    else if (s_veh_pending && ++s_veh_age > 30) s_veh_pending = 0;   /* not walking on a map: drop it */
+}
+/* called from the ps_fly_go hook; 1 = done (the hook returns with Z set -> `ret z`) */
+int ps_vehicle_go(void)
+{
+    int act = s_veh_pending;
+    if (!act || sms_read8(RAM_GAME_MODE) != 0x09 || sms_read8(0xC265) || !s_exit_fn) return 0;
+    s_veh_pending = 0;
+    uint8_t planet = sms_read8(0xC308), cur = sms_read8(0xC30E), item, want;
+    if (act == 1 && (cur == 4 || cur == 12)) { want = cur; item = cur == 12 ? 0x23 : 0x21; }   /* get out */
+    else if (act == 1) { item = planet == 2 && has_item(0x23) ? 0x23 : 0x21; want = item == 0x23 ? 12 : 4; }
+    else          { item = 0x22; want = 8; }
+    bool ok = false, out = cur == want;
+    const char *why = NULL;
+    uint16_t bc = z80_bc(&g_z80), de = z80_de(&g_z80), hl = z80_hl(&g_z80);
+    uint8_t a = g_z80.a, f = g_z80.f, dir = sms_read8(0xC2D7);
+    if (planet >= 4) why = "not on a planet";
+    else if (!has_item(item)) why = "item not owned";
+    else {
+        sms_write8(0xC2D7, sms_read8(0xC810));             /* LABEL_B41: facing direction (LABEL_7732 uses it) */
+        if (out) ok = game_call(want == 8 ? s_exit_fn : s_rover_fn);
+        else if (want == 8) ok = game_call(s_water_fn) || (s_hover_i && game_call(s_rover_fn));
+        else ok = game_call(s_rover_fn);
+        if (!ok) why = out ? "no place to get out" : "no place to get in";
+    }
+    z80_set_bc(&g_z80, bc); z80_set_de(&g_z80, de); z80_set_hl(&g_z80, hl); g_z80.a = a; g_z80.f = f;
+    {   static int log = -1; if (log < 0) log = getenv("PS_VEH_LOG") != NULL;
+        if (log) fprintf(stderr, "[veh] item %02X vehicle %u -> %s%s\n", item, cur, ok ? (out ? "out" : "in") : "refused: ", ok ? "" : why); }
+    if (!ok) { sms_write8(0xC2D7, dir); return 0; }
+    sms_write8(0xC30E, out ? 0 : want);
+    sms_write8(0xC29D, 0);                                     /* LABEL_B41 */
+    for (uint16_t p = 0xC26F; p <= 0xC286; p++) sms_write8(p, 0);
+    for (uint16_t p = 0xC800; p <= 0xC8FF; p++) sms_write8(p, 0);
+    sms_write8(0xC300, 0); sms_write8(0xC304, 0); sms_write8(0xC2E9, 0);   /* GameMode_LoadInteraction */
+    sms_write8(s_it_addr, 0); sms_write8(0xC2D5, 0);           /* GameMode_Interaction exit */
+    sms_write8(0xC2DB, 0); sms_write8(0xC2DC, 0);
+    sms_write8(RAM_GAME_MODE, 0x08);                           /* GameMode_LoadMap */
+    z80f_set(&g_z80, Z80_FLAG_Z, true);
+    return 1;
+}
+
 /* ---- HUD ---- */
 static void on_enc_changed(void) { apply_overworld_rate(); }
 static void on_map_changed(void) { ps_automap_enable(s_map_i != 0); }
 static void on_panel_changed(void) { hud_set_panel_enabled(s_panel_i != 0); }
 static void on_view_changed(void) { ps_automap_set_view(s_reveal_i, s_secrets_i); }
+static void on_ff_changed(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
 static const char *const k_reveal_names[]  = { "EXPLORED", "WHOLE FLOOR" };
 static const char *const k_secrets_names[] = { "HIDDEN", "SHOWN" };
 
@@ -424,26 +525,12 @@ static const HudOption k_opts[] = {
     { "ENCOUNTERS",        k_enc_names,  N_ENC,  &s_enc_i, on_enc_changed },
     { "MAP SIDE WINDOW",   k_onoff,      2,      &s_map_i, on_map_changed },
     { "WALK SPEED",        k_walk_names, 3,      &s_walk_i, NULL },
+    { "FAST FORWARD",      k_ff_names,   N_FF,   &s_ff_i, on_ff_changed },
     { "SIDE PANEL",        k_onoff,      2,      &s_panel_i, on_panel_changed },
     { "MAP REVEAL",        k_reveal_names, 2,    &s_reveal_i, on_view_changed },
     { "MAP SECRETS",       k_secrets_names, 2,   &s_secrets_i, on_view_changed },
     { "HOVERCRAFT ON LAND", k_onoff,     2,      &s_hover_i, NULL },
 };
-
-static int hud_info(char lines[][41], int max)
-{
-    static const char *const names[4] = { "ALIS", "MYAU", "ODIN", "NOAH" };
-    int n = 0;
-    for (int c = 0; c < 4 && n < max - 1; c++) {
-        uint16_t b = (uint16_t)(RAM_STATS + 0x10 * c);
-        if (!(sms_read8(b) & 1)) continue;                       /* not in the party / dead */
-        snprintf(lines[n++], 41, "%-5s LV %2u  HP %3u/%-3u  MP %3u/%-3u", names[c], sms_read8(b + 5),
-                 sms_read8(b + 1), sms_read8(b + 6), sms_read8(b + 2), sms_read8(b + 7));
-    }
-    unsigned money = sms_read8(RAM_MONEY) | (sms_read8(RAM_MONEY + 1) << 8);
-    if (n < max) snprintf(lines[n++], 41, "MESETA %u", money);
-    return n;
-}
 
 /* ---- MAP page ----
  * Shows one place at a time: a planet or town visited, or an explored dungeon (= floors linked by
@@ -533,14 +620,14 @@ static void map_page_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
     ps_worldmap_hud_draw_place(fb, w, h, x0, y0, x1, y1, s_sel.id, px, py, here, NULL, lines, nl);
 }
 
-static int hud_open_page(void)   /* in a dungeon: the map (test: PS_HUD_PAGE=n forces a page) */
+static int hud_open_page(void)   /* always the first tab, MAP (test: PS_HUD_PAGE=n forces a page) */
 {
     select_current();
     ps_items_hud_opened();
     ps_fly_hud_opened();
     const char *e = getenv("PS_HUD_PAGE");
     if (e) return atoi(e);
-    return hud_page_index(ps_automap_in_dungeon() ? "MAP" : "OPTIONS");
+    return hud_page_index("MAP");
 }
 
 void ps_on_post_reset(void)
@@ -551,6 +638,7 @@ void ps_on_post_reset(void)
     ps_automap_init();
     ps_worldmap_init();
     hover_init();
+    vehicle_init();
     ps_items_init();
     ps_fly_init();
     s_map_ctx = 0;
@@ -574,9 +662,9 @@ void ps_on_post_reset(void)
     if (enc_pct() != 100) apply_overworld_rate();
     ps_automap_enable(s_map_i != 0);
     ps_automap_set_view(s_reveal_i, s_secrets_i);
+    hud_set_turbo_speed(k_ff_vals[s_ff_i]);
     hud_set_title("PHANTASY STAR - OPTIONS");
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
-    hud_set_info(hud_info);
     hud_set_on_close(save_config);
     hud_set_panel(ps_panel_draw);
     hud_set_panel_enabled(s_panel_i != 0);
@@ -596,6 +684,7 @@ void ps_on_frame_post(uint64_t frame)
         } }
     ps_panel_frame(frame);
     ps_fly_frame();
+    vehicle_frame(frame);
     sound_frame();
 
     {   /* test: PS_DAMAGE_LOG=1 prints every HP change of the party (P0..3) and the enemies (E0..7) */

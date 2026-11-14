@@ -201,8 +201,10 @@ static const char *refusal(void)
 }
 
 /* [insn_hooks] ps_fly_go @ GameMode_Map `ld a,(Ctrl_1_held)` -> resume at its `ret z` */
+extern int ps_vehicle_go(void);              /* ps_qol.c: quick vehicles (LB / RB) share this hook */
 int ps_fly_go(void)
 {
+    if (ps_vehicle_go()) return 1;
     if (s_pending < 0 || sms_read8(RAM_MOVE_CNT)) return 0;   /* mid-step: next frame */
     Dest *d = &s_dest[s_pending];
     s_pending = -1;
