@@ -144,6 +144,13 @@ static const MapObject *object_at(uint8_t floor, int pos)
 /* ---- cell classification ---- */
 enum { K_FLOOR, K_WALL, K_UP, K_DOWN, K_DOOR, K_LOCKED, K_MAGIC, K_SECRET, K_PIT, K_CHEST, K_CHEST_OPEN,
        K_EVENT, K_EVENT_DONE, K_N };
+/* where object flags are read: live RAM, or a save slot's copy of $C300-$C6FF (slot preview) */
+static const uint8_t *g_flag_blk;
+static uint8_t flag_read(uint16_t a)
+{
+    if (g_flag_blk && a >= RAM_SAVE_BLK && a < RAM_SAVE_BLK + 0x400) return g_flag_blk[a - RAM_SAVE_BLK];
+    return sms_read8(a);
+}
 static int classify(uint8_t floor, int pos, uint8_t cell, uint8_t mflags, bool *event)
 {
     int v = cell & 0x0F, t = v & 7;
@@ -151,7 +158,7 @@ static int classify(uint8_t floor, int pos, uint8_t cell, uint8_t mflags, bool *
     if (v == 8) {
         const MapObject *o = object_at(floor, pos);
         if (!o) return K_PIT;
-        bool done = o->flag >= 0xC000 && sms_read8(o->flag) == 0xFF;
+        bool done = o->flag >= 0xC000 && flag_read(o->flag) == 0xFF;
         if (done && o->hidden && !(mflags & AVAIL)) return K_FLOOR;   /* not enabled yet (or taken unseen) */
         if (o->kind <= 1) return done ? K_CHEST_OPEN : K_CHEST;
         return done ? K_EVENT_DONE : K_EVENT;
@@ -318,6 +325,24 @@ bool ps_automap_draw(uint32_t *fb, int w, int h, int x, int y, int cs)
     if (!g_cur) return false;
     g_bfb = fb; g_bw = w; g_bh = h;
     draw_map(buf_fill, x, y, cs);
+    return true;
+}
+/* Save-slot preview: the explored map stored with save slot `slot` (1..5) for the floor in `blk`
+   (the slot's copy of RAM $C300-$C6FF: floor $C30D, position $C30C, direction $C30A), chest /
+   event states from that copy. Returns false when that slot has no explored map of the floor. */
+bool ps_automap_draw_slot(uint32_t *fb, int w, int h, int x, int y, int cs, int slot, const uint8_t *blk)
+{
+    if (slot < 1 || slot >= N_SLOTS || !blk) return false;
+    uint8_t floor = blk[RAM_DNG_IDX - RAM_SAVE_BLK], pos = blk[RAM_DNG_POS - RAM_SAVE_BLK];
+    DungeonMemory *d = NULL;
+    for (int i = 0; i < g_slot[slot].n; i++) if (g_slot[slot].d[i].key == floor) d = &g_slot[slot].d[i];
+    if (!d) return false;
+    DungeonMemory *cur = g_cur; int px = g_cur_px, py = g_cur_py, dir = g_cur_dir; bool in = g_in_dungeon;
+    g_cur = d; g_cur_px = pos & 15; g_cur_py = pos >> 4; g_cur_dir = blk[RAM_DNG_DIR - RAM_SAVE_BLK] & 3;
+    g_in_dungeon = true; g_flag_blk = blk;
+    g_bfb = fb; g_bw = w; g_bh = h;
+    draw_map(buf_fill, x, y, cs);
+    g_cur = cur; g_cur_px = px; g_cur_py = py; g_cur_dir = dir; g_in_dungeon = in; g_flag_blk = NULL;
     return true;
 }
 int  ps_automap_floor(void) { return g_cur ? g_cur->index : -1; }

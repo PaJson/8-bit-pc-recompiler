@@ -52,10 +52,52 @@ static int text_right(uint32_t *b, int w, int h, int xr, int y, const char *s, u
     return hud_text_scaled(b, w, h, xr - 6 * k * (int)strlen(s) + k, y, s, c, k);
 }
 
+/* ---- save-slot preview ----
+ * The slot menu of CONTINUE / SAVE / delete (ps1.asm LABEL_39B1 -> CheckOptionSelect): Cursor_pos
+ * $C269 = $78EE, Option_total_num $C26E = 4 (5 slots), $C268 = $FF while choosing, cursor index
+ * $C26B (0-based). Battery RAM: slot n's copy of RAM $C300-$C6FF at offset n * $400, slot-used flag
+ * at $200 + n (LABEL_73A). While the menu is open the panel shows the highlighted slot. */
+extern const uint8_t *glue_sram_image(size_t *size);
+extern bool ps_worldmap_draw_at(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space,
+                                int tileset, int map, int px, int py, const char **name);
+extern bool ps_automap_draw_slot(uint32_t *fb, int w, int h, int x, int y, int cs, int slot, const uint8_t *blk);
+
+static const uint8_t *g_blk;                           /* previewed slot block, NULL = live RAM */
+static uint8_t rd(uint16_t a)
+{
+    if (g_blk && a >= 0xC300 && a < 0xC700) return g_blk[a - 0xC300];
+    return sms_read8(a);
+}
+
+/* the highlighted slot (1..5) while the slot menu is open, else 0; *used = slot holds a save */
+static int slot_menu(const uint8_t **blk, bool *used)
+{
+    if (sms_read8(0xC268) != 0xFF || sms_read8(0xC269) != 0xEE || sms_read8(0xC26A) != 0x78 || sms_read8(0xC26E) != 4)
+        return 0;
+    int slot = sms_read8(0xC26B) + 1;
+    size_t n = 0; const uint8_t *sram = glue_sram_image(&n);
+    if (slot < 1 || slot > 5 || !sram || n < (size_t)(slot + 1) * 0x400) return 0;
+    *used = sram[0x200 + slot] != 0;
+    *blk = sram + slot * 0x400;
+    return slot;
+}
+
 void ps_panel_draw(uint32_t *b, int w, int h)
 {
     for (int i = 0; i < w * h; i++) b[i] = BG;
-    if (sms_read8(0xC202) <= 3) {                      /* title / intro: no game data yet */
+    char buf[32];
+    bool used = false; const uint8_t *blk = NULL;
+    int slot = slot_menu(&blk, &used);
+    if (slot && !used) {                               /* empty slot */
+        box(b, w, h, 8, 8, w - 8, h - 8);
+        snprintf(buf, sizeof buf, "SLOT %d", slot);
+        hud_text_scaled(b, w, h, (w - 6 * 12) / 2, h / 2 - 30, buf, CYAN, 2);
+        hud_text_scaled(b, w, h, (w - 5 * 12) / 2, h / 2 - 6, "EMPTY", GREY, 2);
+        return;
+    }
+    g_blk = slot ? blk : NULL;
+    /* title / intro, or nothing loaded yet (the CONTINUE question comes before any party data) */
+    if (!slot && (sms_read8(0xC202) <= 3 || rd(0xC405) == 0)) {
         box(b, w, h, 8, 8, w - 8, h - 8);
         hud_text_scaled(b, w, h, (w - 8 * 12) / 2, h / 2 - 30, "PHANTASY", CYAN, 2);
         hud_text_scaled(b, w, h, (w - 4 * 12) / 2, h / 2 - 6, "STAR", CYAN, 2);
@@ -63,22 +105,21 @@ void ps_panel_draw(uint32_t *b, int w, int h)
     }
     static const char *const names[4] = { "ALIS", "MYAU", "ODIN", "NOAH" };
     static const uint32_t pcol[4] = { 0xFFC85A78u, 0xFFD2B43Cu, 0xFF5A82C8u, 0xFF64B48Cu };
-    int y = 8, n = sms_read8(0xC4F0) + 1;
+    int y = 8, n = rd(0xC4F0) + 1;
     if (n < 1 || n > 4) n = 1;
-    char buf[32];
     for (int c = 0; c < 4; c++, y += 68) {
         if (c >= n) continue;
         uint16_t s = (uint16_t)(0xC400 + 0x10 * c);
-        bool alive = sms_read8(s) & 1;
+        bool alive = rd(s) & 1;
         box(b, w, h, 8, y, w - 8, y + 62);
         /* portrait placeholder */
         hud_fill(b, w, h, 14, y + 7, 62, y + 55, alive ? pcol[c] : 0xFF404040u, false);
         { char ini[2] = { names[c][0], 0 }; hud_text_scaled(b, w, h, 14 + 13, y + 17, ini, 0xFFFFFFFFu, 4); }
         int tx = 70, tr = w - 14;
         hud_text_scaled(b, w, h, tx, y + 6, names[c], alive ? WHITE : DEADCOL, 2);
-        snprintf(buf, sizeof buf, "LV%u", sms_read8(s + 5));
+        snprintf(buf, sizeof buf, "LV%u", rd(s + 5));
         text_right(b, w, h, tr, y + 6, buf, CYAN, 2);
-        unsigned hp = sms_read8(s + 1), mhp = sms_read8(s + 6), mp = sms_read8(s + 2), mmp = sms_read8(s + 7);
+        unsigned hp = rd(s + 1), mhp = rd(s + 6), mp = rd(s + 2), mmp = rd(s + 7);
         snprintf(buf, sizeof buf, "HP %u/%u", hp, mhp);
         hud_text(b, w, h, tx, y + 26, buf, alive ? WHITE : GREY);
         bar(b, w, h, tx, y + 35, tr - tx, hp, mhp, HPCOL);
@@ -92,16 +133,34 @@ void ps_panel_draw(uint32_t *b, int w, int h)
     y = 8 + 4 * 68;
     box(b, w, h, 8, y, w - 8, y + 30);
     hud_text_scaled(b, w, h, 16, y + 8, "M", GOLD, 2);
-    snprintf(buf, sizeof buf, "%u", sms_read8(0xC4E0) | (sms_read8(0xC4E1) << 8));
+    snprintf(buf, sizeof buf, "%u", rd(0xC4E0) | (rd(0xC4E1) << 8));
     text_right(b, w, h, w - 16, y + 8, buf, WHITE, 2);
     /* map box */
     y += 36;
     box(b, w, h, 8, y, w - 8, h - 8);
-    int ctx = ps_map_context(), mx0 = 14, mx1 = w - 14, my0 = y + 24, my1 = h - 14;
+    int mx0 = 14, mx1 = w - 14, my0 = y + 24, my1 = h - 14;
+    int cs = (mx1 - mx0) / 16; if ((my1 - my0) / 16 < cs) cs = (my1 - my0) / 16;
+    if (slot) {                                        /* the slot's save position */
+        bool ok;
+        if (rd(0xC316) == 0x0B) {                      /* saved in a dungeon (LABEL_678: -> LoadDungeon) */
+            snprintf(buf, sizeof buf, "SLOT %d FLOOR %02X", slot, rd(0xC30D));
+            ok = ps_automap_draw_slot(b, w, h, mx0 + (mx1 - mx0 - 16 * cs) / 2, my0 + (my1 - my0 - 16 * cs) / 2, cs, slot, blk);
+        } else {                                       /* planet / town: camera + the party's cell (128, 96) */
+            const char *name = "MAP";
+            hud_fill(b, w, h, mx0, my0, mx1, my1, 0xFF000000u, false);
+            int px = rd(0xC302) * 256 + rd(0xC301) + 136, py = rd(0xC306) * 192 + rd(0xC305) + 104;
+            ok = ps_worldmap_draw_at(b, w, h, mx0, my0, mx1 - mx0, my1 - my0, HUD_SPACE_PANEL, rd(0xC308), rd(0xC309), px, py, &name);
+            snprintf(buf, sizeof buf, "SLOT %d %s", slot, name);
+        }
+        hud_text_scaled(b, w, h, 16, y + 6, buf, CYAN, 2);
+        if (!ok) hud_text(b, w, h, 16, my0 + 4, "NO MAP SAVED FOR THIS SLOT", GREY);
+        g_blk = NULL;
+        return;
+    }
+    int ctx = ps_map_context();
     if (ctx == 1 && ps_automap_floor() >= 0) {
         snprintf(buf, sizeof buf, "%s %02X", ps_automap_here() ? "FLOOR" : "LAST FLOOR", ps_automap_floor());
         hud_text_scaled(b, w, h, 16, y + 6, buf, CYAN, 2);
-        int cs = (mx1 - mx0) / 16; if ((my1 - my0) / 16 < cs) cs = (my1 - my0) / 16;
         ps_automap_draw(b, w, h, mx0 + (mx1 - mx0 - 16 * cs) / 2, my0 + (my1 - my0 - 16 * cs) / 2, cs);
     } else if (ctx == 2) {
         hud_text_scaled(b, w, h, 16, y + 6, ps_worldmap_area_name(), CYAN, 2);

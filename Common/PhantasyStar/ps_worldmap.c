@@ -468,6 +468,20 @@ bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh
     return true;
 }
 
+/* Save-slot preview: the surroundings map of another position (tileset / map / party world pixels,
+   e.g. from a save slot's camera), drawn like ps_worldmap_draw. *name gets the area name. */
+bool ps_worldmap_draw_at(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space,
+                         int tileset, int map, int px, int py, const char **name)
+{
+    if (g_df1 < 0 || tileset < 0 || tileset >= 32) return false;
+    bool valid = g_area.valid; uint8_t ts = g_area.tileset, mp = g_area.map; int ox = g_area.px, oy = g_area.py;
+    g_area.valid = true; g_area.tileset = (uint8_t)tileset; g_area.map = (uint8_t)map; g_area.px = px; g_area.py = py;
+    if (name) *name = ps_worldmap_area_name();
+    bool ok = ps_worldmap_draw(fb, w, h, bx, by, bw, bh, space);
+    g_area.valid = valid; g_area.tileset = ts; g_area.map = mp; g_area.px = ox; g_area.py = oy;
+    return ok;
+}
+
 /* The whole planet (planets only), faint screen grid, party marker. */
 bool ps_worldmap_draw_planet(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space)
 {
