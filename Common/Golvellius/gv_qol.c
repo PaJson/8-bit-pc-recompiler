@@ -79,6 +79,10 @@ static void save_config(void)
 }
 
 static void on_map_fix(void) { apply_map_fix(); }
+extern void gv_map_init(void);
+extern void gv_map_save(void);
+static void on_close(void) { save_config(); gv_map_save(); }
+static int open_page(void) { return hud_page_index("MAP"); }
 static void on_ff(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
 static const HudOption k_opts[] = {
     { "MAP FIXES",      k_onoff,    2, &s_mapfix_i, on_map_fix },
@@ -169,6 +173,11 @@ int gv_pw_loop(void)
 /* test: GV_TEST_GENPW=<frame> runs the game's password generator (bank 7 $83D6: state -> $C1B0.., jp $852B) */
 void gv_on_frame_post(uint64_t frame)
 {
+    {   /* test: GV_HUD_OPEN=<frame> opens the HUD (window tests: SMS_WINDOW_SHOT + _EXIT) */
+        static long ho = -2;
+        if (ho == -2) { const char *e = getenv("GV_HUD_OPEN"); ho = e ? atol(e) : -1; }
+        if (ho >= 0 && frame == (uint64_t)ho && !hud_is_open()) hud_key(HUD_KEY_TOGGLE);
+    }
     static long at = -2;
     if (at == -2) { const char *e = getenv("GV_TEST_GENPW"); at = e ? atol(e) : -1; }
     if (at < 0 || frame != (uint64_t)at) return;
@@ -197,5 +206,9 @@ void gv_on_post_reset(void)
     hud_set_turbo_speed(k_ff_vals[s_ff_i]);
     hud_set_title("GOLVELLIUS - OPTIONS");
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
-    hud_set_on_close(save_config);
+    hud_set_on_close(on_close);
+    gv_map_init();
+    {   static const char *const order[] = { "MAP", "OPTIONS" };
+        hud_set_page_order(order, 2); }
+    hud_set_open_page(open_page);
 }
