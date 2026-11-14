@@ -9,3 +9,5 @@
 ;   a white outline is added) above the details and in the game's HUD. <title> is matched against the game name /
 ;   ROM file name: "Phantasy Star" fits every "Phantasy Star (...)" entry, but "Sonic the Hedgehog" not "... 2".
 ; art.<slug>   = Phantasy Star          ; pick the title for one game folder (Games\<slug>) by hand
+; splash        = 1                     ; 0 = no PRESS START screen, the game list right away
+; press_start_y = 50                    ; height of PRESS START: % of the window (centre of the text), e.g. 12 = near the top

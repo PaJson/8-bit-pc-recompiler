@@ -5,6 +5,7 @@
 
 [game]
 output_prefix = "miraclewarriors"
+display_name  = "Miracle Warriors - Seal of The Dark Lord (USA, Europe, Brazil) (En)"
 platform      = "sms"
 rom           = "../../ROMs/Miracle Warriors - Seal of The Dark Lord (USA, Europe, Brazil) (En).sms"
 

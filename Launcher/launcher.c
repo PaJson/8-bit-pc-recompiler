@@ -18,6 +18,9 @@
  * never taken as the background.
  * Text uses the engine HUD font (runner/hud.c). Images are decoded with GDI+ (part of Windows).
  *
+ * Start screen: the background with a blinking PRESS START; Enter / Space / click / pad Start, A or B
+ * shows the game list (fades in). launcher.ini: `splash = 0` skips it, `press_start_y = 50` = its height
+ * (% of the window, centre of the text).
  * Keys: Up/Down (PgUp/PgDn, Home/End) select, Enter/Space play (build first if needed), R rebuild,
  * F11 / Alt+Enter fullscreen, Esc quit. Gamepad: D-pad / stick, A or Start play, Y rebuild.
  * Mouse: wheel, click selects, double click plays.
@@ -78,6 +81,9 @@ static char g_bg_path[MAX_PATH];
 static bool g_panel_left;
 static int  g_game_scale = 3;
 static bool g_fullscreen;
+static bool g_splash = true;                   /* PRESS START screen before the list */
+static int  g_press_y = 50;                    /* its height: centre of the text, % of the window height */
+static Uint32 g_splash_t, g_list_t;            /* start of the splash / of the list (fade-in) */
 #define MAX_ART_MAP 32
 static char g_art_slug[MAX_ART_MAP][64], g_art_title[MAX_ART_MAP][160]; static int g_nart_map;
 
@@ -113,6 +119,8 @@ static void load_ini(void)
         } else if (!strcmp(k, "panel")) g_panel_left = !strcmp(v, "left");
         else if (!strcmp(k, "window_scale")) { int s = atoi(v); if (s >= 1 && s <= 8) g_game_scale = s; }
         else if (!strcmp(k, "fullscreen")) g_fullscreen = atoi(v) != 0;
+        else if (!strcmp(k, "splash")) g_splash = atoi(v) != 0;
+        else if (!strcmp(k, "press_start_y")) { int y = atoi(v); if (y >= 0 && y <= 100) g_press_y = y; }
         else if (!strncmp(k, "art.", 4) && k[4] && v[0] && g_nart_map < MAX_ART_MAP) {
             snprintf(g_art_slug[g_nart_map], sizeof g_art_slug[0], "%s", k + 4);
             snprintf(g_art_title[g_nart_map], sizeof g_art_title[0], "%s", v); g_nart_map++;
@@ -694,10 +702,32 @@ static void art_warm(void)
     }
 }
 
+/* PRESS START, blinking, in the middle of the window */
+static void draw_splash(void)
+{
+    int w, h; SDL_GetRendererOutputSize(g_ren, &w, &h);
+    if (!g_ui_tex || w != g_ui_w || h != g_ui_h) draw_ui();              /* (re)creates the buffer */
+    if (!g_ui) return;
+    memset(g_ui, 0, (size_t)w * h * 4);
+    Uint32 t = SDL_GetTicks() - g_splash_t;
+    if (t % 1100 < 750) {
+        const char *msg = "PRESS START";
+        int sc = layout(w, h).sc * 3, tw = 6 * sc * (int)strlen(msg) - sc, x = (w - tw) / 2, y = h * g_press_y / 100 - 7 * sc / 2;
+        if (y < sc) y = sc;
+        if (y > h - 8 * sc) y = h - 8 * sc;
+        for (int dy = -1; dy <= 1; dy++)                                   /* dark outline */
+            for (int dx = -1; dx <= 1; dx++)
+                if (dx || dy) hud_text_scaled(g_ui, w, h, x + dx * (sc / 2 + 1), y + dy * (sc / 2 + 1), msg, 0xE0000814u, sc);
+        hud_text_scaled(g_ui, w, h, x, y, msg, 0xFFFFE040, sc);
+    }
+    SDL_UpdateTexture(g_ui_tex, NULL, g_ui, w * 4);
+}
+static void leave_splash(void) { g_splash = false; g_list_t = g_no_fade ? 0 : SDL_GetTicks(); }
+
 static void render(void)
 {
     make_background();
-    draw_ui();
+    if (g_splash) draw_splash(); else draw_ui();
     int w, h; SDL_GetRendererOutputSize(g_ren, &w, &h);
     SDL_SetRenderDrawColor(g_ren, 0, 0, 0, 255);
     SDL_RenderClear(g_ren);
@@ -709,6 +739,11 @@ static void render(void)
             src.x = (g_bg_w - cw) / 2; src.y = (g_bg_h - ch) / 2; src.w = cw; src.h = ch;
         }
         SDL_RenderCopy(g_ren, g_bg_tex, &src, NULL);
+    }
+    if (g_splash) {
+        if (g_ui_tex) { SDL_SetTextureAlphaMod(g_ui_tex, 255); SDL_RenderCopy(g_ren, g_ui_tex, NULL, NULL); }
+        SDL_RenderPresent(g_ren);
+        return;
     }
     Layout L = layout(w, h);
     const Game *sel = (g_sel >= 0 && g_sel < g_ngames) ? &g_games[g_sel] : NULL;
@@ -727,7 +762,11 @@ static void render(void)
         draw_cover(g_fade_cover.prev, 1.f - a, bx, by, bw, bh, L.sc);
         draw_cover(g_fade_cover.cur, a, bx, by, bw, bh, L.sc);
     }
-    if (g_ui_tex) SDL_RenderCopy(g_ren, g_ui_tex, NULL, NULL);
+    if (g_ui_tex) {                                               /* the list fades in after the splash */
+        Uint32 d = g_list_t ? SDL_GetTicks() - g_list_t : 1000;
+        SDL_SetTextureAlphaMod(g_ui_tex, d >= 250 ? 255 : (Uint8)(255 * d / 250));
+        SDL_RenderCopy(g_ren, g_ui_tex, NULL, NULL);
+    }
     if (L.logo_h) {
         float a = fade_a(&g_fade_logo);
         int bx, by, bw, bh; logo_box(&L, &bx, &by, &bw, &bh);
@@ -798,6 +837,7 @@ int main(int argc, char **argv)
         if (shot) {
             const char *sel = getenv("LAUNCHER_SEL"); if (sel) g_sel = atoi(sel);
             g_no_fade = true;
+            g_splash = getenv("LAUNCHER_SPLASH") != NULL;          /* test: shoot the PRESS START screen */
             render(); render();
             int w, h; SDL_GetRendererOutputSize(g_ren, &w, &h);
             uint32_t *px = (uint32_t *)malloc((size_t)w * h * 4);
@@ -815,17 +855,35 @@ int main(int argc, char **argv)
         const char *a = getenv("LAUNCHER_AUTO");
         if (a && (!strncmp(a, "play:", 5) || !strncmp(a, "build:", 6))) {
             const char *slug = strchr(a, ':') + 1;
+            g_splash = false;
             for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
             play_selected(a[0] == 'b');
         }
     }
     bool exit_after = getenv("LAUNCHER_EXIT_AFTER") != NULL;
     Uint32 nav_t = 0; int nav_dir = 0; Uint32 nav_next = 0;
+    g_splash_t = SDL_GetTicks();
     while (!quit) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) quit = true;
             else if (e.type == SDL_CONTROLLERDEVICEADDED) SDL_GameControllerOpen(e.cdevice.which);
+            else if (g_splash) {                                   /* PRESS START: only continue / quit / fullscreen */
+                if (e.type == SDL_KEYDOWN && !e.key.repeat) {
+                    SDL_Keycode k = e.key.keysym.sym;
+                    if (k == SDLK_ESCAPE) quit = true;
+                    else if (k == SDLK_F11 || (k == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT))) {
+                        bool fs = (SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+                        SDL_SetWindowFullscreen(g_win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+                    }
+                    else if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) leave_splash();
+                }
+                else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+                    Uint8 b = e.cbutton.button;
+                    if (b == SDL_CONTROLLER_BUTTON_START || b == SDL_CONTROLLER_BUTTON_A || b == SDL_CONTROLLER_BUTTON_B) leave_splash();
+                }
+                else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) leave_splash();
+            }
             else if (e.type == SDL_KEYDOWN) {
                 SDL_Keycode k = e.key.keysym.sym;
                 if (k == SDLK_ESCAPE) quit = true;

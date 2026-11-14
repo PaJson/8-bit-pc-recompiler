@@ -85,7 +85,10 @@ def main():
     rel = "../../ROMs/" + a.rom
     toml = open(os.path.join(ROOT, "Tools", "templates", a.template + ".game.toml"), encoding="utf-8").read()
     toml = re.sub(r'output_prefix\s*=\s*"[^"]*"', 'output_prefix = "%s"' % prefix, toml)
-    toml = re.sub(r'display_name\s*=\s*"[^"]*"', 'display_name  = "%s"' % a.name, toml)
+    if re.search(r'display_name\s*=', toml):
+        toml = re.sub(r'display_name\s*=\s*"[^"]*"', 'display_name  = "%s"' % a.name, toml)
+    else:                               # templates without one (sms_generic): the window title, launcher name
+        toml = re.sub(r'(\noutput_prefix\s*=[^\n]*)', lambda m: m.group(1) + '\ndisplay_name  = "%s"' % a.name, toml, count=1)
     toml = re.sub(r'\nrom\s*=\s*"[^"]*"[^\n]*', '\nrom           = "%s"' % rel, toml)
     if a.auto_tables:
         import subprocess

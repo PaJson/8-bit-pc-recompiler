@@ -5,6 +5,7 @@
 
 [game]
 output_prefix = "golvellius"
+display_name  = "Golvellius - Valley of Doom (USA, Europe, Brazil) (En)"
 platform      = "sms"
 rom           = "../../ROMs/Golvellius - Valley of Doom (USA, Europe, Brazil) (En).sms"
 

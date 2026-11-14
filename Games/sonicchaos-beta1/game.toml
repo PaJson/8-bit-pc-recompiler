@@ -5,6 +5,7 @@
 
 [game]
 output_prefix = "sonicchaosbeta1"
+display_name  = "Sonic Chaos (Europe, Brazil) (En) (Beta 1)"
 platform      = "sms"
 rom           = "../../ROMs/Sonic Chaos (Europe, Brazil) (En) (Beta 1).sms"
 

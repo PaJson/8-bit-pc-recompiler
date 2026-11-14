@@ -12,6 +12,7 @@ Games/*/saves/
 *.log
 dispatch_manifest.txt
 ps_qol.ini
+gv_qol.ini
 *.ppm
 *.png
 *.wav

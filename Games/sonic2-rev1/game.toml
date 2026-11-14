@@ -5,6 +5,7 @@
 
 [game]
 output_prefix = "sonic2rev1"
+display_name  = "Sonic The Hedgehog 2 (Europe, Brazil) (En) (Rev 1)"
 platform      = "sms"
 rom           = "../../ROMs/Sonic The Hedgehog 2 (Europe, Brazil) (En) (Rev 1).sms"
 
