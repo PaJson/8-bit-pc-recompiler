@@ -57,6 +57,7 @@ static struct {
 } g_area;
 
 bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space);
+static void dump_all(void);
 
 /* Rendered pictures, two of each kind (the side panel shows the current map while the HUD's MAP page
    may show another one: without a second buffer they would re-render each other every frame).
@@ -138,6 +139,7 @@ void ps_worldmap_init(void)
     else if (getenv("PS_WORLDMAP_DEBUG"))
         fprintf(stderr, "[worldmap] LABEL_DF1 %04lX, tiles %05lX / %05lX%s\n", g_df1, g_tile_src[0], g_tile_src[1],
                 g_tiles_from_vram ? " (other packer: tiles copied from VRAM)" : "");
+    dump_all();
 }
 
 /* the current map state; only while the game is on a map (overworld / town) */
@@ -302,6 +304,64 @@ static unsigned screen_table(unsigned ptr[64])
     return filler;
 }
 
+/* Towns: several towns share a tileset's 8 x 8 screen table, the rest of the table is one filler
+   screen. A town = a group of connected (4-neighbour, no wrap) non-filler screens. cl[i] = group
+   number of screen i (0 = filler), groups numbered in screen order; returns the number of groups. */
+static int town_clusters(int tileset, int cl[64])
+{
+    uint8_t ots = g_area.tileset; g_area.tileset = (uint8_t)tileset;
+    unsigned ptr[64], filler = screen_table(ptr);
+    g_area.tileset = ots;
+    int n = 0;
+    for (int i = 0; i < 64; i++) cl[i] = 0;
+    for (int i = 0; i < 64; i++) {
+        if (cl[i] || ptr[i] == filler) continue;
+        int stack[64], sp = 0; stack[sp++] = i; cl[i] = ++n;
+        while (sp) {
+            int s = stack[--sp], x = s & 7, y = s >> 3;
+            const int nb[4] = { x > 0 ? s - 1 : -1, x < 7 ? s + 1 : -1, y > 0 ? s - 8 : -1, y < 7 ? s + 8 : -1 };
+            for (int k = 0; k < 4; k++) if (nb[k] >= 0 && !cl[nb[k]] && ptr[nb[k]] != filler) { cl[nb[k]] = n; stack[sp++] = nb[k]; }
+        }
+    }
+    return n;
+}
+
+/* debug: PS_WORLDMAP_DUMPALL=<dir> writes <dir>/ts<k>.ppm (the whole 8 x 8 table of every town tileset)
+   and prints its town groups (first screen index of each group) */
+static void dump_all(void)
+{
+    const char *dir = getenv("PS_WORLDMAP_DUMPALL");
+    if (!dir || g_df1 < 0) return;
+    uint32_t *buf = malloc((size_t)8 * SCR_W * 8 * SCR_H * sizeof *buf);
+    if (!buf) return;
+    for (int ts = 4; ts < 16; ts++) {
+        bool used = false;
+        for (int m = 0; m < 32 && g_dc1 >= 0; m++) if (g_dc1 + m < (long)g_rom_n && g_rom[g_dc1 + m] == ts && m < 26) used = true;
+        if (!used) continue;
+        TileSetView v; tileset_view(ts, &v);
+        for (int sy = 0; sy < 8; sy++) for (int sx = 0; sx < 8; sx++)
+            draw_screen(&v, sx, sy, buf + sy * SCR_H * 8 * SCR_W + sx * SCR_W, 8 * SCR_W);
+        char path[512]; snprintf(path, sizeof path, "%s/ts%d.ppm", dir, ts);
+        FILE *f = fopen(path, "wb");
+        if (f) {
+            fprintf(f, "P6\n%d %d\n255\n", 8 * SCR_W, 8 * SCR_H);
+            for (long i = 0; i < 64L * SCR_W * SCR_H; i++) { uint8_t c[3] = { (uint8_t)(buf[i] >> 16), (uint8_t)(buf[i] >> 8), (uint8_t)buf[i] }; fwrite(c, 1, 3, f); }
+            fclose(f);
+        }
+        int cl[64], n = town_clusters(ts, cl);
+        fprintf(stderr, "[worldmap] tileset %d: %d towns:", ts, n);
+        for (int g = 1; g <= n; g++) { int x0 = 8, y0 = 8, x1 = -1, y1 = -1;
+            for (int i = 0; i < 64; i++) if (cl[i] == g) { int x = i & 7, y = i >> 3; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+            fprintf(stderr, " [%d: screens x%d-%d y%d-%d]", g, x0, x1, y0, y1); }
+        fprintf(stderr, "\n");
+        for (int y = 0; y < 8; y++) {
+            char row[9]; for (int x = 0; x < 8; x++) row[x] = cl[y * 8 + x] ? (char)('0' + cl[y * 8 + x]) : '.'; row[8] = 0;
+            fprintf(stderr, "[worldmap]   %s\n", row);
+        }
+    }
+    free(buf);
+}
+
 /* render (or find) the town around the party; returns its buffer and the party position in it */
 static TownBuf *prepare(int *rx, int *ry)
 {
@@ -359,13 +419,45 @@ static void debug_ppm(void)
     fclose(f);
 }
 
+/* Town names by tileset and screen rectangle. Several towns share a tileset's screen table (and the
+   map numbers that use it), so a town is identified by where the party is. Matched 2026-11-14 by
+   rendering every town tileset (PS_WORLDMAP_DUMPALL) against the pscave.com town maps (Rev A).
+   Corridor screens between two places (tubes) belong to the nearest one. */
+static const struct { uint8_t ts, x0, y0, x1, y1; const char *name; } k_towns[] = {
+    { 4, 1, 1, 2, 2, "Palma Spaceport" }, { 4, 5, 1, 6, 2, "Camineet" }, { 4, 1, 5, 2, 6, "Parolit" },
+    { 5, 1, 1, 2, 2, "Gothic" }, { 5, 4, 1, 4, 2, "Eppi" }, { 5, 6, 1, 6, 2, "Loar" },
+    { 5, 1, 4, 2, 5, "Abion" }, { 5, 4, 4, 4, 5, "Bortevo" },
+    { 6, 1, 1, 2, 2, "Drasgow" }, { 6, 4, 4, 6, 7, "Scion" },
+    { 7, 1, 1, 2, 2, "Paseo" }, { 7, 1, 4, 2, 5, "Motavia Spaceport" }, { 7, 4, 1, 5, 2, "Uzo" },
+    { 7, 4, 4, 5, 5, "Casba" }, { 7, 7, 4, 7, 4, "Sopia" },
+    { 8, 1, 1, 1, 1, "Skure" }, { 8, 3, 1, 3, 1, "Twintown" },
+    { 9, 1, 1, 2, 2, "Twintown" }, { 9, 5, 1, 6, 2, "Skure" },
+    { 10, 1, 1, 2, 2, "Air Castle" },
+};
+static const char *town_name(int ts, int sx, int sy)
+{
+    const char *best = "Town"; int bd = 3;
+    for (unsigned i = 0; i < sizeof k_towns / sizeof k_towns[0]; i++) {
+        if (k_towns[i].ts != ts) continue;
+        int dx = sx < k_towns[i].x0 ? k_towns[i].x0 - sx : sx > k_towns[i].x1 ? sx - k_towns[i].x1 : 0;
+        int dy = sy < k_towns[i].y0 ? k_towns[i].y0 - sy : sy > k_towns[i].y1 ? sy - k_towns[i].y1 : 0;
+        int d = dx > dy ? dx : dy;
+        if (d < bd) { bd = d; best = k_towns[i].name; }
+    }
+    return best;
+}
+
+/* the name of the current area: planet, or the town the party is in */
 const char *ps_worldmap_area_name(void)
 {
     switch (g_area.tileset) {
-    case 0: return "PALMA";
-    case 1: return "MOTAVIA";
-    case 2: case 3: return "DEZORIS";
-    default: return "TOWN";
+    case 0: return "Palma";
+    case 1: return "Motavia";
+    case 2: case 3: return "Dezoris";
+    default: {
+        int px = ((g_area.px % 2048) + 2048) % 2048, py = ((g_area.py % 1536) + 1536) % 1536;
+        return town_name(g_area.tileset, px / SCR_W, py / SCR_H);
+    }
     }
 }
 
@@ -520,8 +612,8 @@ void ps_worldmap_screen(int *sx, int *sy)
 /* HUD page view: 0 = the screens around the party, 1 = the whole planet; Up/Down switch */
 void ps_worldmap_hud_key(int key) { if (key == HUD_KEY_UP || key == HUD_KEY_DOWN) g_view ^= 1; }
 
-/* tileset of a map number (LABEL_DC1; 0..3 planets, 4..25 towns), -1 if unknown */
-#define N_MAPS 26
+/* tileset of a map number (LABEL_DC1; 0..3 planets, 4..23 towns), -1 if unknown */
+#define N_MAPS 24                                   /* LABEL_DC1 has 24 entries (LABEL_DD9 follows) */
 int ps_worldmap_tileset_of(int map)
 {
     if (g_dc1 < 0 || map < 0 || map >= N_MAPS || g_dc1 + map >= (long)g_rom_n) return -1;
@@ -529,6 +621,24 @@ int ps_worldmap_tileset_of(int map)
 }
 int ps_worldmap_current_map(void) { return g_area.valid ? g_area.map : -1; }
 void ps_worldmap_current_pos(int *px, int *py) { *px = g_area.px; *py = g_area.py; }
+
+/* Places for the HUD MAP page list: 0..3 = planets (tilesets 0..3), 4 + i = town k_towns[i]. */
+#define N_TOWNS ((int)(sizeof k_towns / sizeof k_towns[0]))
+int ps_worldmap_current_place(void)
+{
+    if (!g_area.valid) return -1;
+    if (g_area.tileset < 4) return g_area.tileset;
+    int px = ((g_area.px % 2048) + 2048) % 2048, py = ((g_area.py % 1536) + 1536) % 1536;
+    const char *nm = town_name(g_area.tileset, px / SCR_W, py / SCR_H);
+    for (int i = 0; i < N_TOWNS; i++) if (k_towns[i].ts == g_area.tileset && k_towns[i].name == nm) return 4 + i;
+    return -1;
+}
+int ps_worldmap_place_tileset(int place)
+{
+    if (place >= 0 && place < 4) return place;
+    return place >= 4 && place < 4 + N_TOWNS ? k_towns[place - 4].ts : -1;
+}
+int ps_worldmap_num_places(void) { return 4 + N_TOWNS; }
 
 /* HUD page: the map in a 4:3 box, an info column to the right: `title`, the screen (here) or "LAST
    VISIT", the zoom hint (planets), then the caller's lines (nav hints) */
@@ -549,7 +659,18 @@ static void hud_draw_impl(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
         hud_text(fb, w, h, bx + 6, by + 18, "SHOWN ONCE YOU ARE ON", GREY);
         hud_text(fb, w, h, bx + 6, by + 28, "A PLANET OR IN A TOWN.", GREY);
     } else {
-        hud_text(fb, w, h, tx, ty, title ? title : ps_worldmap_area_name(), CYAN); ty += 12;
+        {   /* the name, wrapped at a space when it is wider than the column */
+            const char *t = title ? title : ps_worldmap_area_name();
+            int maxc = (x1 - tx) / 6; size_t n = strlen(t);
+            if ((int)n > maxc && strchr(t, ' ')) {
+                char a[40]; size_t k = (size_t)maxc < n ? (size_t)maxc : n;
+                while (k > 0 && t[k] != ' ') k--;
+                if (!k) k = strcspn(t, " ");
+                snprintf(a, sizeof a, "%.*s", (int)k, t);
+                hud_text(fb, w, h, tx, ty, a, CYAN); ty += 9;
+                hud_text(fb, w, h, tx, ty, t + k + 1, CYAN); ty += 12;
+            } else { hud_text(fb, w, h, tx, ty, t, CYAN); ty += 12; }
+        }
         if (here) {
             char buf[16]; int sx, sy;
             ps_worldmap_screen(&sx, &sy);
@@ -572,15 +693,15 @@ void ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
     hud_draw_impl(fb, w, h, x0, y0, x1, y1, true, NULL, NULL, 0);
 }
 
-/* HUD MAP page for any visited map (planet / town) with the party's last position there; `here` =
-   it is the map the party is on (then the live state is used) */
-void ps_worldmap_hud_draw_place(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int map,
+/* HUD MAP page for any visited place (planet / town, see ps_worldmap_current_place) with the party's
+   last position there; `here` = the party is there now (then the live state is used) */
+void ps_worldmap_hud_draw_place(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int place,
                                 int px, int py, bool here, const char *title, const char *const *lines, int nlines)
 {
     if (here) { hud_draw_impl(fb, w, h, x0, y0, x1, y1, true, title, lines, nlines); return; }
-    int ts = ps_worldmap_tileset_of(map);
+    int ts = ps_worldmap_place_tileset(place);
     bool valid = g_area.valid; uint8_t ots = g_area.tileset, omp = g_area.map; int ox = g_area.px, oy = g_area.py;
-    if (ts >= 0) { g_area.valid = true; g_area.tileset = (uint8_t)ts; g_area.map = (uint8_t)map; g_area.px = px; g_area.py = py; }
+    if (ts >= 0) { g_area.valid = true; g_area.tileset = (uint8_t)ts; g_area.px = px; g_area.py = py; }
     else g_area.valid = false;
     hud_draw_impl(fb, w, h, x0, y0, x1, y1, false, title, lines, nlines);
     g_area.valid = valid; g_area.tileset = ots; g_area.map = omp; g_area.px = ox; g_area.py = oy;

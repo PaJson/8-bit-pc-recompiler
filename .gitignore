@@ -33,3 +33,6 @@ ROMPatches/
 *.o
 __pycache__/
 *.pyc
+
+# Reference material from fan sites / sprite rips (the user's, not ours; ROM-derived art)
+Meta/

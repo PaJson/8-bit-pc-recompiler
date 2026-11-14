@@ -164,7 +164,7 @@ void ps_panel_draw(uint32_t *b, int w, int h)
         const char *nm = ps_automap_floor_name(ps_automap_floor());
         if (nm) { size_t n = strcspn(nm, "|"); if (n >= sizeof buf) n = sizeof buf - 1; memcpy(buf, nm, n); buf[n] = 0; }
         else snprintf(buf, sizeof buf, "FLOOR %02X", ps_automap_floor());
-        if (!ps_automap_here()) { char t[sizeof buf]; snprintf(t, sizeof t, "LAST: %s", buf); memcpy(buf, t, sizeof buf); }
+        if (!ps_automap_here()) { char t[sizeof buf]; snprintf(t, sizeof t, "Last: %s", buf); memcpy(buf, t, sizeof buf); }
         if ((int)strlen(buf) * 12 <= w - 24) hud_text_scaled(b, w, h, 16, y + 6, buf, CYAN, 2);
         else hud_text(b, w, h, 16, y + 10, buf, CYAN);
         ps_automap_draw(b, w, h, mx0 + (mx1 - mx0 - 16 * cs) / 2, my0 + (my1 - my0 - 16 * cs) / 2, cs);
@@ -190,13 +190,15 @@ void ps_panel_frame(uint64_t frame)
         if (hop == -2) { const char *t = getenv("PS_HUD_OPEN"); hop = t ? atol(t) : -1; }
         if (hop >= 0 && frame == (uint64_t)hop && !hud_is_open()) {
             hud_key(HUD_KEY_TOGGLE);
-            /* PS_HUD_KEYS: keys sent right after opening: U D L R = directions, [ ] = page prev / next */
+            /* PS_HUD_KEYS: keys sent right after opening: U D L R = directions, [ ] = page prev / next,
+               S = confirm, C = close */
             const char *k = getenv("PS_HUD_KEYS");
             for (; k && *k; k++)
                 switch (*k) {
                 case 'U': hud_key(HUD_KEY_UP); break;     case 'D': hud_key(HUD_KEY_DOWN); break;
                 case 'L': hud_key(HUD_KEY_LEFT); break;   case 'R': hud_key(HUD_KEY_RIGHT); break;
                 case '[': hud_key(HUD_KEY_PAGE_PREV); break; case ']': hud_key(HUD_KEY_PAGE_NEXT); break;
+                case 'S': hud_key(HUD_KEY_SELECT); break; case 'C': hud_key(HUD_KEY_CLOSE); break;
                 }
         }
     }

@@ -32,6 +32,17 @@ GROUPS = [
         ("ps_damage", "f5 3e ad 32 04 c0 cd .. .. f1 dd 86 01 38 01 af dd 77 01 c0", 10, 3),
         ("ps_damage", "0f e6 7f 2f dd 86 01 38 01 af dd 77 01 20", 4, 3),
     ]),
+    # ITEMS page (ps_items.c): observe when the walking handlers wait for the next frame.
+    # GameMode_Map: ld a,(Game_is_paused) ; or a ; call nz,PauseLoop ; ld a,$0E ; call WaitForVInt ;
+    #   call LABEL_576A ; call LABEL_77AC ; ld a,($C265)       GameMode_Dungeon: ... ld a,$08 ;
+    #   call WaitForVInt ; call LABEL_65EE ; ld a,($C2D2) ; or a ; ret z
+    # WaitForVInt = the target of the map handler's call; it starts with ld ($C208),a (all versions;
+    #   the 2.5 retranslation adds a halt after it). "call@N" = hook the call target read at match+N.
+    ("items", [
+        ("ps_items_walk_mark", "3a 12 c2 b7 c4 .. .. 3e 0e cd .. .. cd .. .. cd .. .. 3a 65 c2", 7, 2),
+        ("ps_items_walk_mark", "3a 12 c2 b7 c4 .. .. 3e 08 cd .. .. cd .. .. 3a d2 c2 b7 c8", 7, 2),
+        ("ps_items_vwait", "call@10 3a 12 c2 b7 c4 .. .. 3e 0e cd .. .. cd .. .. cd .. .. 3a 65 c2", 0, 3),
+    ]),
 ]
 
 def find(rom, pat):
@@ -43,11 +54,20 @@ def hooks_for(rom, log=print):
     for gname, sites in GROUPS:
         g = []
         for name, pat, off, res in sites:
+            follow = None
+            if pat.startswith("call@"):
+                follow, pat = int(pat[5:pat.index(" ")]), pat[pat.index(" ") + 1:]
             hits = find(rom, pat)
             if len(hits) != 1:
                 log("# %s: pattern for %s found %d times - group not used for this ROM" % (gname, name, len(hits)))
                 g = None; break
-            g.append((hits[0] + off, name, hits[0] + off + res))
+            at = hits[0] + off
+            if follow is not None:
+                at = rom[hits[0] + follow] | (rom[hits[0] + follow + 1] << 8)
+                if at >= 0x8000 or rom[at:at + 3] != bytes((0x32, 0x08, 0xC2)):
+                    log("# %s: %s target %04X is not ld ($C208),a - group not used" % (gname, name, at))
+                    g = None; break
+            g.append((at, name, at + res))
         if g: rows += g
     return rows
 

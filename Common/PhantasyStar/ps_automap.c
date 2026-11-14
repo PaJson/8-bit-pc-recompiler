@@ -58,7 +58,7 @@ enum { SEEN = 1, VISITED = 2, AVAIL = 4 };   /* AVAIL: a hidden-at-start chest w
 
 /* key = floor number (Dungeon_index); `index` kept for the file format */
 typedef struct { uint32_t key; uint8_t index; uint8_t cells[256]; uint8_t flags[256]; } DungeonMemory;
-#define N_MAPS 32                       /* map numbers ($C309): 0..3 planets, 4..25 towns */
+#define N_MAPS 32                       /* places (ps_worldmap_current_place): 0..3 planets, 4.. towns */
 typedef struct {
     DungeonMemory d[MAX_DUNGEONS]; int n;
     uint8_t map_seen[N_MAPS];            /* planets / towns visited (HUD MAP page list) */
@@ -285,22 +285,22 @@ static void hud_fill_rgb(int x0, int y0, int x1, int y1, uint32_t rgb) { hud_fil
 /* Floor names (ps1.constants.asm DungeonID_*). One layout is used by several places in the game
    ('|' separates them; e.g. Medusa Tower 5F-7F are Baya Malay Tower B3F-B1F). */
 static const char *const k_floor_name[] = {
-    "MEDUSA CAVE|GOTHIC TUNNEL|BAYA MALAY PASS", "TRIADA PRISON", "CAMINEET WAREHOUSE|ABION WAREHOUSE",
-    "MEDUSA TOWER B1F", "MEDUSA TOWER 1F", "MEDUSA TOWER 2F", "MEDUSA TOWER 3F", "MEDUSA TOWER 4F",
-    "MEDUSA TOWER 5F|BAYA MALAY TOWER B3F", "MEDUSA TOWER 6F|BAYA MALAY TOWER B2F", "MEDUSA TOWER 7F|BAYA MALAY TOWER B1F",
-    "BAYA MALAY TOWER 1F", "BAYA MALAY TOWER 2F", "BAYA MALAY TOWER 3F", "BAYA MALAY TOWER 4F", "BAYA MALAY TOWER 5F",
-    "IALA CAVE B3F|NAULA CAVE B3F", "IALA CAVE B2F|NAULA CAVE B2F", "IALA CAVE B1F|NAULA CAVE B1F", "IALA CAVE 1F|NAULA CAVE 1F",
-    "BAYA MALAY PRISON", "DRASGOW WAREHOUSE|DR. MAD'S LAB", "BORTEVO PASS",
-    "ISLAND TOWER 1F", "ISLAND TOWER 2F", "ISLAND TOWER 3F", "ISLAND TOWER 4F", "ISLAND TOWER 5F",
-    "MAHARU CAVE B2F", "MAHARU CAVE B1F", "MAHARU CAVE 1F",
-    "GOVERNOR'S PALACE B3F", "GOVERNOR'S PALACE B2F", "GOVERNOR'S PALACE B1F|PATH TO THE GOVERNOR",
-    "TARZIMAL CAVE B2F", "TARZIMAL CAVE B1F", "TARZIMAL CAVE 1F", "CASBA CAVE B2F", "CASBA CAVE B1F", "CASBA CAVE 1F",
-    "SKURE TUNNEL|TWINTOWN TUNNEL", "FORT GUARON B1F", "FORT GUARON 1F",
-    "CORONA TOWER 1F", "CORONA TOWER 2F", "CORONA TOWER 3F", "CORONA TOWER 4F",
-    "DEZORIS PATH 1|DEZORIS PATH 5 B1F|LACONIAN SHIELD CAVE B5F", "DEZORIS PATH 2|DEZORIS PATH 5 1F|LACONIAN SHIELD CAVE B4F",
-    "DEZORIS PATH 4|LACONIAN SHIELD CAVE B3F", "DEZORIS PATH 3|LACONIAN SHIELD CAVE B2F",
-    "LACONIAN SHIELD CAVE B1F", "LACONIAN SHIELD CAVE 1F",
-    "AIR CASTLE B4F", "AIR CASTLE B3F", "AIR CASTLE B2F", "AIR CASTLE B1F", "AIR CASTLE 1F", "AEROPRISM CAVE",
+    "Medusa Cave|Gothic Tunnel|Baya Malay Pass", "Triada Prison", "Camineet Warehouse|Abion Warehouse",
+    "Medusa Tower B1F", "Medusa Tower 1F", "Medusa Tower 2F", "Medusa Tower 3F", "Medusa Tower 4F",
+    "Medusa Tower 5F|Baya Malay Tower B3F", "Medusa Tower 6F|Baya Malay Tower B2F", "Medusa Tower 7F|Baya Malay Tower B1F",
+    "Baya Malay Tower 1F", "Baya Malay Tower 2F", "Baya Malay Tower 3F", "Baya Malay Tower 4F", "Baya Malay Tower 5F",
+    "Iala Cave B3F|Naula Cave B3F", "Iala Cave B2F|Naula Cave B2F", "Iala Cave B1F|Naula Cave B1F", "Iala Cave 1F|Naula Cave 1F",
+    "Baya Malay Prison", "Drasgow Warehouse|Dr. Mad's Lab", "Bortevo Pass",
+    "Island Tower 1F", "Island Tower 2F", "Island Tower 3F", "Island Tower 4F", "Island Tower 5F",
+    "Maharu Cave B2F", "Maharu Cave B1F", "Maharu Cave 1F",
+    "Governor's Palace B3F", "Governor's Palace B2F", "Governor's Palace B1F|Path to the Governor",
+    "Tarzimal Cave B2F", "Tarzimal Cave B1F", "Tarzimal Cave 1F", "Casba Cave B2F", "Casba Cave B1F", "Casba Cave 1F",
+    "Skure Tunnel|Twintown Tunnel", "Fort Guaron B1F", "Fort Guaron 1F",
+    "Corona Tower 1F", "Corona Tower 2F", "Corona Tower 3F", "Corona Tower 4F",
+    "Dezoris Path 1|Dezoris Path 5 B1F|Laconian Shield Cave B5F", "Dezoris Path 2|Dezoris Path 5 1F|Laconian Shield Cave B4F",
+    "Dezoris Path 4|Laconian Shield Cave B3F", "Dezoris Path 3|Laconian Shield Cave B2F",
+    "Laconian Shield Cave B1F", "Laconian Shield Cave 1F",
+    "Air Castle B4F", "Air Castle B3F", "Air Castle B2F", "Air Castle B1F", "Air Castle 1F", "Aeroprism Cave",
 };
 const char *ps_automap_floor_name(int floor)
 {
@@ -356,7 +356,7 @@ void ps_automap_hud_draw_floor(uint32_t *fb, int w, int h, int x0, int y0, int x
             ty += 9 * text_wrap(fb, w, h, tx, ty, p, len, maxc, CYAN, 2);
             p += len; if (*p == '|') p++;
         }
-    } else { snprintf(buf, sizeof buf, "FLOOR %02X", d->index); hud_text(fb, w, h, tx, ty, buf, CYAN); ty += 9; }
+    } else { snprintf(buf, sizeof buf, "Floor %02X", d->index); hud_text(fb, w, h, tx, ty, buf, CYAN); ty += 9; }
     ty += 3;
     if (here) { snprintf(buf, sizeof buf, "X%d Y%d %s", g_cur_px, g_cur_py, k_face[g_cur_dir]); hud_text(fb, w, h, tx, ty, buf, WHITE); ty += 9; }
     else if (d == g_cur) { hud_text(fb, w, h, tx, ty, "LAST FLOOR", GREY); ty += 9; }

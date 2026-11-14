@@ -1,0 +1,68 @@
+; Phantasy Star item names for the HUD's ITEMS page (only our HUD; the game's own menus keep the
+; ROM's names). Format: item id (hex) then the name, e.g. "$24 Cola". Up to 18 characters show.
+; The ITEMS page switches between these and the game's names (also ps_qol.ini: item_names = 1).
+; A copy named ps_item_names.txt in the game folder (Games/<slug>/) is used instead of this file.
+$01 Wood Cane
+$02 Short Sword
+$03 Iron Sword
+$04 Wand
+$05 Iron Fang
+$06 Iron Axe
+$07 Titanium Sword
+$08 Ceramic Sword
+$09 Needle Gun
+$0A Silver Fang
+$0B Heat Gun
+$0C Light Saber
+$0D Laser Gun
+$0E Laconian Sword
+$0F Laconian Axe
+$10 Leather Armor
+$11 White Mantle
+$12 Light Suit
+$13 Iron Armor
+$14 Thick Fur
+$15 Zirconian Armor
+$16 Diamond Armor
+$17 Laconian Armor
+$18 Frade Mantle
+$19 Leather Shield
+$1A Bronze Shield
+$1B Iron Shield
+$1C Ceramic Shield
+$1D Gloves
+$1E Laser Shield
+$1F Mirror Shield
+$20 Laconian Shield
+$21 Land Rover
+$22 Hovercraft
+$23 Ice Digger
+$24 Cola
+$25 Burger
+$26 Flute
+$27 Flash
+$28 Escaper
+$29 Transer
+$2A Magic Hat
+$2B Alsulin
+$2C Polymaterial
+$2D Dungeon Key
+$2E Sphere
+$2F Eclipse Torch
+$30 Aeroprism
+$31 Laerma Nuts
+$32 Hapsby
+$33 Road Pass
+$34 Passport
+$35 Compass
+$36 Shortcake
+$37 Letter
+$38 Laconian Pot
+$39 Magic Lamp
+$3A Amber Eye
+$3B Gas Shield
+$3C Crystal
+$3D Master System
+$3E Miracle Key
+$3F Zillion
+$40 Secrets

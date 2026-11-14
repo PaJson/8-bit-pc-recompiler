@@ -50,8 +50,9 @@ extern void     ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0,
 extern void     ps_worldmap_hud_key(int key);
 extern void     ps_worldmap_hud_draw_place(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int map,
                                            int px, int py, bool here, const char *title, const char *const *lines, int nlines);
-extern int      ps_worldmap_tileset_of(int map);
-extern int      ps_worldmap_current_map(void);
+extern int      ps_worldmap_current_place(void);
+extern int      ps_worldmap_place_tileset(int place);
+extern int      ps_worldmap_num_places(void);
 extern void     ps_worldmap_current_pos(int *px, int *py);
 extern void     ps_automap_hud_draw_floor(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int floor,
                                           const char *const *lines, int nlines);
@@ -60,6 +61,11 @@ extern bool     ps_automap_map_known(int map, int *px, int *py);
 extern int      ps_automap_group(int floor, int *out, int max);
 extern int      ps_automap_groups(int *out, int max);
 extern int      ps_automap_floor(void);
+extern void     ps_items_init(void);
+extern void     ps_items_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
+extern void     ps_items_hud_key(int key);
+extern void     ps_items_hud_opened(void);
+extern int      g_ps_item_custom_names;
 
 #define RAM_GAME_MODE 0xC202
 #define RAM_EXP       0xC2D0
@@ -129,6 +135,7 @@ static void load_config(void)
         else if (!strcmp(key, "damage_dealt") && v >= 0) s_dealt_i = nearest_dmg(v);
         else if (!strcmp(key, "damage_received") && v >= 0) s_recv_i = nearest_dmg(v);
         else if (!strcmp(key, "automap")) s_map_i = v != 0;
+        else if (!strcmp(key, "item_names")) g_ps_item_custom_names = v != 0;
         else if (!strcmp(key, "walk_speed")) s_walk_i = v >= 3 ? 2 : v >= 1.5 ? 1 : 0;
         else if (!strcmp(key, "map_reveal")) s_reveal_i = v != 0;
         else if (!strcmp(key, "map_secrets")) s_secrets_i = v != 0;
@@ -154,6 +161,7 @@ static void save_config(void)
     fprintf(f, "walk_speed         = %-6u ; 1 = original, 2 or 4 = faster walking on maps (vehicles x2 max)\n", walk_mult());
     fprintf(f, "map_reveal         = %d      ; dungeon map: 0 = explored cells only, 1 = the whole floor\n", s_reveal_i);
     fprintf(f, "map_secrets        = %d      ; dungeon map: 1 = mark secret walls, pits, chests, events; 0 = only where you have stood\n", s_secrets_i);
+    fprintf(f, "item_names         = %d      ; HUD ITEMS page: 0 = the game's item names, 1 = ps_item_names.txt\n", g_ps_item_custom_names);
     fprintf(f, "side_panel         = %d      ; widescreen window with a side panel: party, meseta, map (like SEGA AGES)\n", s_panel_i);
     fclose(f);
 }
@@ -319,12 +327,8 @@ static int   s_sel_floor = -1;
 static int places(Place *out, int max)
 {
     int n = 0, px, py;
-    for (int pass = 0; pass < 2; pass++)                 /* planets first, then towns */
-        for (int m = 0; m < 32 && n < max; m++) {
-            int ts = ps_worldmap_tileset_of(m);
-            if (ts < 0 || (pass == 0) != (ts < 4) || !ps_automap_map_known(m, &px, &py)) continue;
-            out[n++] = (Place){ PL_MAP, m };
-        }
+    for (int m = 0; m < ps_worldmap_num_places() && n < max; m++)   /* planets, then towns (by planet) */
+        if (ps_automap_map_known(m, &px, &py)) out[n++] = (Place){ PL_MAP, m };
     int g[64], ng = ps_automap_groups(g, 64);
     for (int i = 0; i < ng && n < max; i++) out[n++] = (Place){ PL_DUNGEON, g[i] };
     return n;
@@ -338,7 +342,7 @@ static void select_current(void)
     if (s_map_ctx == 1 && ps_automap_floor() >= 0) {
         s_sel_floor = ps_automap_floor();
         s_sel = (Place){ PL_DUNGEON, dungeon_of(s_sel_floor) };
-    } else if (s_map_ctx == 2 && ps_worldmap_current_map() >= 0) s_sel = (Place){ PL_MAP, ps_worldmap_current_map() };
+    } else if (s_map_ctx == 2 && ps_worldmap_current_place() >= 0) s_sel = (Place){ PL_MAP, ps_worldmap_current_place() };
 }
 
 static void select_place(Place p)
@@ -361,7 +365,7 @@ static void map_page_key(int key)
         return;
     }
     if (s_sel.kind == PL_MAP) {                          /* planets: area <-> whole planet */
-        if (ps_worldmap_tileset_of(s_sel.id) < 4) ps_worldmap_hud_key(key);
+        if (s_sel.id < 4) ps_worldmap_hud_key(key);
         return;
     }
     if (s_sel.kind == PL_DUNGEON) {                      /* floor up (higher number) / down */
@@ -378,7 +382,7 @@ static void map_page_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
     Place pl[96]; int n = places(pl, 96), i = 0;
     while (i < n && !(pl[i].kind == s_sel.kind && pl[i].id == s_sel.id)) i++;
     if (i >= n && n) { select_place(pl[0]); i = 0; }
-    char l1[24], l2[24], l3[24];
+    char l1[24], l2[24];
     const char *lines[4]; int nl = 0;
     if (n > 1) { snprintf(l1, sizeof l1, "< MAP %d/%d >", i + 1, n); lines[nl++] = l1; }
     if (!n || s_sel.kind < 0) { ps_automap_hud_draw_floor(fb, w, h, x0, y0, x1, y1, -1, NULL, 0); return; }
@@ -389,20 +393,19 @@ static void map_page_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
         ps_automap_hud_draw_floor(fb, w, h, x0, y0, x1, y1, s_sel_floor, lines, nl);
         return;
     }
-    int px = 0, py = 0, ts = ps_worldmap_tileset_of(s_sel.id);
+    int px = 0, py = 0;
     ps_automap_map_known(s_sel.id, &px, &py);
-    bool here = s_map_ctx == 2 && ps_worldmap_current_map() == s_sel.id;
-    const char *title = NULL;
-    if (ts >= 4) { snprintf(l3, sizeof l3, "TOWN %d", s_sel.id - 3); title = l3; }
-    ps_worldmap_hud_draw_place(fb, w, h, x0, y0, x1, y1, s_sel.id, px, py, here, title, lines, nl);
+    bool here = s_map_ctx == 2 && ps_worldmap_current_place() == s_sel.id;
+    ps_worldmap_hud_draw_place(fb, w, h, x0, y0, x1, y1, s_sel.id, px, py, here, NULL, lines, nl);
 }
 
 static int hud_open_page(void)   /* in a dungeon: the map (test: PS_HUD_PAGE=n forces a page) */
 {
     select_current();
+    ps_items_hud_opened();
     const char *e = getenv("PS_HUD_PAGE");
     if (e) return atoi(e);
-    return ps_automap_in_dungeon() ? 2 : 0;
+    return ps_automap_in_dungeon() ? 3 : 0;
 }
 
 void ps_on_post_reset(void)
@@ -412,9 +415,11 @@ void ps_on_post_reset(void)
     load_config();
     ps_automap_init();
     ps_worldmap_init();
+    ps_items_init();
     s_map_ctx = 0;
     if (!pages_added) {
         hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
+        hud_add_page_ex("ITEMS", ps_items_hud_draw, ps_items_hud_key, true);
         hud_add_page_ex("MAP", map_page_draw, map_page_key, true);
         pages_added = true;
     }
@@ -444,8 +449,8 @@ void ps_on_frame_post(uint64_t frame)
         if (mode == 0x0B) s_map_ctx = 1;
         else if (mode == 0x09) {
             s_map_ctx = 2;
-            int map = ps_worldmap_current_map(), px, py;
-            if (map >= 0 && ps_worldmap_valid()) { ps_worldmap_current_pos(&px, &py); ps_automap_note_map(map, px, py); }
+            int place = ps_worldmap_current_place(), px, py;
+            if (place >= 0 && ps_worldmap_valid()) { ps_worldmap_current_pos(&px, &py); ps_automap_note_map(place, px, py); }
         } }
     ps_panel_frame(frame);
 
