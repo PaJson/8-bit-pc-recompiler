@@ -43,6 +43,24 @@ GROUPS = [
         ("ps_items_walk_mark", "3a 12 c2 b7 c4 .. .. 3e 08 cd .. .. cd .. .. 3a d2 c2 b7 c8", 7, 2),
         ("ps_items_vwait", "call@10 3a 12 c2 b7 c4 .. .. 3e 0e cd .. .. cd .. .. cd .. .. 3a 65 c2", 0, 3),
     ]),
+    # Hovercraft also drives on land (ps_qol.c ps_hover_*). LABEL_74E4 (can the party / vehicle move?):
+    #   hovercraft branch cp $08 ; jr nz ; push de ; ld b,0 ; ld hl,LABEL_7A2B ; add hl,bc ; ex de,hl ;
+    #   ld a,(de) ; call LABEL_7764 ; and $0A ; jr nz ; inc de ; ld a,(de) ; call LABEL_7764 ; and $0A
+    #   (tile attribute: Land Rover / on foot blocked by bit 0, hovercraft by bits 1|3) -> hook both ANDs.
+    # ItemUse_Hovercraft: ld a,($C308) ; cp 4 ; ld hl,.. ; jr nc ; ld a,(Interaction_Type) ; or a ;
+    #   jr z ; push bc ; push de ; call LABEL_76C1 (find water) ; pop de ; pop bc ; ld hl,.. ; jr nz ;
+    #   ld a,$08 ; ld ($C30E),a  -> hook the Interaction_Type load, resume = board in place.
+    ("hovercraft", [
+        ("ps_hover_pass", "fe 08 20 .. d5 06 00 21 .. .. 09 eb 1a cd .. .. e6 0a 20 .. 13 1a cd .. .. e6 0a", 16, 2),
+        ("ps_hover_pass", "fe 08 20 .. d5 06 00 21 .. .. 09 eb 1a cd .. .. e6 0a 20 .. 13 1a cd .. .. e6 0a", 25, 2),
+        ("ps_hover_board", "3a 08 c3 fe 04 21 .. .. 30 .. 3a .. .. b7 28 .. c5 d5 cd .. .. d1 c1 21 .. .. 20 .. 3e 08 32 0e c3", 10, 18),
+    ]),
+    # FLY page (ps_fly.c): the end of GameMode_Map, where the game opens the player menu:
+    #   ld a,(Ctrl_1_held) ; and $30 ; ret z ; ld a,($C265) ; or a ; ret nz ; xor a ;
+    #   LABEL_B41: ld ($C29D),a ; ld hl,Game_mode ; ld (hl),$0C   -> hook the load, resume = `ret z`
+    ("fly", [
+        ("ps_fly_go", "3a .. .. e6 30 c8 3a 65 c2 b7 c0 af 32 9d c2 21 02 c2 36 0c", 0, 5),
+    ]),
 ]
 
 def find(rom, pat):

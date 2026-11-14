@@ -6,8 +6,8 @@
  * while playing in the settings HUD (F1 / gamepad Back; runner/hud.c). Closing the HUD writes the
  * file back.
  *
- *     exp_multiplier     = 1       ; battle EXP reward x N (1..100)
- *     meseta_multiplier  = 1       ; battle Meseta reward x N (1..100)
+ *     exp_multiplier     = 1       ; battle EXP reward x N (0..100, 0 = none)
+ *     meseta_multiplier  = 1       ; battle Meseta reward x N (0..100, 0 = none)
  *     damage_dealt       = 1       ; damage the party deals x N (0, 0.25 .. 10)
  *     damage_received    = 1       ; damage the party takes x N (0 = invincible, 0.25 .. 10)
  *     encounter_percent  = 100     ; random-encounter chance, 100 = original, 50 = half, 0 = none
@@ -62,6 +62,11 @@ extern int      ps_automap_group(int floor, int *out, int max);
 extern int      ps_automap_groups(int *out, int max);
 extern int      ps_automap_floor(void);
 extern void     ps_items_init(void);
+extern void     ps_fly_init(void);
+extern void     ps_fly_frame(void);
+extern void     ps_fly_hud_opened(void);
+extern void     ps_fly_hud_key(int key);
+extern void     ps_fly_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
 extern void     ps_items_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
 extern void     ps_items_hud_key(int key);
 extern void     ps_items_hud_opened(void);
@@ -80,7 +85,7 @@ extern int      g_ps_item_custom_names;
 static const uint8_t k_rate_sig[16] = {0x10,0x0C,0x10,0x0C,0x10,0x0C,0x10,0x0B,0x10,0x0B,0x10,0x05,0x10,0x05,0x10,0x0F};
 
 /* ---- option values (indices into the HUD choice lists) ---- */
-#define N_MULT 100                              /* multipliers x1 .. x100 (index + 1) */
+#define N_MULT 101                              /* multipliers x0 .. x100 (= index) */
 static char        s_mult_buf[N_MULT][16];
 static const char *k_mult_names[N_MULT];        /* filled by init_names() */
 static const char *const k_enc_names[]  = { "NONE", "25%", "50%", "75%", "100% (ORIGINAL)", "150%", "200%" };
@@ -95,22 +100,23 @@ static const int         k_dmg_vals[]  = { 0, 25, 50, 75, 100, 150, 200, 300, 40
 static int s_dealt_i = DMG_X1, s_recv_i = DMG_X1;
 static int nearest_dmg(double v) { int b = 0; for (int i = 1; i < N_DMG; i++) if (abs(k_dmg_vals[i] - (int)(v * 100 + 0.5)) < abs(k_dmg_vals[b] - (int)(v * 100 + 0.5))) b = i; return b; }
 
-static int s_exp_i = 0, s_mes_i = 0, s_enc_i = 4, s_map_i = 0;   /* map side window off: the map is a HUD page */
+static int s_exp_i = 1, s_mes_i = 1, s_enc_i = 4, s_map_i = 0;   /* map side window off: the map is a HUD page */
 static int s_walk_i = 0;                       /* walk speed: 0 = x1 (original), 1 = x2, 2 = x4 */
 static int s_reveal_i = 0, s_secrets_i = 1;    /* dungeon map: explored / whole floor; secrets hidden / shown */
 static int s_panel_i = 0;                      /* widescreen side panel (party, meseta, map) off / on */
+static int s_hover_i = 0;                      /* hovercraft also drives on land: off / on */
 static const char *s_ini_path = "ps_qol.ini";
 
-static unsigned exp_mult(void)  { return (unsigned)s_exp_i + 1; }
-static unsigned mes_mult(void)  { return (unsigned)s_mes_i + 1; }
+static unsigned exp_mult(void)  { return (unsigned)s_exp_i; }
+static unsigned mes_mult(void)  { return (unsigned)s_mes_i; }
 static unsigned walk_mult(void) { return 1u << s_walk_i; }      /* 1, 2, 4 */
 static int    enc_pct(void)  { return k_enc_vals[s_enc_i]; }
 
-static int nearest_mult(double v){ int m = (int)(v + 0.5); return (m < 1 ? 1 : m > N_MULT ? N_MULT : m) - 1; }
+static int nearest_mult(double v){ int m = (int)(v + 0.5); return m < 0 ? 0 : m > N_MULT - 1 ? N_MULT - 1 : m; }
 static void init_names(void)
 {
     for (int i = 0; i < N_MULT; i++) {
-        snprintf(s_mult_buf[i], sizeof s_mult_buf[i], i ? "X%d" : "X1 (ORIGINAL)", i + 1);
+        snprintf(s_mult_buf[i], sizeof s_mult_buf[i], i == 0 ? "X0 (NONE)" : i == 1 ? "X1 (ORIGINAL)" : "X%d", i);
         k_mult_names[i] = s_mult_buf[i];
     }
 }
@@ -140,6 +146,7 @@ static void load_config(void)
         else if (!strcmp(key, "map_reveal")) s_reveal_i = v != 0;
         else if (!strcmp(key, "map_secrets")) s_secrets_i = v != 0;
         else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
+        else if (!strcmp(key, "hovercraft_land")) s_hover_i = v != 0;
         else if (!strcmp(key, "encounter_percent") && v >= 0) s_enc_i = nearest_enc((int)(v + 0.5));
     }
     fclose(f);
@@ -152,8 +159,8 @@ static void save_config(void)
     FILE *f = fopen(s_ini_path, "w");
     if (!f) { fprintf(stderr, "[ps_qol] cannot write %s\n", s_ini_path); return; }
     fprintf(f, "; Phantasy Star QoL options (also editable in game: F1 / gamepad Back). Original game = 1.0 / 100.\n");
-    fprintf(f, "exp_multiplier     = %-6u ; battle EXP reward multiplier (1..100)\n", exp_mult());
-    fprintf(f, "meseta_multiplier  = %-6u ; battle Meseta reward multiplier (1..100)\n", mes_mult());
+    fprintf(f, "exp_multiplier     = %-6u ; battle EXP reward multiplier (0..100, 0 = none)\n", exp_mult());
+    fprintf(f, "meseta_multiplier  = %-6u ; battle Meseta reward multiplier (0..100, 0 = none)\n", mes_mult());
     fprintf(f, "damage_dealt       = %-6g ; damage the party deals: 1 = original (0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 10)\n", k_dmg_vals[s_dealt_i] / 100.0);
     fprintf(f, "damage_received    = %-6g ; damage the party takes: 1 = original, 0 = invincible\n", k_dmg_vals[s_recv_i] / 100.0);
     fprintf(f, "encounter_percent  = %d      ; random encounter chance: 100 = original, 50 = half, 0 = none\n", enc_pct());
@@ -163,6 +170,7 @@ static void save_config(void)
     fprintf(f, "map_secrets        = %d      ; dungeon map: 1 = mark secret walls, pits, chests, events; 0 = only where you have stood\n", s_secrets_i);
     fprintf(f, "item_names         = %d      ; HUD ITEMS page: 0 = the game's item names, 1 = ps_item_names.txt\n", g_ps_item_custom_names);
     fprintf(f, "side_panel         = %d      ; widescreen window with a side panel: party, meseta, map (like SEGA AGES)\n", s_panel_i);
+    fprintf(f, "hovercraft_land    = %d      ; 1 = the hovercraft also drives on land like the Land Rover (board it anywhere)\n", s_hover_i);
     fclose(f);
 }
 
@@ -272,6 +280,82 @@ int ps_damage(void)
     return 1;
 }
 
+/* ---- hovercraft also drives on land ([insn_hooks] "ps_hover_*", Tools/ps_find_hooks.py) ----
+ * LABEL_74E4 decides whether the party / vehicle can move: it reads a tile attribute byte
+ * (LABEL_7764: metatile under a probe point -> attribute table in bank 3) at two probe points.
+ * On foot and in the Land Rover a tile blocks if bit 0 is set (water, mountains, walls ...); the
+ * hovercraft is blocked by bits 1 | 3 (land, town tiles). With the option the hovercraft is
+ * blocked only where both are: it drives on water and on land (over towns like the Land Rover;
+ * get out to enter them, as with the Land Rover). Encounters, the vehicle sprite etc. are the
+ * game's own (vehicles: a quarter of the encounter rate, for all vehicles).
+ *   ps_hover_pass  @ both `and $0A` of the hovercraft branch (Rev A $7535, $753F)
+ *   ps_hover_board @ ItemUse_Hovercraft `ld a,(Interaction_Type)` (Rev A $22F5): the game refuses if
+ *     Interaction_Type = 0, else LABEL_76C1 looks for water next to the party (8 probe sets) and
+ *     moves the party onto it, or fails ("will do no good here"). The hook runs that same search
+ *     (call_by_address); if it finds no water it runs the Land Rover's boarding search (LABEL_7656:
+ *     4 probe sets, mask $0D, shifts the party by up to one cell like the Land Rover) -> resume at
+ *     `ld a,$08 ; ld ($C30E),a`; if both fail the original code runs (and fails as before). */
+
+static uint16_t s_attr_fn, s_it_addr, s_water_fn, s_rover_fn;   /* LABEL_7764, Interaction_Type, LABEL_76C1, LABEL_7656 */
+static long find_rom(const char *hex)
+{
+    size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
+    int pat[64], np = 0;
+    for (const char *p = hex; *p && np < 64; ) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        pat[np++] = p[0] == '.' ? -1 : (int)strtol((char[3]){ p[0], p[1], 0 }, NULL, 16);
+        p += 2;
+    }
+    long hit = -1;
+    for (size_t i = 0; rom && i + (size_t)np <= n && i < 0x8000; i++) {
+        int k = 0; while (k < np && (pat[k] < 0 || rom[i + k] == pat[k])) k++;
+        if (k == np) { if (hit >= 0) return -1; hit = (long)i; }      /* must be unique */
+    }
+    return hit;
+}
+static void hover_init(void)
+{
+    size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
+    s_attr_fn = s_it_addr = 0;
+    long d = find_rom("fe 08 20 .. d5 06 00 21 .. .. 09 eb 1a cd .. .. e6 0a 20 .. 13 1a cd .. .. e6 0a");
+    long b = find_rom("3a 08 c3 fe 04 21 .. .. 30 .. 3a .. .. b7 28 .. c5 d5 cd .. .. d1 c1 21 .. .. 20 .. 3e 08 32 0e c3");
+    /* LABEL_7656: ld bc,$0400 ; - push bc ; ld b,0 ; ld hl,LABEL_7A35 ; add hl,bc ; ex de,hl ; ld a,(de) ; call LABEL_7764 ; and $0D */
+    long r = find_rom("01 00 04 c5 06 00 21 .. .. 09 eb 1a cd .. .. e6 0d");
+    if (d < 0 || b < 0 || r < 0) return;
+    unsigned t = rom[r + 7] | (rom[r + 8] << 8);
+    if (t >= 0x8000 || rom[d + 14] != rom[r + 13] || rom[d + 15] != rom[r + 14]) return;
+    s_rover_fn = (uint16_t)r;
+    s_attr_fn = (uint16_t)(rom[d + 14] | (rom[d + 15] << 8));
+    s_it_addr = (uint16_t)(rom[b + 11] | (rom[b + 12] << 8));
+    s_water_fn = (uint16_t)(rom[b + 19] | (rom[b + 20] << 8));
+}
+int ps_hover_pass(void)
+{
+    if (!s_hover_i) return 0;
+    {   static int log = -1; if (log < 0) log = getenv("PS_HOVER_LOG") != NULL;   /* test */
+        if (log) fprintf(stderr, "[hover] pass: attr %02X\n", g_z80.a); }
+    g_z80.a = z80_and8(&g_z80, g_z80.a, (g_z80.a & 1) ? 0x0A : 0x00);
+    return 1;
+}
+/* run a game routine that returns Z / A = 0 on success (LABEL_76C1, LABEL_7656), as its callers do */
+static bool game_call(uint16_t fn)
+{
+    g_z80.sp = (uint16_t)(g_z80.sp - 2); sms_write16(g_z80.sp, 0x0000);   /* return address, popped by its ret */
+    call_by_address(fn);
+    return g_z80.a == 0;
+}
+int ps_hover_board(void)
+{
+    if (!s_hover_i || !s_attr_fn || !sms_read8(s_it_addr)) return 0;     /* the game refuses anyway */
+    uint16_t bc = z80_bc(&g_z80), de = z80_de(&g_z80), hl = z80_hl(&g_z80);
+    int how = game_call(s_water_fn) ? 1 : game_call(s_rover_fn) ? 2 : 0;   /* water next to the party / land */
+    {   static int log = -1; if (log < 0) log = getenv("PS_HOVER_LOG") != NULL;   /* test */
+        if (log) fprintf(stderr, "[hover] board: %s\n", how == 1 ? "water" : how == 2 ? "land" : "no"); }
+    z80_set_bc(&g_z80, bc); z80_set_de(&g_z80, de); z80_set_hl(&g_z80, hl);
+    return how ? 1 : 0;                        /* 1: board (ld a,$08 ; ld ($C30E),a ...) */
+}
+
 /* ---- HUD ---- */
 static void on_enc_changed(void) { apply_overworld_rate(); }
 static void on_map_changed(void) { ps_automap_enable(s_map_i != 0); }
@@ -294,6 +378,7 @@ static const HudOption k_opts[] = {
     { "SIDE PANEL",        k_onoff,      2,      &s_panel_i, on_panel_changed },
     { "MAP REVEAL",        k_reveal_names, 2,    &s_reveal_i, on_view_changed },
     { "MAP SECRETS",       k_secrets_names, 2,   &s_secrets_i, on_view_changed },
+    { "HOVERCRAFT ON LAND", k_onoff,     2,      &s_hover_i, NULL },
 };
 
 static int hud_info(char lines[][41], int max)
@@ -403,6 +488,7 @@ static int hud_open_page(void)   /* in a dungeon: the map (test: PS_HUD_PAGE=n f
 {
     select_current();
     ps_items_hud_opened();
+    ps_fly_hud_opened();
     const char *e = getenv("PS_HUD_PAGE");
     if (e) return atoi(e);
     return ps_automap_in_dungeon() ? 3 : 0;
@@ -415,12 +501,15 @@ void ps_on_post_reset(void)
     load_config();
     ps_automap_init();
     ps_worldmap_init();
+    hover_init();
     ps_items_init();
+    ps_fly_init();
     s_map_ctx = 0;
     if (!pages_added) {
         hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
         hud_add_page_ex("ITEMS", ps_items_hud_draw, ps_items_hud_key, true);
         hud_add_page_ex("MAP", map_page_draw, map_page_key, true);
+        hud_add_page_ex("FLY", ps_fly_hud_draw, ps_fly_hud_key, true);
         pages_added = true;
     }
     hud_set_open_page(hud_open_page);
@@ -447,12 +536,14 @@ void ps_on_frame_post(uint64_t frame)
     ps_worldmap_frame();
     {   uint8_t mode = sms_read8(0xC202);
         if (mode == 0x0B) s_map_ctx = 1;
+        else if (mode == 0x04 || mode == 0x05) s_map_ctx = 2;  /* spaceship flight: the planet (ps_worldmap.c) */
         else if (mode == 0x09 || mode == 0x0F) {            /* map, or the tube walk (GameMode_Road) */
             s_map_ctx = 2;
             int place = ps_worldmap_current_place(), px, py;
             if (place >= 0 && ps_worldmap_valid()) { ps_worldmap_current_pos(&px, &py); ps_automap_note_map(place, px, py); }
         } }
     ps_panel_frame(frame);
+    ps_fly_frame();
 
     {   /* test: PS_DAMAGE_LOG=1 prints every HP change of the party (P0..3) and the enemies (E0..7) */
         static int on = -1; static uint8_t prev[12];

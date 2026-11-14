@@ -37,6 +37,6 @@ bank  = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 12, 12]
 count = [20, 5, 18, 8, 18, 5, 19, 3, 64, 20, 22, 5, 11, 12, 182, 5, 18]
 
 [insn_hooks]   # QoL hooks (Tools/ps_find_hooks.py; each returns 0 = original code unless enabled)
-addr   = [0x7166, 0x7173, 0x5AA4, 0x5B3F, 0x5B70, 0x5B7B, 0x1268, 0x15C2, 0x0B0F, 0x0F43, 0x0052]
-func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y", "ps_damage", "ps_damage", "ps_items_walk_mark", "ps_items_walk_mark", "ps_items_vwait"]
-resume = [0x7173, 0x717D, 0x5AA6, 0x5B43, 0x5B7A, 0x5B86, 0x126B, 0x15C5, 0x0B11, 0x0F45, 0x0055]
+addr   = [0x7166, 0x7173, 0x5AA4, 0x5B3F, 0x5B70, 0x5B7B, 0x1268, 0x15C2, 0x0B0F, 0x0F43, 0x0052, 0x7535, 0x753E, 0x22F5, 0x0B35]
+func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y", "ps_damage", "ps_damage", "ps_items_walk_mark", "ps_items_walk_mark", "ps_items_vwait", "ps_hover_pass", "ps_hover_pass", "ps_hover_board", "ps_fly_go"]
+resume = [0x7173, 0x717D, 0x5AA6, 0x5B43, 0x5B7A, 0x5B86, 0x126B, 0x15C5, 0x0B11, 0x0F45, 0x0055, 0x7537, 0x7540, 0x2307, 0x0B3A]

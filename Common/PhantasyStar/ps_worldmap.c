@@ -54,10 +54,13 @@ static struct {
     uint8_t tileset, map;
     int     px, py;                             /* party, world pixels */
     uint8_t spr_pal[16];                        /* CRAM 16..31 while on the map (BG tiles may use it) */
+    bool    ship;                               /* spaceship flight: show the whole planet */
 } g_area;
+extern bool ps_fly_ship_pos(int planet, int *px, int *py);
 
 bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space);
 static void dump_all(void);
+static bool draw_whole(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space);
 
 /* Rendered pictures: a tileset's whole 8 x 8 screen table at full size (2048 x 1536), rendered once
    per tileset (a few ms). Planets wrap. Towns: several towns share one table, so a town picture is
@@ -155,9 +158,34 @@ void ps_worldmap_frame(void)
     uint8_t mode = sms_read8(RAM_GAME_MODE);
     /* the tube walks (GameMode_LoadRoad -> LoadMap) run on a planet map with the normal camera and
        party object, only the input is scripted */
+    {   /* test: PS_WORLDMAP_DEBUG=1 also prints every change of game mode / $C308 / $C2E9 */
+        static int dbg = -1; static unsigned fr, last = 0xFFFFFFFFu; if (dbg < 0) dbg = getenv("PS_WORLDMAP_DEBUG") != NULL;
+        fr++;
+        unsigned st = (unsigned)mode << 16 | (unsigned)sms_read8(0xC308) << 8 | sms_read8(0xC2E9);
+        if (dbg && st != last) {
+            fprintf(stderr, "[worldmap] frame %u: mode %02X C308 %02X C309 %02X C2E9 %02X cam %02X%02X,%02X%02X\n", fr, mode,
+                    sms_read8(0xC308), sms_read8(0xC309), sms_read8(0xC2E9), sms_read8(0xC302), sms_read8(0xC301), sms_read8(0xC306), sms_read8(0xC305));
+            last = st;
+        }
+    }
+    /* Spaceship flights (GameMode_LoadShip $04 / GameMode_Ship $05): take-off on the departure
+       planet, the space scene ($C308 switches to the arrival planet near its end, for the palette),
+       landing on the arrival planet, then LoadMap of the town. $C308 = the planet (LABEL_787B stores
+       the map number 0..3 there); the camera is meaningless in the space scene, so the marker is the
+       route's take-off / landing point (LABEL_ABF via ps_fly_ship_pos). */
+    if (g_df1 >= 0 && (mode == 0x04 || mode == 0x05) && sms_read8(0xC308) < 4 && (sms_read8(0xC2E9) & 0x80)) {
+        int planet = sms_read8(0xC308), px, py;
+        if (ps_fly_ship_pos(planet, &px, &py)) {
+            g_area.tileset = (uint8_t)planet; g_area.map = (uint8_t)planet;
+            g_area.px = px; g_area.py = py; g_area.ship = true; g_area.valid = true;
+        }
+        in_map = 0;
+        return;
+    }
     bool on_map = mode == MODE_MAP || mode == MODE_ROAD;
     in_map = on_map ? in_map + 1 : 0;
     if (g_df1 < 0 || !on_map) return;
+    g_area.ship = false;
     /* GameMode_LoadMap sets the mode to $09 first and unpacks the tiles during its fade-out
        (several frames), so copy them once the map has been running for a moment */
     if (g_tiles_from_vram && in_map == 30) {
@@ -554,6 +582,7 @@ static void draw_view(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh
 bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space)
 {
     View v;
+    if (g_area.ship) return draw_whole(fb, w, h, bx, by, bw, bh, space);   /* spaceship flight: the planet */
     if (bw < 8 || bh < 8 || !view_area(bw, bh, &v)) return false;
     static bool dumped; if (!dumped) { debug_ppm(); dumped = true; }
     draw_view(fb, w, h, bx, by, bw, bh, space, &v, false);
@@ -566,11 +595,11 @@ bool ps_worldmap_draw_at(uint32_t *fb, int w, int h, int bx, int by, int bw, int
                          int tileset, int map, int px, int py, const char **name)
 {
     if (g_df1 < 0 || tileset < 0 || tileset >= 32) return false;
-    bool valid = g_area.valid; uint8_t ts = g_area.tileset, mp = g_area.map; int ox = g_area.px, oy = g_area.py;
-    g_area.valid = true; g_area.tileset = (uint8_t)tileset; g_area.map = (uint8_t)map; g_area.px = px; g_area.py = py;
+    bool valid = g_area.valid, ship = g_area.ship; uint8_t ts = g_area.tileset, mp = g_area.map; int ox = g_area.px, oy = g_area.py;
+    g_area.valid = true; g_area.tileset = (uint8_t)tileset; g_area.map = (uint8_t)map; g_area.px = px; g_area.py = py; g_area.ship = false;
     if (name) *name = ps_worldmap_area_name();
     bool ok = ps_worldmap_draw(fb, w, h, bx, by, bw, bh, space);
-    g_area.valid = valid; g_area.tileset = ts; g_area.map = mp; g_area.px = ox; g_area.py = oy;
+    g_area.valid = valid; g_area.tileset = ts; g_area.map = mp; g_area.px = ox; g_area.py = oy; g_area.ship = ship;
     return ok;
 }
 
@@ -619,6 +648,22 @@ int ps_worldmap_place_tileset(int place)
     return place >= 4 && place < 4 + N_TOWNS ? k_towns[place - 4].ts : -1;
 }
 int ps_worldmap_num_places(void) { return 4 + N_TOWNS; }
+/* name of a place (planet or town), NULL if unknown */
+const char *ps_worldmap_place_name(int place)
+{
+    static const char *const planets[4] = { "Palma", "Motavia", "Dezoris", "Dezoris" };
+    if (place >= 0 && place < 4) return planets[place];
+    return place >= 4 && place < 4 + N_TOWNS ? k_towns[place - 4].name : NULL;
+}
+/* the town place at screen (sx, sy) of a town tileset (nearest town rectangle), -1 if none */
+int ps_worldmap_town_place(int tileset, int sx, int sy)
+{
+    const char *nm = town_name(tileset, sx, sy);
+    for (int i = 0; i < N_TOWNS; i++) if (k_towns[i].ts == tileset && k_towns[i].name == nm) return 4 + i;
+    return -1;
+}
+/* file offset of LABEL_DF1 (14-byte tileset records), -1 if not found */
+long ps_worldmap_df1(void) { return g_df1; }
 
 /* HUD page: the map in a 4:3 box, an info column to the right: `title`, the screen (here) or "LAST
    VISIT", the zoom hint, then the caller's lines (nav hints) */
@@ -682,9 +727,10 @@ void ps_worldmap_hud_draw_place(uint32_t *fb, int w, int h, int x0, int y0, int 
 {
     if (here) { hud_draw_impl(fb, w, h, x0, y0, x1, y1, true, title, lines, nlines); return; }
     int ts = ps_worldmap_place_tileset(place);
-    bool valid = g_area.valid; uint8_t ots = g_area.tileset, omp = g_area.map; int ox = g_area.px, oy = g_area.py;
+    bool valid = g_area.valid, ship = g_area.ship; uint8_t ots = g_area.tileset, omp = g_area.map; int ox = g_area.px, oy = g_area.py;
     if (ts >= 0) { g_area.valid = true; g_area.tileset = (uint8_t)ts; g_area.px = px; g_area.py = py; }
     else g_area.valid = false;
+    g_area.ship = false;
     hud_draw_impl(fb, w, h, x0, y0, x1, y1, false, title, lines, nlines);
-    g_area.valid = valid; g_area.tileset = ots; g_area.map = omp; g_area.px = ox; g_area.py = oy;
+    g_area.valid = valid; g_area.tileset = ots; g_area.map = omp; g_area.px = ox; g_area.py = oy; g_area.ship = ship;
 }
