@@ -1,6 +1,7 @@
 /*
- * ps_worldmap.c - Phantasy Star (SMS) "surroundings" map for the overworld and towns: the screen
- * the party is on plus the 8 screens around it, drawn from the ROM's own map data.
+ * ps_worldmap.c - Phantasy Star (SMS) "surroundings" map for the overworld and towns: a window
+ * 3 screens wide centred on the party (moving with it), or the whole planet / town, drawn from the
+ * ROM's own map data. Also during the tube walks (GameMode_Road $0F, a scripted walk on a planet).
  *
  * Read-only observer like ps_automap.c: it reads RAM / VDP state in the on_frame_post hook and the
  * ROM, never writes to the game.
@@ -35,11 +36,10 @@ extern uint8_t *glue_rom_image(size_t *size);
 
 #define RAM_GAME_MODE 0xC202
 #define MODE_MAP      0x09
+#define MODE_ROAD     0x0F   /* GameMode_Road: the scripted tube walk (LABEL_F0C routes) on a planet map */
 
 #define SCR_W 256
 #define SCR_H 192
-#define AREA_W (3 * SCR_W)
-#define AREA_H (3 * SCR_H)
 
 static const uint8_t *g_rom; static size_t g_rom_n;
 static long g_df1 = -1;                         /* file offset of LABEL_DF1 */
@@ -59,22 +59,28 @@ static struct {
 bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space);
 static void dump_all(void);
 
-/* Rendered pictures, two of each kind (the side panel shows the current map while the HUD's MAP page
-   may show another one: without a second buffer they would re-render each other every frame).
-   Least recently used is replaced. `gen` changes with every render (hi-res texture uploads). */
+/* Rendered pictures: a tileset's whole 8 x 8 screen table at full size (2048 x 1536), rendered once
+   per tileset (a few ms). Planets wrap. Towns: several towns share one table, so a town picture is
+   per town (= group of connected screens, town_clusters) and the screens of the others are dimmed.
+   Three buffers (the side panel shows the current map while the HUD's MAP page or the save-slot
+   preview may show another one: with fewer they would re-render each other every frame); least
+   recently used is replaced. `gen` changes with every render (hi-res texture uploads). */
 #define WORLD_W (8 * SCR_W)
 #define WORLD_H (8 * SCR_H)
-typedef struct { uint32_t *px; uint32_t key; uint32_t gen; bool spr, valid; unsigned used; } WorldBuf;   /* planets */
-typedef struct { uint32_t img[AREA_W * AREA_H]; int key; uint32_t pal, gen; bool spr, valid; int nw, nh; unsigned used; } TownBuf;
-static WorldBuf g_wb[2];
-static TownBuf  g_tb[2];
-static TownBuf *g_tb_last;                      /* debug_ppm */
+#define N_PICS 3
+typedef struct {
+    uint32_t *px; int ts, cl; uint32_t pal, gen; bool spr, valid; unsigned used;
+    int x0, y0, x1, y1;                         /* the town's screens (inclusive); planets: 0..7 */
+} Pic;
+static Pic      g_pic[N_PICS];
+static Pic     *g_pic_last;                     /* debug_ppm */
 static unsigned g_use_clock;
 static uint32_t g_gen;
 static bool     g_used_spr;                     /* set by draw_screen */
-static void invalidate_pictures(void) { for (int i = 0; i < 2; i++) { g_wb[i].valid = false; g_tb[i].valid = false; } }
+static void invalidate_pictures(void) { for (int i = 0; i < N_PICS; i++) g_pic[i].valid = false; }
 static uint32_t g_pal_hash;                     /* hash of the sprite palette (CRAM 16..31) on the map */
-static int      g_view;                        /* HUD page: 0 area, 1 whole planet (test: PS_MAP_VIEW=1) */
+static int      g_view;                        /* HUD page: 0 area, 1 whole planet / town (test: PS_MAP_VIEW=1) */
+static int town_clusters(int tileset, int cl[64]);
 
 static long bank_off(int bank, unsigned addr) { return (long)bank * 0x4000 + (long)(addr - 0x8000); }
 
@@ -147,8 +153,11 @@ void ps_worldmap_frame(void)
 {
     static int in_map;                                   /* consecutive frames in map mode */
     uint8_t mode = sms_read8(RAM_GAME_MODE);
-    in_map = mode == MODE_MAP ? in_map + 1 : 0;
-    if (g_df1 < 0 || mode != MODE_MAP) return;
+    /* the tube walks (GameMode_LoadRoad -> LoadMap) run on a planet map with the normal camera and
+       party object, only the input is scripted */
+    bool on_map = mode == MODE_MAP || mode == MODE_ROAD;
+    in_map = on_map ? in_map + 1 : 0;
+    if (g_df1 < 0 || !on_map) return;
     /* GameMode_LoadMap sets the mode to $09 first and unpacks the tiles during its fade-out
        (several frames), so copy them once the map has been running for a moment */
     if (g_tiles_from_vram && in_map == 30) {
@@ -252,40 +261,58 @@ static void draw_screen(const TileSetView *v, int sx, int sy, uint32_t *dst, int
     }
 }
 
-/* towns: render nw x nh screens (<= 3 x 3) with top-left screen (osx, osy) into t */
-static void render_area(TownBuf *t, int tileset, int osx, int osy, int nw, int nh)
+/* The picture of the current area (g_area): planets = the whole planet; towns = the whole screen
+   table with every screen outside the party's town dimmed (other towns sharing the table, filler).
+   Rendered once per tileset / town and sprite palette (if a tile uses it); NULL if not possible. */
+static Pic *ensure_pic(void)
 {
-    TileSetView v; tileset_view(tileset, &v);
-    for (int gy = 0; gy < nh; gy++) for (int gx = 0; gx < nw; gx++)
-        draw_screen(&v, osx + gx, osy + gy, t->img + gy * SCR_H * AREA_W + gx * SCR_W, AREA_W);
-    t->gen = ++g_gen;
-}
-
-/* planets: the whole planet (8 x 8 screens = 2048 x 1536) at full size, rendered once per tileset
-   and sprite palette (a few ms); the surroundings view is a moving window into it (it wraps) */
-static WorldBuf *ensure_world(void)
-{
-    if (!g_area.valid || g_df1 < 0 || g_area.tileset >= 4) return NULL;
-    if (g_tiles_from_vram && !g_tiles_ok[0]) return NULL;
-    WorldBuf *b = NULL;
-    for (int i = 0; i < 2; i++) if (g_wb[i].valid && g_wb[i].key >> 24 == g_area.tileset) b = &g_wb[i];
-    /* key: tileset, plus the sprite palette only if a tile of this planet uses it */
-    if (!b || (b->spr && b->key != ((uint32_t)g_area.tileset << 24 ^ (g_pal_hash & 0xFFFFFF)))) {
-        if (!b) b = !g_wb[0].valid ? &g_wb[0] : !g_wb[1].valid ? &g_wb[1] : g_wb[0].used < g_wb[1].used ? &g_wb[0] : &g_wb[1];
+    if (!g_area.valid || g_df1 < 0) return NULL;
+    int ts = g_area.tileset;
+    if (g_tiles_from_vram && !g_tiles_ok[ts < 4 ? 0 : 1]) return NULL;
+    int cl[64], c = 0;
+    if (ts >= 4) {
+        int px = ((g_area.px % WORLD_W) + WORLD_W) % WORLD_W, py = ((g_area.py % WORLD_H) + WORLD_H) % WORLD_H;
+        town_clusters(ts, cl);
+        c = cl[(py / SCR_H) * 8 + px / SCR_W];
+    }
+    Pic *b = NULL;
+    for (int i = 0; i < N_PICS; i++)
+        if (g_pic[i].valid && g_pic[i].ts == ts && g_pic[i].cl == c && (!g_pic[i].spr || g_pic[i].pal == g_pal_hash)) b = &g_pic[i];
+    if (!b) {
+        for (int i = 0; i < N_PICS && !b; i++) if (!g_pic[i].valid) b = &g_pic[i];     /* free one, else LRU */
+        if (!b) { b = &g_pic[0]; for (int i = 1; i < N_PICS; i++) if (g_pic[i].used < b->used) b = &g_pic[i]; }
         if (!b->px) b->px = malloc((size_t)WORLD_W * WORLD_H * sizeof *b->px);
         if (!b->px) return NULL;
         g_used_spr = false;
         static int dbg = -1; if (dbg < 0) dbg = getenv("PS_WORLDMAP_DEBUG") != NULL;
         clock_t t0 = clock();
-        TileSetView v; tileset_view(g_area.tileset, &v);
-        for (int sy = 0; sy < 8; sy++) for (int sx = 0; sx < 8; sx++)
-            draw_screen(&v, sx, sy, b->px + sy * SCR_H * WORLD_W + sx * SCR_W, WORLD_W);
-        b->spr = g_used_spr;
-        b->key = (uint32_t)g_area.tileset << 24 ^ (b->spr ? g_pal_hash & 0xFFFFFF : 0);
+        TileSetView v; tileset_view(ts, &v);
+        b->x0 = 0; b->y0 = 0; b->x1 = 7; b->y1 = 7;
+        if (c) { b->x0 = b->y0 = 8; b->x1 = b->y1 = -1; }
+        for (int sy = 0; sy < 8; sy++) for (int sx = 0; sx < 8; sx++) {
+            uint32_t *o = b->px + sy * SCR_H * WORLD_W + sx * SCR_W;
+            if (c && !cl[sy * 8 + sx]) {      /* filler (no town): the game never shows it; its colour
+                                                 is sprite colour 0, which differs per town -> black */
+                for (int y = 0; y < SCR_H; y++) for (int x = 0; x < SCR_W; x++) o[y * WORLD_W + x] = 0;
+                continue;
+            }
+            draw_screen(&v, sx, sy, o, WORLD_W);
+            if (!c) continue;
+            if (cl[sy * 8 + sx] == c) {
+                if (sx < b->x0) b->x0 = sx; if (sx > b->x1) b->x1 = sx;
+                if (sy < b->y0) b->y0 = sy; if (sy > b->y1) b->y1 = sy;
+                continue;
+            }
+            for (int y = 0; y < SCR_H; y++) for (int x = 0; x < SCR_W; x++) {   /* not this town: 30 % */
+                uint32_t p = o[y * WORLD_W + x];
+                o[y * WORLD_W + x] = ((p >> 16 & 255) * 77 >> 8) << 16 | ((p >> 8 & 255) * 77 >> 8) << 8 | (p & 255) * 77 >> 8;
+            }
+        }
+        b->spr = g_used_spr; b->pal = g_pal_hash; b->ts = ts; b->cl = c;
         b->gen = ++g_gen; b->valid = true;
-        if (dbg) fprintf(stderr, "[worldmap] planet %d rendered in %ld ms\n", g_area.tileset, (long)((clock() - t0) * 1000 / CLOCKS_PER_SEC));
+        if (dbg) fprintf(stderr, "[worldmap] tileset %d town %d rendered in %ld ms\n", ts, c, (long)((clock() - t0) * 1000 / CLOCKS_PER_SEC));
     }
-    b->used = ++g_use_clock;
+    b->used = ++g_use_clock; g_pic_last = b;
     return b;
 }
 
@@ -362,60 +389,18 @@ static void dump_all(void)
     free(buf);
 }
 
-/* render (or find) the town around the party; returns its buffer and the party position in it */
-static TownBuf *prepare(int *rx, int *ry)
-{
-    if (!g_area.valid || g_df1 < 0) return NULL;
-    if (g_tiles_from_vram && !g_tiles_ok[g_area.tileset < 4 ? 0 : 1]) return NULL;
-    int px = ((g_area.px % 2048) + 2048) % 2048, py = ((g_area.py % 1536) + 1536) % 1536;
-    int csx = px / SCR_W, csy = py / SCR_H;
-    int osx = csx - 1, osy = csy - 1, nw = 3, nh = 3;    /* planets: 3 x 3 centred on the party's screen */
-    if (g_area.tileset >= 4) {
-        /* towns: a few screens in a table full of one filler screen (several towns share a table).
-           Show the town = the screens connected to the party's screen, at most 3 x 3 around it. */
-        unsigned ptr[64], filler = screen_table(ptr);
-        bool in[3][3] = { { false } };
-        if (ptr[csy * 8 + csx] != filler) {
-            in[1][1] = true;
-            for (int pass = 0; pass < 4; pass++)                  /* grow within the 3 x 3 box */
-                for (int gy = 0; gy < 3; gy++) for (int gx = 0; gx < 3; gx++) {
-                    if (in[gy][gx] || ptr[((csy + gy - 1) & 7) * 8 + ((csx + gx - 1) & 7)] == filler) continue;
-                    if ((gx > 0 && in[gy][gx - 1]) || (gx < 2 && in[gy][gx + 1]) || (gy > 0 && in[gy - 1][gx]) || (gy < 2 && in[gy + 1][gx]))
-                        in[gy][gx] = true;
-                }
-            int x0 = 3, x1 = -1, y0 = 3, y1 = -1;
-            for (int gy = 0; gy < 3; gy++) for (int gx = 0; gx < 3; gx++) if (in[gy][gx]) {
-                if (gx < x0) x0 = gx; if (gx > x1) x1 = gx; if (gy < y0) y0 = gy; if (gy > y1) y1 = gy;
-            }
-            osx = csx - 1 + x0; osy = csy - 1 + y0; nw = x1 - x0 + 1; nh = y1 - y0 + 1;
-        }
-    }
-    int key = g_area.tileset << 16 | (osy & 7) << 12 | (osx & 7) << 8 | nh << 4 | nw;
-    TownBuf *t = NULL;
-    for (int i = 0; i < 2; i++) if (g_tb[i].valid && g_tb[i].key == key) t = &g_tb[i];
-    if (!t || (t->spr && t->pal != g_pal_hash)) {
-        if (!t) t = !g_tb[0].valid ? &g_tb[0] : !g_tb[1].valid ? &g_tb[1] : g_tb[0].used < g_tb[1].used ? &g_tb[0] : &g_tb[1];
-        g_used_spr = false;
-        render_area(t, g_area.tileset, osx, osy, nw, nh);
-        t->key = key; t->pal = g_pal_hash; t->spr = g_used_spr; t->nw = nw; t->nh = nh; t->valid = true;
-    }
-    t->used = ++g_use_clock; g_tb_last = t;
-    *rx = (csx - osx) * SCR_W + px % SCR_W; *ry = (csy - osy) * SCR_H + py % SCR_H;
-    return t;
-}
-
 bool ps_worldmap_valid(void) { return g_area.valid && g_df1 >= 0; }
 
-/* debug: write the full-size render as a PPM (PS_WORLDMAP_PPM=<file>, written when the map is first drawn) */
+/* debug: write the full-size picture as a PPM (PS_WORLDMAP_PPM=<file>, written when the map is first drawn) */
 static void debug_ppm(void)
 {
     const char *path = getenv("PS_WORLDMAP_PPM");
     if (!path || !path[0]) return;
     FILE *f = fopen(path, "wb");
     if (!f) return;
-    fprintf(f, "P6\n%d %d\n255\n", AREA_W, AREA_H);
-    const uint32_t *img = g_tb_last ? g_tb_last->img : NULL;
-    for (int i = 0; i < AREA_W * AREA_H; i++) { uint32_t p = img ? img[i] : 0; uint8_t c[3] = { (uint8_t)(p >> 16), (uint8_t)(p >> 8), (uint8_t)p }; fwrite(c, 1, 3, f); }
+    fprintf(f, "P6\n%d %d\n255\n", WORLD_W, WORLD_H);
+    const uint32_t *img = g_pic_last ? g_pic_last->px : NULL;
+    for (long i = 0; i < (long)WORLD_W * WORLD_H; i++) { uint32_t p = img ? img[i] : 0; uint8_t c[3] = { (uint8_t)(p >> 16), (uint8_t)(p >> 8), (uint8_t)p }; fwrite(c, 1, 3, f); }
     fclose(f);
 }
 
@@ -474,33 +459,28 @@ typedef struct { const uint32_t *img; int iw, ih, sx, sy, sw, sh; bool wrap; uin
 static int wrap_x(int x) { return ((x % WORLD_W) + WORLD_W) % WORLD_W; }
 static int wrap_y(int y) { return ((y % WORLD_H) + WORLD_H) % WORLD_H; }
 
-/* the surroundings: planets = 3 screens wide, as tall as the box allows (2..8 screens), centred on
-   the party and moving with it; towns = the whole town (<= 3 x 3 screens) */
+/* the surroundings (planets and towns): 3 screens wide, as tall as the box allows (2..8 screens),
+   centred on the party and moving with it pixel by pixel */
 static bool view_area(int bw, int bh, View *v)
 {
-    if (!g_area.valid || g_df1 < 0) return false;
-    if (g_area.tileset < 4) {
-        WorldBuf *b = ensure_world();
-        if (!b) return false;
-        int vw = 3 * SCR_W, vh = (int)((long)vw * bh / bw);
-        if (vh < 2 * SCR_H) vh = 2 * SCR_H;
-        if (vh > WORLD_H) vh = WORLD_H;
-        int px = wrap_x(g_area.px), py = wrap_y(g_area.py);
-        *v = (View){ b->px, WORLD_W, WORLD_H, px - vw / 2, py - vh / 2, vw, vh, true, b->gen, vw / 2, vh / 2 };
-        return true;
-    }
-    int rx, ry;
-    TownBuf *t = prepare(&rx, &ry);
-    if (!t) return false;
-    *v = (View){ t->img, AREA_W, AREA_H, 0, 0, t->nw * SCR_W, t->nh * SCR_H, false, t->gen, rx, ry };
+    Pic *b = ensure_pic();
+    if (!b) return false;
+    int vw = 3 * SCR_W, vh = (int)((long)vw * bh / bw);
+    if (vh < 2 * SCR_H) vh = 2 * SCR_H;
+    if (vh > WORLD_H) vh = WORLD_H;
+    int px = wrap_x(g_area.px), py = wrap_y(g_area.py);
+    *v = (View){ b->px, WORLD_W, WORLD_H, px - vw / 2, py - vh / 2, vw, vh, true, b->gen, vw / 2, vh / 2 };
     return true;
 }
 
-static bool view_planet(View *v)
+/* the whole planet, or the whole town (its screens) */
+static bool view_whole(View *v)
 {
-    WorldBuf *b = ensure_world();
+    Pic *b = ensure_pic();
     if (!b) return false;
-    *v = (View){ b->px, WORLD_W, WORLD_H, 0, 0, WORLD_W, WORLD_H, false, b->gen, wrap_x(g_area.px), wrap_y(g_area.py) };
+    int sx = b->x0 * SCR_W, sy = b->y0 * SCR_H;
+    *v = (View){ b->px, WORLD_W, WORLD_H, sx, sy, (b->x1 - b->x0 + 1) * SCR_W, (b->y1 - b->y0 + 1) * SCR_H, false, b->gen,
+                 wrap_x(g_area.px) - sx, wrap_y(g_area.py) - sy };
     return true;
 }
 
@@ -594,12 +574,12 @@ bool ps_worldmap_draw_at(uint32_t *fb, int w, int h, int bx, int by, int bw, int
     return ok;
 }
 
-/* The whole planet (planets only), faint screen grid, party marker. */
-bool ps_worldmap_draw_planet(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space)
+/* The whole planet (faint screen grid) or the whole town, party marker. */
+static bool draw_whole(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space)
 {
     View v;
-    if (bw < 8 || bh < 8 || !view_planet(&v)) return false;
-    draw_view(fb, w, h, bx, by, bw, bh, space, &v, true);
+    if (bw < 8 || bh < 8 || !view_whole(&v)) return false;
+    draw_view(fb, w, h, bx, by, bw, bh, space, &v, g_area.tileset < 4);
     return true;
 }
 
@@ -609,7 +589,7 @@ void ps_worldmap_screen(int *sx, int *sy)
     *sy = wrap_y(g_area.py) / SCR_H;
 }
 
-/* HUD page view: 0 = the screens around the party, 1 = the whole planet; Up/Down switch */
+/* HUD page view: 0 = the surroundings of the party, 1 = the whole planet / town; Up/Down switch */
 void ps_worldmap_hud_key(int key) { if (key == HUD_KEY_UP || key == HUD_KEY_DOWN) g_view ^= 1; }
 
 /* tileset of a map number (LABEL_DC1; 0..3 planets, 4..23 towns), -1 if unknown */
@@ -641,7 +621,7 @@ int ps_worldmap_place_tileset(int place)
 int ps_worldmap_num_places(void) { return 4 + N_TOWNS; }
 
 /* HUD page: the map in a 4:3 box, an info column to the right: `title`, the screen (here) or "LAST
-   VISIT", the zoom hint (planets), then the caller's lines (nav hints) */
+   VISIT", the zoom hint, then the caller's lines (nav hints) */
 static void hud_draw_impl(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, bool here,
                           const char *title, const char *const *lines, int nlines)
 {
@@ -650,8 +630,8 @@ static void hud_draw_impl(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
     if (bw > x1 - x0 - 74) { bw = x1 - x0 - 74; bh = bw * 3 / 4; }
     int bx = x0 + 2, by = y0 + 1;
     hud_fill(fb, w, h, bx - 1, by - 1, bx + bw + 1, by + bh + 1, 0xFF0C0C12u, false);
-    bool planet = g_view == 1 && g_area.valid && g_area.tileset < 4;
-    bool ok = planet ? ps_worldmap_draw_planet(fb, w, h, bx, by, bw, bh, HUD_SPACE_GAME)
+    bool whole = g_view == 1, planet = g_area.valid && g_area.tileset < 4;
+    bool ok = whole ? draw_whole(fb, w, h, bx, by, bw, bh, HUD_SPACE_GAME)
                      : ps_worldmap_draw(fb, w, h, bx, by, bw, bh, HUD_SPACE_GAME);
     int tx = bx + bw + 6, ty = by;
     if (!ok) {
@@ -678,10 +658,12 @@ static void hud_draw_impl(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
             hud_text(fb, w, h, tx, ty, "SCREEN", GREY); ty += 9;
             hud_text(fb, w, h, tx, ty, buf, WHITE); ty += 14;
         } else { hud_text(fb, w, h, tx, ty, "LAST VISIT", GREY); ty += 14; }
-        if (g_area.tileset < 4) {
-            hud_text(fb, w, h, tx, ty, planet ? "PLANET" : "AREA", YEL); ty += 9;
+        {
+            const char *all = planet ? "PLANET" : "TOWN";
+            hud_text(fb, w, h, tx, ty, whole ? all : "AREA", YEL); ty += 9;
             hud_text(fb, w, h, tx, ty, "UP/DOWN", GREY); ty += 9;
-            hud_text(fb, w, h, tx, ty, planet ? "= AREA" : "= PLANET", GREY); ty += 14;
+            char b2[16]; snprintf(b2, sizeof b2, "= %s", whole ? "AREA" : all);
+            hud_text(fb, w, h, tx, ty, b2, GREY); ty += 14;
         }
     }
     if (!ok) ty = by + 44;

@@ -364,8 +364,8 @@ static void map_page_key(int key)
         select_place(pl[i]);
         return;
     }
-    if (s_sel.kind == PL_MAP) {                          /* planets: area <-> whole planet */
-        if (s_sel.id < 4) ps_worldmap_hud_key(key);
+    if (s_sel.kind == PL_MAP) {                          /* area <-> whole planet / town */
+        ps_worldmap_hud_key(key);
         return;
     }
     if (s_sel.kind == PL_DUNGEON) {                      /* floor up (higher number) / down */
@@ -447,7 +447,7 @@ void ps_on_frame_post(uint64_t frame)
     ps_worldmap_frame();
     {   uint8_t mode = sms_read8(0xC202);
         if (mode == 0x0B) s_map_ctx = 1;
-        else if (mode == 0x09) {
+        else if (mode == 0x09 || mode == 0x0F) {            /* map, or the tube walk (GameMode_Road) */
             s_map_ctx = 2;
             int place = ps_worldmap_current_place(), px, py;
             if (place >= 0 && ps_worldmap_valid()) { ps_worldmap_current_pos(&px, &py); ps_automap_note_map(place, px, py); }
