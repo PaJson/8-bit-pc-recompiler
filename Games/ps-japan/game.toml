@@ -55,8 +55,7 @@ count = [20, 5, 18, 8, 18, 5, 19, 3, 64, 20, 22, 5, 11, 12, 182, 5, 18]
 #  0x845C bank 12 count   5  sound snd1 (bank 12)
 #  0x88C2 bank 12 count  18  sound snd2 (bank 12)
 
-# QoL "walk speed x2" (Common/PhantasyStar/ps_qol.c; hooks return 0 = original code unless enabled)
-[insn_hooks]   # walk speed x2 (Tools/ps_find_walk_hooks.py)
-addr   = [0x7409, 0x7416, 0x5D20, 0x5DBB, 0x5DEC, 0x5DF7]
-func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y"]
-resume = [0x7416, 0x7420, 0x5D22, 0x5DBF, 0x5DF6, 0x5E02]
+[insn_hooks]   # QoL hooks (Tools/ps_find_hooks.py; each returns 0 = original code unless enabled)
+addr   = [0x7409, 0x7416, 0x5D20, 0x5DBB, 0x5DEC, 0x5DF7, 0x13C4, 0x171E]
+func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y", "ps_damage", "ps_damage"]
+resume = [0x7416, 0x7420, 0x5D22, 0x5DBF, 0x5DF6, 0x5E02, 0x13C7, 0x1721]

@@ -8,6 +8,8 @@
  *
  *     exp_multiplier     = 1       ; battle EXP reward x N (1..100)
  *     meseta_multiplier  = 1       ; battle Meseta reward x N (1..100)
+ *     damage_dealt       = 1       ; damage the party deals x N (0, 0.25 .. 10)
+ *     damage_received    = 1       ; damage the party takes x N (0 = invincible, 0.25 .. 10)
  *     encounter_percent  = 100     ; random-encounter chance, 100 = original, 50 = half, 0 = none
  *     automap            = 1       ; 0 = no dungeon auto-map window
  *
@@ -46,6 +48,18 @@ extern void     ps_worldmap_frame(void);
 extern bool     ps_worldmap_valid(void);
 extern void     ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
 extern void     ps_worldmap_hud_key(int key);
+extern void     ps_worldmap_hud_draw_place(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int map,
+                                           int px, int py, bool here, const char *title, const char *const *lines, int nlines);
+extern int      ps_worldmap_tileset_of(int map);
+extern int      ps_worldmap_current_map(void);
+extern void     ps_worldmap_current_pos(int *px, int *py);
+extern void     ps_automap_hud_draw_floor(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int floor,
+                                          const char *const *lines, int nlines);
+extern void     ps_automap_note_map(int map, int px, int py);
+extern bool     ps_automap_map_known(int map, int *px, int *py);
+extern int      ps_automap_group(int floor, int *out, int max);
+extern int      ps_automap_groups(int *out, int max);
+extern int      ps_automap_floor(void);
 
 #define RAM_GAME_MODE 0xC202
 #define RAM_EXP       0xC2D0
@@ -67,6 +81,13 @@ static const char *const k_enc_names[]  = { "NONE", "25%", "50%", "75%", "100% (
 static const int         k_enc_vals[]   = { 0, 25, 50, 75, 100, 150, 200 };
 static const char *const k_onoff[]      = { "OFF", "ON" };
 #define N_ENC  7
+/* damage multipliers (percent) */
+static const char *const k_dmg_names[] = { "X0 (NO DAMAGE)", "X0.25", "X0.5", "X0.75", "X1 (ORIGINAL)", "X1.5", "X2", "X3", "X4", "X5", "X10" };
+static const int         k_dmg_vals[]  = { 0, 25, 50, 75, 100, 150, 200, 300, 400, 500, 1000 };
+#define N_DMG  11
+#define DMG_X1 4
+static int s_dealt_i = DMG_X1, s_recv_i = DMG_X1;
+static int nearest_dmg(double v) { int b = 0; for (int i = 1; i < N_DMG; i++) if (abs(k_dmg_vals[i] - (int)(v * 100 + 0.5)) < abs(k_dmg_vals[b] - (int)(v * 100 + 0.5))) b = i; return b; }
 
 static int s_exp_i = 0, s_mes_i = 0, s_enc_i = 4, s_map_i = 0;   /* map side window off: the map is a HUD page */
 static int s_walk_i = 0;                       /* walk speed: 0 = x1 (original), 1 = x2, 2 = x4 */
@@ -105,6 +126,8 @@ static void load_config(void)
         double v = atof(val);
         if (!strcmp(key, "exp_multiplier") && v >= 0) s_exp_i = nearest_mult(v);
         else if (!strcmp(key, "meseta_multiplier") && v >= 0) s_mes_i = nearest_mult(v);
+        else if (!strcmp(key, "damage_dealt") && v >= 0) s_dealt_i = nearest_dmg(v);
+        else if (!strcmp(key, "damage_received") && v >= 0) s_recv_i = nearest_dmg(v);
         else if (!strcmp(key, "automap")) s_map_i = v != 0;
         else if (!strcmp(key, "walk_speed")) s_walk_i = v >= 3 ? 2 : v >= 1.5 ? 1 : 0;
         else if (!strcmp(key, "map_reveal")) s_reveal_i = v != 0;
@@ -113,8 +136,8 @@ static void load_config(void)
         else if (!strcmp(key, "encounter_percent") && v >= 0) s_enc_i = nearest_enc((int)(v + 0.5));
     }
     fclose(f);
-    fprintf(stderr, "[ps_qol] exp x%u  meseta x%u  encounters %d%%  automap %d  walk x%u (from %s)\n",
-            exp_mult(), mes_mult(), enc_pct(), s_map_i, walk_mult(), s_ini_path);
+    fprintf(stderr, "[ps_qol] exp x%u  meseta x%u  damage dealt %d%% received %d%%  encounters %d%%  automap %d  walk x%u (from %s)\n",
+            exp_mult(), mes_mult(), k_dmg_vals[s_dealt_i], k_dmg_vals[s_recv_i], enc_pct(), s_map_i, walk_mult(), s_ini_path);
 }
 
 static void save_config(void)
@@ -124,6 +147,8 @@ static void save_config(void)
     fprintf(f, "; Phantasy Star QoL options (also editable in game: F1 / gamepad Back). Original game = 1.0 / 100.\n");
     fprintf(f, "exp_multiplier     = %-6u ; battle EXP reward multiplier (1..100)\n", exp_mult());
     fprintf(f, "meseta_multiplier  = %-6u ; battle Meseta reward multiplier (1..100)\n", mes_mult());
+    fprintf(f, "damage_dealt       = %-6g ; damage the party deals: 1 = original (0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 10)\n", k_dmg_vals[s_dealt_i] / 100.0);
+    fprintf(f, "damage_received    = %-6g ; damage the party takes: 1 = original, 0 = invincible\n", k_dmg_vals[s_recv_i] / 100.0);
     fprintf(f, "encounter_percent  = %d      ; random encounter chance: 100 = original, 50 = half, 0 = none\n", enc_pct());
     fprintf(f, "automap            = %d      ; extra auto-map side window (the map is always on the HUD's MAP page)\n", s_map_i);
     fprintf(f, "walk_speed         = %-6u ; 1 = original, 2 or 4 = faster walking on maps (vehicles x2 max)\n", walk_mult());
@@ -207,6 +232,38 @@ static int follow(uint8_t a_is_positive, uint8_t off)
 int ps_walk_follow_x(void) { return s_walk_i ? follow(g_z80.a != 0, 2) : 0; }      /* a: 0 = left, 1 = right */
 int ps_walk_follow_y(void) { return s_walk_i ? follow((uint8_t)(g_z80.a - 2) != 0, 4) : 0; }   /* a: 2 = up, 3 = down */
 
+/* ---- battle damage x N ([insn_hooks] "ps_damage", Tools/ps_find_hooks.py) ----
+ * Both places where battle damage is applied, `add a,(ix+1)` with A = 256 - damage and ix = the
+ * target's stats ($C400 + $10 * n: party, $C440 + $10 * n: enemies):
+ *   LABEL_125E (Rev A $1268): party attacks (LABEL_121D) and party attack magic on enemies
+ *   LABEL_15C2 (Rev A $15C2): enemy attacks (LABEL_1579 / LABEL_15B2) and enemy magic (LABEL_1443,
+ *                             LABEL_1505) on the party
+ * The hook does the add with the scaled damage (same flags), and the game continues at the
+ * following `jr c` (0 HP = defeated, exactly as with the original damage). A scaled damage of 0
+ * leaves the HP unchanged (carry set, Z only if the HP already was 0). A non-zero original damage
+ * scaled by > 0 stays at least 1. */
+int ps_damage(void)
+{
+    {   static int log = -1; if (log < 0) log = getenv("PS_DAMAGE_LOG") != NULL;   /* test */
+        if (log) fprintf(stderr, "[dmg] target %04X damage %u hp %u\n", g_z80.ix, (256u - g_z80.a) & 0xFF, sms_read8((uint16_t)(g_z80.ix + 1))); }
+    if (s_dealt_i == DMG_X1 && s_recv_i == DMG_X1) return 0;
+    uint16_t ix = g_z80.ix;
+    bool party = ix >= RAM_STATS && ix < RAM_STATS + 0x40, enemy = ix >= RAM_STATS + 0x40 && ix < RAM_STATS + 0xC0;
+    if ((!party && !enemy) || g_z80.a == 0) return 0;
+    int pct = k_dmg_vals[party ? s_recv_i : s_dealt_i];
+    if (pct == 100) return 0;
+    unsigned d = 256u - g_z80.a;
+    unsigned nd = (d * (unsigned)pct + 50) / 100;
+    if (pct > 0 && nd == 0) nd = 1;
+    if (nd > 255) nd = 255;
+    uint8_t hp = sms_read8((uint16_t)(ix + 1));
+    if (nd == 0) {                                      /* no damage: A = HP, carry set */
+        g_z80.a = z80_add8(&g_z80, hp, 0, 0);
+        z80f_set(&g_z80, Z80_FLAG_C, true);
+    } else g_z80.a = z80_add8(&g_z80, (uint8_t)(256u - nd), hp, 0);
+    return 1;
+}
+
 /* ---- HUD ---- */
 static void on_enc_changed(void) { apply_overworld_rate(); }
 static void on_map_changed(void) { ps_automap_enable(s_map_i != 0); }
@@ -216,9 +273,13 @@ static const char *const k_reveal_names[]  = { "EXPLORED", "WHOLE FLOOR" };
 static const char *const k_secrets_names[] = { "HIDDEN", "SHOWN" };
 
 static const char *const k_walk_names[] = { "X1 (ORIGINAL)", "X2", "X4" };
+static const HudOption k_mult_opts[] = {
+    { "EXP",               k_mult_names, N_MULT, &s_exp_i, NULL },
+    { "MESETA",            k_mult_names, N_MULT, &s_mes_i, NULL },
+    { "DAMAGE DEALT",      k_dmg_names,  N_DMG,  &s_dealt_i, NULL },
+    { "DAMAGE RECEIVED",   k_dmg_names,  N_DMG,  &s_recv_i, NULL },
+};
 static const HudOption k_opts[] = {
-    { "EXP MULTIPLIER",    k_mult_names, N_MULT, &s_exp_i, NULL },
-    { "MESETA MULTIPLIER", k_mult_names, N_MULT, &s_mes_i, NULL },
     { "ENCOUNTERS",        k_enc_names,  N_ENC,  &s_enc_i, on_enc_changed },
     { "MAP SIDE WINDOW",   k_onoff,      2,      &s_map_i, on_map_changed },
     { "WALK SPEED",        k_walk_names, 3,      &s_walk_i, NULL },
@@ -242,22 +303,106 @@ static int hud_info(char lines[][41], int max)
     return n;
 }
 
-/* MAP page: the dungeon map in / after a dungeon, the surroundings map on a planet or in a town
-   (whichever of the two the party was in last) */
+/* ---- MAP page ----
+ * Shows one place at a time: a planet or town visited, or an explored dungeon (= floors linked by
+ * plain stairs). Left/Right: previous / next place (planets, towns, dungeons). Up/Down: planets =
+ * area <-> whole planet, dungeons = floor up / down, towns = nothing. The page opens on the place
+ * the party is in (or was in last). Visited places are kept per save slot (ps_automap.c). */
 static int s_map_ctx;                  /* 0 none yet, 1 dungeon, 2 planet / town */
 int ps_map_context(void) { return s_map_ctx == 2 && !ps_worldmap_valid() ? 0 : s_map_ctx; }
-static void map_page_key(int key) { if (s_map_ctx == 2) ps_worldmap_hud_key(key); }   /* Up/Down: area / planet */
+
+enum { PL_MAP, PL_DUNGEON };
+typedef struct { int kind, id; } Place;        /* id: map number, or the dungeon's lowest floor */
+static Place s_sel = { -1, -1 };
+static int   s_sel_floor = -1;
+
+static int places(Place *out, int max)
+{
+    int n = 0, px, py;
+    for (int pass = 0; pass < 2; pass++)                 /* planets first, then towns */
+        for (int m = 0; m < 32 && n < max; m++) {
+            int ts = ps_worldmap_tileset_of(m);
+            if (ts < 0 || (pass == 0) != (ts < 4) || !ps_automap_map_known(m, &px, &py)) continue;
+            out[n++] = (Place){ PL_MAP, m };
+        }
+    int g[64], ng = ps_automap_groups(g, 64);
+    for (int i = 0; i < ng && n < max; i++) out[n++] = (Place){ PL_DUNGEON, g[i] };
+    return n;
+}
+
+static int dungeon_of(int floor) { int f[64]; return ps_automap_group(floor, f, 64) ? f[0] : -1; }
+
+static void select_current(void)
+{
+    s_sel = (Place){ -1, -1 }; s_sel_floor = -1;
+    if (s_map_ctx == 1 && ps_automap_floor() >= 0) {
+        s_sel_floor = ps_automap_floor();
+        s_sel = (Place){ PL_DUNGEON, dungeon_of(s_sel_floor) };
+    } else if (s_map_ctx == 2 && ps_worldmap_current_map() >= 0) s_sel = (Place){ PL_MAP, ps_worldmap_current_map() };
+}
+
+static void select_place(Place p)
+{
+    s_sel = p; s_sel_floor = -1;
+    if (p.kind != PL_DUNGEON) return;
+    int f[64], n = ps_automap_group(p.id, f, 64), cur = ps_automap_floor();
+    s_sel_floor = n ? f[0] : p.id;
+    for (int i = 0; i < n; i++) if (f[i] == cur) s_sel_floor = cur;   /* the floor the party is / was on */
+}
+
+static void map_page_key(int key)
+{
+    Place pl[96]; int n = places(pl, 96), i = 0;
+    while (i < n && !(pl[i].kind == s_sel.kind && pl[i].id == s_sel.id)) i++;
+    if (key == HUD_KEY_LEFT || key == HUD_KEY_RIGHT) {
+        if (!n) return;
+        i = i >= n ? 0 : (i + (key == HUD_KEY_RIGHT ? 1 : n - 1)) % n;
+        select_place(pl[i]);
+        return;
+    }
+    if (s_sel.kind == PL_MAP) {                          /* planets: area <-> whole planet */
+        if (ps_worldmap_tileset_of(s_sel.id) < 4) ps_worldmap_hud_key(key);
+        return;
+    }
+    if (s_sel.kind == PL_DUNGEON) {                      /* floor up (higher number) / down */
+        int f[64], m = ps_automap_group(s_sel.id, f, 64), k = 0;
+        while (k < m && f[k] != s_sel_floor) k++;
+        if (k >= m) return;
+        k += key == HUD_KEY_UP ? 1 : -1;
+        if (k >= 0 && k < m) s_sel_floor = f[k];
+    }
+}
+
 static void map_page_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
 {
-    if (s_map_ctx == 2 && ps_worldmap_valid()) ps_worldmap_hud_draw(fb, w, h, x0, y0, x1, y1);
-    else ps_automap_hud_draw(fb, w, h, x0, y0, x1, y1);
+    Place pl[96]; int n = places(pl, 96), i = 0;
+    while (i < n && !(pl[i].kind == s_sel.kind && pl[i].id == s_sel.id)) i++;
+    if (i >= n && n) { select_place(pl[0]); i = 0; }
+    char l1[24], l2[24], l3[24];
+    const char *lines[4]; int nl = 0;
+    if (n > 1) { snprintf(l1, sizeof l1, "< MAP %d/%d >", i + 1, n); lines[nl++] = l1; }
+    if (!n || s_sel.kind < 0) { ps_automap_hud_draw_floor(fb, w, h, x0, y0, x1, y1, -1, NULL, 0); return; }
+    if (s_sel.kind == PL_DUNGEON) {
+        int f[64], m = ps_automap_group(s_sel.id, f, 64), k = 0;
+        while (k < m && f[k] != s_sel_floor) k++;
+        if (m > 1) { snprintf(l2, sizeof l2, "FLOOR %d OF %d", k + 1, m); lines[nl++] = l2; }
+        ps_automap_hud_draw_floor(fb, w, h, x0, y0, x1, y1, s_sel_floor, lines, nl);
+        return;
+    }
+    int px = 0, py = 0, ts = ps_worldmap_tileset_of(s_sel.id);
+    ps_automap_map_known(s_sel.id, &px, &py);
+    bool here = s_map_ctx == 2 && ps_worldmap_current_map() == s_sel.id;
+    const char *title = NULL;
+    if (ts >= 4) { snprintf(l3, sizeof l3, "TOWN %d", s_sel.id - 3); title = l3; }
+    ps_worldmap_hud_draw_place(fb, w, h, x0, y0, x1, y1, s_sel.id, px, py, here, title, lines, nl);
 }
 
 static int hud_open_page(void)   /* in a dungeon: the map (test: PS_HUD_PAGE=n forces a page) */
 {
+    select_current();
     const char *e = getenv("PS_HUD_PAGE");
     if (e) return atoi(e);
-    return ps_automap_in_dungeon() ? 1 : 0;
+    return ps_automap_in_dungeon() ? 2 : 0;
 }
 
 void ps_on_post_reset(void)
@@ -268,7 +413,11 @@ void ps_on_post_reset(void)
     ps_automap_init();
     ps_worldmap_init();
     s_map_ctx = 0;
-    if (!pages_added) { hud_add_page("MAP", map_page_draw, map_page_key); pages_added = true; }
+    if (!pages_added) {
+        hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
+        hud_add_page_ex("MAP", map_page_draw, map_page_key, true);
+        pages_added = true;
+    }
     hud_set_open_page(hud_open_page);
     size_t n = 0; uint8_t *rom = glue_rom_image(&n);
     if (rom && n >= OVERWORLD_RATE_TABLE_ROM_OFFSET + OVERWORLD_RATE_TABLE_SIZE
@@ -292,9 +441,24 @@ void ps_on_frame_post(uint64_t frame)
     ps_automap_frame(frame);
     ps_worldmap_frame();
     {   uint8_t mode = sms_read8(0xC202);
-        if (mode == 0x0B) s_map_ctx = 1; else if (mode == 0x09) s_map_ctx = 2; }
+        if (mode == 0x0B) s_map_ctx = 1;
+        else if (mode == 0x09) {
+            s_map_ctx = 2;
+            int map = ps_worldmap_current_map(), px, py;
+            if (map >= 0 && ps_worldmap_valid()) { ps_worldmap_current_pos(&px, &py); ps_automap_note_map(map, px, py); }
+        } }
     ps_panel_frame(frame);
 
+    {   /* test: PS_DAMAGE_LOG=1 prints every HP change of the party (P0..3) and the enemies (E0..7) */
+        static int on = -1; static uint8_t prev[12];
+        if (on < 0) { on = getenv("PS_DAMAGE_LOG") != NULL; for (int i = 0; i < 12; i++) prev[i] = sms_read8((uint16_t)(RAM_STATS + 0x10 * i + 1)); }
+        if (on) for (int i = 0; i < 12; i++) {
+            uint8_t hp = sms_read8((uint16_t)(RAM_STATS + 0x10 * i + 1));
+            if (hp != prev[i]) fprintf(stderr, "[hp] %llu %c%d %u -> %u mode %02X\n", (unsigned long long)frame,
+                                       i < 4 ? 'P' : 'E', i < 4 ? i : i - 4, prev[i], hp, sms_read8(RAM_GAME_MODE));
+            prev[i] = hp;
+        }
+    }
     static uint16_t last_exp;           /* last EXP reward value we produced (0 = none yet) */
     static int      enc_base = -1, enc_written = -1;
 

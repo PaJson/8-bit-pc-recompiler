@@ -36,9 +36,7 @@ addr  = [0x00BE, 0x018F, 0x82E5, 0x8530, 0x1912, 0x1A8A, 0x1A66, 0x1C97, 0x1DFE,
 bank  = [-1,     -1,     12,     12,     -1,     -1,     -1,     -1,     -1,     -1,     -1,     -1,     -1,     -1,     -1,     -1,     -1    ]   # -1 = fixed slot 0/1 (banks 0/1 never change); 12 = sound driver in slot 2
 count = [20,     12,     5,      18,     5,      18,     18,     5,      19,     3,      20,     22,     8,      64,     11,     5,      182   ]
 
-# QoL "walk speed x2" (Common/PhantasyStar/ps_qol.c; returns 0 = original code unless enabled).
-# Rev A addresses; USA / Brazil / AGES En share them (same code layout).
-[insn_hooks]
-addr   = [0x7166,           0x7173,           0x5AA4,          0x5B3F,           0x5B70,             0x5B7B]
-func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y"]
-resume = [0x7173,           0x717D,           0x5AA6,          0x5B43,           0x5B7A,             0x5B86]
+[insn_hooks]   # QoL hooks (Tools/ps_find_hooks.py; each returns 0 = original code unless enabled)
+addr   = [0x7166, 0x7173, 0x5AA4, 0x5B3F, 0x5B70, 0x5B7B, 0x1268, 0x15C2]
+func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y", "ps_damage", "ps_damage"]
+resume = [0x7173, 0x717D, 0x5AA6, 0x5B43, 0x5B7A, 0x5B86, 0x126B, 0x15C5]

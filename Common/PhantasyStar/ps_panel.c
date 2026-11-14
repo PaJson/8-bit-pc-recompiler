@@ -22,6 +22,7 @@ extern const char *ps_worldmap_area_name(void);
 extern bool        ps_automap_draw(uint32_t *fb, int w, int h, int x, int y, int cs);
 extern int         ps_automap_floor(void);
 extern bool        ps_automap_here(void);
+extern const char *ps_automap_floor_name(int floor);
 extern int         ps_map_context(void);       /* ps_qol.c: 0 none, 1 dungeon, 2 planet / town */
 
 #define BG      0xFF0A1024u
@@ -159,8 +160,13 @@ void ps_panel_draw(uint32_t *b, int w, int h)
     }
     int ctx = ps_map_context();
     if (ctx == 1 && ps_automap_floor() >= 0) {
-        snprintf(buf, sizeof buf, "%s %02X", ps_automap_here() ? "FLOOR" : "LAST FLOOR", ps_automap_floor());
-        hud_text_scaled(b, w, h, 16, y + 6, buf, CYAN, 2);
+        /* the floor's name (the first of the places that share this layout), small font if long */
+        const char *nm = ps_automap_floor_name(ps_automap_floor());
+        if (nm) { size_t n = strcspn(nm, "|"); if (n >= sizeof buf) n = sizeof buf - 1; memcpy(buf, nm, n); buf[n] = 0; }
+        else snprintf(buf, sizeof buf, "FLOOR %02X", ps_automap_floor());
+        if (!ps_automap_here()) { char t[sizeof buf]; snprintf(t, sizeof t, "LAST: %s", buf); memcpy(buf, t, sizeof buf); }
+        if ((int)strlen(buf) * 12 <= w - 24) hud_text_scaled(b, w, h, 16, y + 6, buf, CYAN, 2);
+        else hud_text(b, w, h, 16, y + 10, buf, CYAN);
         ps_automap_draw(b, w, h, mx0 + (mx1 - mx0 - 16 * cs) / 2, my0 + (my1 - my0 - 16 * cs) / 2, cs);
     } else if (ctx == 2) {
         hud_text_scaled(b, w, h, 16, y + 6, ps_worldmap_area_name(), CYAN, 2);
@@ -182,7 +188,17 @@ void ps_panel_frame(uint64_t frame)
         /* test: PS_HUD_OPEN=<n> opens the HUD at frame n (window tests: SMS_WINDOW_SHOT + _EXIT) */
         static long hop = -2;
         if (hop == -2) { const char *t = getenv("PS_HUD_OPEN"); hop = t ? atol(t) : -1; }
-        if (hop >= 0 && frame == (uint64_t)hop && !hud_is_open()) hud_key(HUD_KEY_TOGGLE);
+        if (hop >= 0 && frame == (uint64_t)hop && !hud_is_open()) {
+            hud_key(HUD_KEY_TOGGLE);
+            /* PS_HUD_KEYS: keys sent right after opening: U D L R = directions, [ ] = page prev / next */
+            const char *k = getenv("PS_HUD_KEYS");
+            for (; k && *k; k++)
+                switch (*k) {
+                case 'U': hud_key(HUD_KEY_UP); break;     case 'D': hud_key(HUD_KEY_DOWN); break;
+                case 'L': hud_key(HUD_KEY_LEFT); break;   case 'R': hud_key(HUD_KEY_RIGHT); break;
+                case '[': hud_key(HUD_KEY_PAGE_PREV); break; case ']': hud_key(HUD_KEY_PAGE_NEXT); break;
+                }
+        }
     }
     static int armed = -1; static uint64_t at; static const char *path;
     if (armed < 0) {

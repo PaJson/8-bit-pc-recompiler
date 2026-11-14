@@ -58,7 +58,12 @@ enum { SEEN = 1, VISITED = 2, AVAIL = 4 };   /* AVAIL: a hidden-at-start chest w
 
 /* key = floor number (Dungeon_index); `index` kept for the file format */
 typedef struct { uint32_t key; uint8_t index; uint8_t cells[256]; uint8_t flags[256]; } DungeonMemory;
-typedef struct { DungeonMemory d[MAX_DUNGEONS]; int n; } MapMemory;
+#define N_MAPS 32                       /* map numbers ($C309): 0..3 planets, 4..25 towns */
+typedef struct {
+    DungeonMemory d[MAX_DUNGEONS]; int n;
+    uint8_t map_seen[N_MAPS];            /* planets / towns visited (HUD MAP page list) */
+    int16_t map_px[N_MAPS], map_py[N_MAPS];   /* the party's last position there (world pixels) */
+} MapMemory;
 
 static MapMemory      g_work;           /* the game being played */
 static MapMemory      g_slot[N_SLOTS];  /* per save slot (persisted) */
@@ -277,39 +282,150 @@ static int draw_map(FillFn f, int mx, int my, int cs)
 static uint32_t *g_hfb; static int g_hw, g_hh;
 static void hud_fill_rgb(int x0, int y0, int x1, int y1, uint32_t rgb) { hud_fill(g_hfb, g_hw, g_hh, x0, y0, x1, y1, 0xFF000000u | rgb, false); }
 
-void ps_automap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
+/* Floor names (ps1.constants.asm DungeonID_*). One layout is used by several places in the game
+   ('|' separates them; e.g. Medusa Tower 5F-7F are Baya Malay Tower B3F-B1F). */
+static const char *const k_floor_name[] = {
+    "MEDUSA CAVE|GOTHIC TUNNEL|BAYA MALAY PASS", "TRIADA PRISON", "CAMINEET WAREHOUSE|ABION WAREHOUSE",
+    "MEDUSA TOWER B1F", "MEDUSA TOWER 1F", "MEDUSA TOWER 2F", "MEDUSA TOWER 3F", "MEDUSA TOWER 4F",
+    "MEDUSA TOWER 5F|BAYA MALAY TOWER B3F", "MEDUSA TOWER 6F|BAYA MALAY TOWER B2F", "MEDUSA TOWER 7F|BAYA MALAY TOWER B1F",
+    "BAYA MALAY TOWER 1F", "BAYA MALAY TOWER 2F", "BAYA MALAY TOWER 3F", "BAYA MALAY TOWER 4F", "BAYA MALAY TOWER 5F",
+    "IALA CAVE B3F|NAULA CAVE B3F", "IALA CAVE B2F|NAULA CAVE B2F", "IALA CAVE B1F|NAULA CAVE B1F", "IALA CAVE 1F|NAULA CAVE 1F",
+    "BAYA MALAY PRISON", "DRASGOW WAREHOUSE|DR. MAD'S LAB", "BORTEVO PASS",
+    "ISLAND TOWER 1F", "ISLAND TOWER 2F", "ISLAND TOWER 3F", "ISLAND TOWER 4F", "ISLAND TOWER 5F",
+    "MAHARU CAVE B2F", "MAHARU CAVE B1F", "MAHARU CAVE 1F",
+    "GOVERNOR'S PALACE B3F", "GOVERNOR'S PALACE B2F", "GOVERNOR'S PALACE B1F|PATH TO THE GOVERNOR",
+    "TARZIMAL CAVE B2F", "TARZIMAL CAVE B1F", "TARZIMAL CAVE 1F", "CASBA CAVE B2F", "CASBA CAVE B1F", "CASBA CAVE 1F",
+    "SKURE TUNNEL|TWINTOWN TUNNEL", "FORT GUARON B1F", "FORT GUARON 1F",
+    "CORONA TOWER 1F", "CORONA TOWER 2F", "CORONA TOWER 3F", "CORONA TOWER 4F",
+    "DEZORIS PATH 1|DEZORIS PATH 5 B1F|LACONIAN SHIELD CAVE B5F", "DEZORIS PATH 2|DEZORIS PATH 5 1F|LACONIAN SHIELD CAVE B4F",
+    "DEZORIS PATH 4|LACONIAN SHIELD CAVE B3F", "DEZORIS PATH 3|LACONIAN SHIELD CAVE B2F",
+    "LACONIAN SHIELD CAVE B1F", "LACONIAN SHIELD CAVE 1F",
+    "AIR CASTLE B4F", "AIR CASTLE B3F", "AIR CASTLE B2F", "AIR CASTLE B1F", "AIR CASTLE 1F", "AEROPRISM CAVE",
+};
+const char *ps_automap_floor_name(int floor)
+{
+    return floor >= 0 && floor < (int)(sizeof k_floor_name / sizeof k_floor_name[0]) ? k_floor_name[floor] : NULL;
+}
+
+/* word-wrap s[0..len) into lines of <= maxc chars at (x, y); returns the number of lines drawn */
+static int text_wrap(uint32_t *fb, int w, int h, int x, int y, const char *s, size_t len, int maxc, uint32_t c, int maxl)
+{
+    int nl = 0;
+    if (maxc < 4) maxc = 4;
+    while (len && nl < maxl) {
+        size_t n = len <= (size_t)maxc ? len : (size_t)maxc;
+        if (n < len) { size_t k = n; while (k > 0 && s[k] != ' ') k--; if (k > 0) n = k; }
+        char buf[48]; size_t m = n < sizeof buf - 1 ? n : sizeof buf - 1; memcpy(buf, s, m); buf[m] = 0;
+        hud_text(fb, w, h, x, y + nl * 9, buf, c); nl++;
+        s += n; len -= n; while (len && *s == ' ') { s++; len--; }
+    }
+    return nl;
+}
+
+/* HUD MAP page: floor `floor` (-1 = the current / last one) with its name(s), position (when the
+   party is on it), explored %, the caller's `lines` (nav hints) and the legend while it fits */
+void ps_automap_hud_draw_floor(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1, int floor,
+                               const char *const *lines, int nlines)
 {
     const uint32_t WHITE = 0xFFFFFFFF, GREY = 0xFFA0A0B0, CYAN = 0xFF60D0FF;
-    if (!g_cur) {
+    DungeonMemory *d = g_cur;
+    if (floor >= 0) { d = NULL; for (int i = 0; i < g_work.n; i++) if (g_work.d[i].key == (uint32_t)floor) d = &g_work.d[i]; }
+    if (!d) {
         hud_text(fb, w, h, x0 + 8, y0 + 4, "NO DUNGEON EXPLORED YET", GREY);
         hud_text(fb, w, h, x0 + 8, y0 + 18, "THE MAP FILLS IN AS YOU WALK", GREY);
         hud_text(fb, w, h, x0 + 8, y0 + 28, "THROUGH A DUNGEON.", GREY);
+        for (int i = 0; i < nlines; i++) hud_text(fb, w, h, x0 + 8, y0 + 46 + 9 * i, lines[i], GREY);
         return;
     }
+    DungeonMemory *cur = g_cur; bool in = g_in_dungeon;
+    bool here = g_in_dungeon && d == g_cur;
+    g_cur = d; g_in_dungeon = here;
     g_hfb = fb; g_hw = w; g_hh = h;
     int avail = (y1 - y0) < (x1 - x0) ? (y1 - y0) : (x1 - x0);
-    int cs = avail / 16; if (cs > 9) cs = 9; if (cs < 3) cs = 3;
+    int cs = avail / 16; if (cs > 8) cs = 8; if (cs < 3) cs = 3;
     int mx = x0 + 2, my = y0 + 1;
     int seen = draw_map(hud_fill_rgb, mx, my, cs);
+    g_cur = cur; g_in_dungeon = in;
     /* info + legend to the right of the map */
-    int tx = mx + 16 * cs + 8, ty = my;
+    int tx = mx + 16 * cs + 7, ty = my, maxc = (x1 - tx) / 6;
     char buf[48];
-    snprintf(buf, sizeof buf, "%s %02X", g_in_dungeon ? "FLOOR" : "LAST FLOOR", g_cur->index);
-    hud_text(fb, w, h, tx, ty, buf, CYAN); ty += 9;
-    if (g_in_dungeon) {
-        snprintf(buf, sizeof buf, "X%d Y%d %s", g_cur_px, g_cur_py, k_face[g_cur_dir]); hud_text(fb, w, h, tx, ty, buf, WHITE); ty += 9;
-    }
-    snprintf(buf, sizeof buf, "EXPLORED %d%%", seen * 100 / 256); hud_text(fb, w, h, tx, ty, buf, GREY); ty += 12;
+    const char *nm = ps_automap_floor_name(d->index);
+    if (nm) {
+        for (const char *p = nm; *p && ty + 8 <= y1; ) {
+            const char *e = strchr(p, '|'); size_t len = e ? (size_t)(e - p) : strlen(p);
+            ty += 9 * text_wrap(fb, w, h, tx, ty, p, len, maxc, CYAN, 2);
+            p += len; if (*p == '|') p++;
+        }
+    } else { snprintf(buf, sizeof buf, "FLOOR %02X", d->index); hud_text(fb, w, h, tx, ty, buf, CYAN); ty += 9; }
+    ty += 3;
+    if (here) { snprintf(buf, sizeof buf, "X%d Y%d %s", g_cur_px, g_cur_py, k_face[g_cur_dir]); hud_text(fb, w, h, tx, ty, buf, WHITE); ty += 9; }
+    else if (d == g_cur) { hud_text(fb, w, h, tx, ty, "LAST FLOOR", GREY); ty += 9; }
+    snprintf(buf, sizeof buf, "EXPLORED %d%%", seen * 100 / 256); hud_text(fb, w, h, tx, ty, buf, GREY); ty += 9;
+    for (int i = 0; i < nlines; i++, ty += 9) hud_text(fb, w, h, tx, ty, lines[i], WHITE);
+    ty += 4;
     static const struct { int k; const char *t; } leg[] = {
         { K_UP, "STAIRS UP" }, { K_DOWN, "STAIRS DOWN" }, { K_DOOR, "DOOR" }, { K_LOCKED, "LOCKED DOOR" },
         { K_MAGIC, "MAGIC DOOR" }, { K_SECRET, "SECRET WALL" }, { K_PIT, "PIT" }, { K_CHEST, "CHEST" },
         { K_EVENT, "EVENT/BATTLE" }, { K_UP, "EXIT/WARP" } };
-    int ls = cs < 9 ? cs : 9;                            /* legend glyphs = the map's cell size */
+    int ls = cs < 8 ? cs : 8;                            /* legend glyphs = the map's cell size */
     for (unsigned i = 0; i < sizeof leg / sizeof leg[0] && ty + 8 <= y1; i++, ty += 9) {
         draw_glyph(hud_fill_rgb, leg[i].k, true, tx, ty, ls);
         if (i == sizeof leg / sizeof leg[0] - 1) hud_fill_rgb(tx, ty, tx + 2, ty + 2, C_EXIT);
         hud_text(fb, w, h, tx + 12, ty, leg[i].t, GREY);
     }
+}
+
+void ps_automap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
+{
+    ps_automap_hud_draw_floor(fb, w, h, x0, y0, x1, y1, -1, NULL, 0);
+}
+
+/* ---- HUD MAP page navigation: visited maps and explored floors (kept per save slot) ---- */
+void ps_automap_note_map(int map, int px, int py)
+{
+    if (map < 0 || map >= N_MAPS) return;
+    g_work.map_seen[map] = 1; g_work.map_px[map] = (int16_t)px; g_work.map_py[map] = (int16_t)py;
+}
+bool ps_automap_map_known(int map, int *px, int *py)
+{
+    if (map < 0 || map >= N_MAPS || !g_work.map_seen[map]) return false;
+    *px = g_work.map_px[map]; *py = g_work.map_py[map];
+    return true;
+}
+static const DungeonMemory *explored(int floor)
+{
+    for (int i = 0; i < g_work.n; i++) if (g_work.d[i].key == (uint32_t)floor) return &g_work.d[i];
+    return NULL;
+}
+static bool has_cell(const DungeonMemory *d, uint8_t v)
+{
+    for (int c = 0; c < 256; c++) if ((d->cells[c] & 0x0F) == v) return true;
+    return false;
+}
+/* Explored floors linked by plain stairs (cell 2 = up to floor+1, 3 = down to floor-1; stairs with
+   the event bit lead elsewhere) form one dungeon. */
+static bool linked(int f)
+{
+    const DungeonMemory *a = explored(f), *b = explored(f + 1);
+    return a && b && (has_cell(a, 2) || has_cell(b, 3));
+}
+/* the floors of the dungeon containing `floor`, ascending; 0 if that floor is not explored */
+int ps_automap_group(int floor, int *out, int max)
+{
+    if (!explored(floor)) return 0;
+    int lo = floor, hi = floor;
+    while (lo > 0 && linked(lo - 1)) lo--;
+    while (hi < 255 && linked(hi)) hi++;
+    int n = 0;
+    for (int f = lo; f <= hi && n < max; f++) out[n++] = f;
+    return n;
+}
+/* the lowest floor of every dungeon explored, ascending */
+int ps_automap_groups(int *out, int max)
+{
+    int n = 0;
+    for (int f = 0; f < 256 && n < max; f++) if (explored(f) && !(f > 0 && linked(f - 1))) out[n++] = f;
+    return n;
 }
 
 /* Draw the current / last dungeon floor into any ARGB buffer (side panel): 16 x 16 cells of cs px
@@ -370,7 +486,7 @@ static void save_file(void)
     if (!g_path[0]) return;
     FILE *f = fopen(g_path, "wb");
     if (!f) { fprintf(stderr, "[automap] cannot write %s\n", g_path); return; }
-    fwrite("PSAM\2", 1, 5, f);                           /* v2: key = floor number */
+    fwrite("PSAM\3", 1, 5, f);                           /* v2: key = floor number; v3: + visited maps */
     for (int s = 1; s < N_SLOTS; s++) {
         uint8_t c[2] = { (uint8_t)g_slot[s].n, (uint8_t)(g_slot[s].n >> 8) };
         fwrite(c, 1, 2, f);
@@ -378,6 +494,12 @@ static void save_file(void)
             const DungeonMemory *d = &g_slot[s].d[i];
             uint8_t k[5] = { (uint8_t)d->key, (uint8_t)(d->key >> 8), (uint8_t)(d->key >> 16), (uint8_t)(d->key >> 24), d->index };
             fwrite(k, 1, 5, f); fwrite(d->cells, 1, 256, f); fwrite(d->flags, 1, 256, f);
+        }
+        fwrite(g_slot[s].map_seen, 1, N_MAPS, f);
+        for (int m = 0; m < N_MAPS; m++) {
+            uint8_t q[4] = { (uint8_t)g_slot[s].map_px[m], (uint8_t)(g_slot[s].map_px[m] >> 8),
+                             (uint8_t)g_slot[s].map_py[m], (uint8_t)(g_slot[s].map_py[m] >> 8) };
+            fwrite(q, 1, 4, f);
         }
     }
     fclose(f);
@@ -390,7 +512,7 @@ static void load_file(void)
     FILE *f = fopen(g_path, "rb");
     if (!f) return;
     uint8_t hdr[5];
-    if (fread(hdr, 1, 5, f) != 5 || memcmp(hdr, "PSAM", 4) || (hdr[4] != 1 && hdr[4] != 2)) { fclose(f); return; }
+    if (fread(hdr, 1, 5, f) != 5 || memcmp(hdr, "PSAM", 4) || hdr[4] < 1 || hdr[4] > 3) { fclose(f); return; }
     for (int s = 1; s < N_SLOTS; s++) {
         uint8_t c[2]; if (fread(c, 1, 2, f) != 2) break;
         int n = c[0] | (c[1] << 8); if (n > MAX_DUNGEONS) n = MAX_DUNGEONS;
@@ -401,6 +523,13 @@ static void load_file(void)
             d->key = (hdr[4] == 1) ? d->index : (k[0] | (k[1] << 8) | (k[2] << 16) | ((uint32_t)k[3] << 24));   /* v1 keyed by wall hash */
         }
         g_slot[s].n = n;
+        if (hdr[4] >= 3) {
+            if (fread(g_slot[s].map_seen, 1, N_MAPS, f) != N_MAPS) break;
+            for (int m = 0; m < N_MAPS; m++) {
+                uint8_t q[4]; if (fread(q, 1, 4, f) != 4) break;
+                g_slot[s].map_px[m] = (int16_t)(q[0] | (q[1] << 8)); g_slot[s].map_py[m] = (int16_t)(q[2] | (q[3] << 8));
+            }
+        }
     }
     fclose(f);
 }
