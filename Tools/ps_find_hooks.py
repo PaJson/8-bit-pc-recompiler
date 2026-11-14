@@ -61,6 +61,27 @@ GROUPS = [
     ("fly", [
         ("ps_fly_go", "3a .. .. e6 30 c8 3a 65 c2 b7 c0 af 32 9d c2 21 02 c2 36 0c", 0, 5),
     ]),
+    # Battle auto attack (ps_qol.c ps_battle_*). LABEL_100F (battle) starts `ld a,($C2E6) ; cp $48 ;
+    #   ld c,$92 ; jr z ; cp $49` -> ps_battle_begin (observe only). Per character (LABEL_108A):
+    #   ld de,$0C ; add hl,de ; ld a,(hl) ; or a ; jr nz,LABEL_1080 ; call LABEL_3105 ; call LABEL_30D5 ;
+    #   call LABEL_2EAC ; ld hl,$7882 ; ld (Cursor_pos),hl ; ld a,4 ; ld (Option_total_num),a ;
+    #   call CheckOptionSelect ; bit 4,c ; jp nz,LABEL_1121 ; ld hl,BattleMenu_OptionTbl ;
+    #   call GetPtrAndJump ($00E6; Japanese ROMs $0112) ; call LABEL_2ECD ; LABEL_10B7: ld a,($C267) ; cp 4
+    #   -> ps_battle_cmd at the first window call, resume = LABEL_10B7 (no menu drawn at all).
+    # CheckOptionSelect's button read (LABEL_2D8B: ld a,(Ctrl_1_pressed) ; and $30 ; jp z,loop ;
+    #   ld c,a ; xor a ; ld ($C26D),a) -> ps_battle_select (observe; answers an open battle menu).
+    ("battle", [
+        ("ps_battle_begin", "3a e6 c2 fe 48 0e 92 28 .. fe 49", 0, 3),
+        ("ps_battle_cmd", "11 0c 00 19 7e b7 20 .. cd .. .. cd .. .. cd .. .. 21 82 78 22 69 c2 3e 04 32 6e c2 cd .. .. cb 61 c2 .. .. 21 .. .. cd .. .. cd .. .. 3a 67 c2 fe 04", 8, 37),
+        ("ps_battle_select", "3a 05 c2 e6 30 ca .. .. 4f af 32 6d c2", 0, 3),
+    ]),
+    # The 2.5 retranslation reads the buttons through its own `call $3F09 ; nop ; nop ; jp z,loop`
+    # (mask by game mode): same hook on that call (it only reads Ctrl_1_pressed).
+    ("battle (2.5)", [
+        ("ps_battle_begin", "3a e6 c2 fe 48 0e 92 28 .. fe 49", 0, 3),
+        ("ps_battle_cmd", "11 0c 00 19 7e b7 20 .. cd .. .. cd .. .. cd .. .. 21 82 78 22 69 c2 3e 04 32 6e c2 cd .. .. cb 61 c2 .. .. 21 .. .. cd .. .. cd .. .. 3a 67 c2 fe 04", 8, 37),
+        ("ps_battle_select", "cd .. .. 00 00 ca .. .. 4f af 32 6d c2", 0, 3),
+    ]),
 ]
 
 def find(rom, pat):

@@ -411,6 +411,69 @@ static bool has_item(uint8_t id)
     for (int i = 0; i < n; i++) if (sms_read8((uint16_t)(RAM_INV + i)) == id) return true;
     return false;
 }
+
+/* ---- battle auto attack: RB / key V = on, LB / key C = off (only during a battle) ----
+ * LABEL_100F runs a battle; each round it walks the party (LABEL_1074, $C267 = character) and for
+ * every living member without a command opens the command menu (LABEL_108A: draws the enemy-name,
+ * command and character windows, CheckOptionSelect at cursor $7882, BattleMenu_OptionTbl).
+ * BattleMenu_Attack takes no target: LABEL_1BB9 stores {c=1, b=0, a=0} at $C2AC + 4*$C267, then
+ * $C267++. With auto attack on, the ps_battle_cmd hook (at the first window call) does exactly that
+ * and resumes at LABEL_10B7 (next character): no menu is drawn. If a battle command menu is already
+ * open when RB is pressed, ps_battle_select (CheckOptionSelect's button read) answers it with ATTACK:
+ * cursor $C26B = 0 and Ctrl_1_pressed = button 2; that menu is recognised by the return address of
+ * its `call CheckOptionSelect` on the stack (the map's player menu uses the same cursor / count).
+ * "In battle" = from LABEL_100F (ps_battle_begin) to the next walking step (ps_items_walk_mark):
+ * there LB / RB switch auto attack instead of the vehicles. Auto attack is off at every battle start.
+ * Test env PS_VEH_PRESS (1 = LB, 2 = RB), PS_BATTLE_LOG=1. */
+static bool s_in_battle, s_auto;
+static uint16_t s_cmd_ret;                     /* return address of the battle menu's CheckOptionSelect */
+static void battle_init(void)
+{
+    long m = find_rom("11 0c 00 19 7e b7 20 .. cd .. .. cd .. .. cd .. .. 21 82 78 22 69 c2 3e 04 32 6e c2 cd .. .. cb 61 c2 .. .. 21 .. .. cd .. .. cd .. .. 3a 67 c2 fe 04");
+    s_cmd_ret = m > 0 ? (uint16_t)(m + 31) : 0;
+    s_in_battle = s_auto = false;
+}
+static int battle_log(void) { static int on = -1; if (on < 0) on = getenv("PS_BATTLE_LOG") != NULL; return on; }
+int ps_battle_begin(void)
+{
+    s_in_battle = true; s_auto = false;
+    if (battle_log()) fprintf(stderr, "[battle] begin\n");
+    return 0;
+}
+void ps_battle_walking(void)                   /* ps_items_walk_mark: walking again = no battle */
+{
+    if (s_in_battle && battle_log()) fprintf(stderr, "[battle] end (walking)\n");
+    s_in_battle = s_auto = false;
+}
+int ps_battle_cmd(void)
+{
+    if (!s_auto) return 0;
+    uint8_t ch = sms_read8(0xC267);
+    uint16_t p = (uint16_t)(0xC2AC + 4 * ch);
+    sms_write8(p, 1); sms_write8((uint16_t)(p + 1), 0); sms_write8((uint16_t)(p + 2), 0);   /* LABEL_1BB9: attack */
+    sms_write8(0xC267, (uint8_t)(ch + 1));
+    if (battle_log()) fprintf(stderr, "[battle] auto attack: character %u\n", ch);
+    return 1;                                  /* -> LABEL_10B7 */
+}
+int ps_battle_select(void)
+{
+    if (s_auto && s_cmd_ret && sms_read16(g_z80.sp) == s_cmd_ret) {
+        sms_write8(0xC26B, 0);                 /* ATTACK */
+        sms_write8(0xC205, 0x20);              /* Ctrl_1_pressed = button 2 (confirm) */
+        if (battle_log()) fprintf(stderr, "[battle] auto attack: open menu answered\n");
+    }
+    return 0;
+}
+static void battle_overlay(uint32_t *fb, int w, int h)
+{
+    if (!(s_in_battle && s_auto)) return;
+    const char *t = "AUTO ATTACK: ON";
+    int tw = 6 * (int)strlen(t);
+    hud_fill(fb, w, h, 4, 4, 4 + tw + 7, 4 + 13, 0xFF101830u, true);
+    hud_fill(fb, w, h, 4, 4, 4 + tw + 7, 5, 0xFF60D0FFu, false);
+    hud_fill(fb, w, h, 4, 4 + 12, 4 + tw + 7, 4 + 13, 0xFF60D0FFu, false);
+    hud_text(fb, w, h, 8, 7, t, 0xFFFFE040u);
+}
 static void vehicle_frame(uint64_t frame)
 {
     static uint8_t last;
@@ -423,6 +486,13 @@ static void vehicle_frame(uint64_t frame)
             p = strchr(p, ','); if (p) p++;
         } }
     uint8_t rise = (uint8_t)(m & ~last); last = m;
+    if (s_in_battle) {                         /* battle: LB / RB = auto attack off / on */
+        if (rise & HUD_EXTRA_2) s_auto = true;
+        if (rise & HUD_EXTRA_1) s_auto = false;
+        if ((rise & 3) && battle_log()) fprintf(stderr, "[battle] auto attack %s\n", s_auto ? "on" : "off");
+        s_veh_pending = 0;
+        return;
+    }
     if (rise & HUD_EXTRA_1) { s_veh_pending = 1; s_veh_age = 0; }
     else if (rise & HUD_EXTRA_2) { s_veh_pending = 2; s_veh_age = 0; }
     else if (s_veh_pending && ++s_veh_age > 30) s_veh_pending = 0;   /* not walking on a map: drop it */
@@ -494,17 +564,16 @@ static void buttons_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int
         { "SLOW X0.5",   "LT (HOLD)",   "-" },
         { "ROVER/DIGR",  "LB",          "C" },
         { "HOVERCRAFT",  "RB",          "V" },
+        { "AUTO ATTACK", "RB, LB OFF",  "V, C OFF" },   /* in battle */
         { "FULLSCREEN",  "-",           "F11, ALT+ENTER" },
         { "QUIT",        "-",           "ESC" },
-        { "",            NULL,          NULL },          /* heading: in the HUD */
-        { "TABS",        "LB, RB",      "Q, E" },
-        { "CONFIRM",     "B",           "ENTER/SPACE/X" },
-        { "CLOSE",       st ? "A, START" : "A, BACK", "ESC, Z, F1" },
+        { "HUD TABS",    "LB, RB",      "Q, E" },
+        { "HUD CONFIRM", "B",           "ENTER/SPACE/X" },
+        { "HUD CLOSE",   st ? "A, START" : "A, BACK", "ESC, Z, F1" },
     };
     int n = (int)(sizeof rows / sizeof rows[0]), y = y0, cp = x0 + 4 + 6 * 12, ck = cp + 6 * 12;   /* 11 + 11 + 14 chars */
     for (int i = 0; i < n && y + 7 <= y1; i++, y += 8) {
         if (!rows[i][0]) { hud_text(fb, w, h, cp, y, rows[i][1], CYAN); hud_text(fb, w, h, ck, y, rows[i][2], CYAN); continue; }
-        if (!rows[i][1]) { hud_text(fb, w, h, x0 + 4, y, "IN THE HUD", CYAN); continue; }
         hud_text(fb, w, h, x0 + 4, y, rows[i][0], i == 6 || i == 7 ? YEL : WHITE);
         hud_text(fb, w, h, cp, y, rows[i][1], strcmp(rows[i][1], "-") ? WHITE : GREY);
         hud_text(fb, w, h, ck, y, rows[i][2], strcmp(rows[i][2], "-") ? WHITE : GREY);
@@ -677,6 +746,7 @@ void ps_on_post_reset(void)
     ps_worldmap_init();
     hover_init();
     vehicle_init();
+    battle_init();
     ps_items_init();
     ps_fly_init();
     s_map_ctx = 0;
@@ -708,6 +778,7 @@ void ps_on_post_reset(void)
     hud_set_panel(ps_panel_draw);
     hud_set_panel_enabled(s_panel_i != 0);
     hud_set_on_panel_toggle(on_panel_toggled);
+    hud_set_overlay(battle_overlay);
 }
 
 void ps_on_frame_post(uint64_t frame)

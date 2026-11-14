@@ -126,7 +126,8 @@ static bool same_items(const uint8_t *a, const uint8_t *b, int n)
 }
 
 static unsigned s_nmark, s_nwait, s_nsafe;   /* counters (PS_ITEMS_LOG) */
-int ps_items_walk_mark(void) { s_mark = 1; s_nmark++; return 0; }
+extern void ps_battle_walking(void);           /* ps_qol.c: walking again = the battle is over */
+int ps_items_walk_mark(void) { s_mark = 1; s_nmark++; ps_battle_walking(); return 0; }
 int ps_items_vwait(void)
 {
     s_safe = s_mark; s_mark = 0; s_nwait++; s_nsafe += s_safe;
