@@ -17,7 +17,7 @@
 #include "hud.h"
 
 extern uint8_t     sms_read8(uint16_t addr);
-extern bool        ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh);
+extern bool        ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space);
 extern const char *ps_worldmap_area_name(void);
 extern bool        ps_automap_draw(uint32_t *fb, int w, int h, int x, int y, int cs);
 extern int         ps_automap_floor(void);
@@ -106,7 +106,7 @@ void ps_panel_draw(uint32_t *b, int w, int h)
     } else if (ctx == 2) {
         hud_text_scaled(b, w, h, 16, y + 6, ps_worldmap_area_name(), CYAN, 2);
         hud_fill(b, w, h, mx0, my0, mx1, my1, 0xFF000000u, false);
-        ps_worldmap_draw(b, w, h, mx0, my0, mx1 - mx0, my1 - my0);
+        ps_worldmap_draw(b, w, h, mx0, my0, mx1 - mx0, my1 - my0, HUD_SPACE_PANEL);
     } else {
         hud_text_scaled(b, w, h, 16, y + 6, "MAP", CYAN, 2);
         hud_text(b, w, h, 16, my0 + 4, "NO MAP YET", GREY);
@@ -120,6 +120,10 @@ void ps_panel_frame(uint64_t frame)
         static long tog = -2;
         if (tog == -2) { const char *t = getenv("PS_PANEL_TOGGLE"); tog = t ? atol(t) : -1; }
         if (tog >= 0 && frame == (uint64_t)tog) hud_set_panel_enabled(!hud_panel_active());
+        /* test: PS_HUD_OPEN=<n> opens the HUD at frame n (window tests: SMS_WINDOW_SHOT + _EXIT) */
+        static long hop = -2;
+        if (hop == -2) { const char *t = getenv("PS_HUD_OPEN"); hop = t ? atol(t) : -1; }
+        if (hop >= 0 && frame == (uint64_t)hop && !hud_is_open()) hud_key(HUD_KEY_TOGGLE);
     }
     static int armed = -1; static uint64_t at; static const char *path;
     if (armed < 0) {

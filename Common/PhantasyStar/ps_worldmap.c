@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include "hud.h"
 #include "video/sms_vdp.h"
 
@@ -54,12 +55,16 @@ static struct {
     uint8_t spr_pal[16];                        /* CRAM 16..31 while on the map (BG tiles may use it) */
 } g_area;
 
-bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh);
+bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space);
 
 static uint32_t g_img[AREA_W * AREA_H];         /* rendered 3x3 screens */
-static int      g_img_key = -1;
-static int      g_planet_ts = -1;              /* tileset of the cached whole-planet image */
-static unsigned  g_gen;                        /* bumped whenever g_img / g_planet is re-rendered */
+static int      g_img_key = -1;                 /* screens + size in g_img (towns) */
+static uint32_t g_img_pal, g_img_gen;           /* sprite-palette hash it was drawn with, change count */
+static bool     g_img_spr, g_world_spr;         /* those images contain tiles that use the sprite palette */
+static bool     g_used_spr;                     /* set by draw_screen */
+static uint32_t g_world_key = 0xFFFFFFFFu;      /* tileset + palette hash of g_world (planets) */
+static uint32_t g_world_gen;
+static uint32_t g_pal_hash;                     /* hash of the sprite palette (CRAM 16..31) on the map */
 static int      g_view;                        /* HUD page: 0 area, 1 whole planet (test: PS_MAP_VIEW=1) */
 
 static long bank_off(int bank, unsigned addr) { return (long)bank * 0x4000 + (long)(addr - 0x8000); }
@@ -92,7 +97,7 @@ static void decode_tiles(int which)
 void ps_worldmap_init(void)
 {
     g_rom = glue_rom_image(&g_rom_n);
-    g_area.valid = false; g_img_key = -1; g_planet_ts = -1;
+    g_area.valid = false; g_img_key = -1; g_world_key = 0xFFFFFFFFu;
     { const char *v = getenv("PS_MAP_VIEW"); g_view = v ? atoi(v) & 1 : 0; }
     g_tiles_ok[0] = g_tiles_ok[1] = false; g_tiles_from_vram = false;
     if (!g_rom || g_rom_n < 0x10000) return;
@@ -138,7 +143,7 @@ void ps_worldmap_frame(void)
     if (g_tiles_from_vram && in_map == 30) {
         int which = sms_read8(0xC308) < 4 ? 0 : 1;
         memcpy(g_tiles[which], g_vdp.vram, sizeof g_tiles[which]);
-        g_tiles_ok[which] = true; g_img_key = -1; g_planet_ts = -1;
+        g_tiles_ok[which] = true; g_img_key = -1; g_world_key = 0xFFFFFFFFu;
     }
     int cam_x = sms_read8(0xC302) * SCR_W + sms_read8(0xC301);
     int cam_y = sms_read8(0xC306) * SCR_H + sms_read8(0xC305);
@@ -151,12 +156,23 @@ void ps_worldmap_frame(void)
     g_area.map = sms_read8(0xC309);
     g_area.px = cam_x + sx + 8;                          /* centre of that cell */
     g_area.py = cam_y + sy + 8;
-    memcpy(g_area.spr_pal, g_vdp.cram + 16, 16);
+    /* sprite palette (BG tiles may use it): the map fades in by stepping CRAM every 4 frames (until
+       ~76 frames after LoadMap), so take it only once it has been unchanged for 16 frames */
+    {
+        static uint8_t cand[16]; static int stable;
+        if (memcmp(cand, g_vdp.cram + 16, 16)) { memcpy(cand, g_vdp.cram + 16, 16); stable = 0; }
+        else if (stable < 1000) stable++;
+        if (stable >= 16 && memcmp(g_area.spr_pal, cand, 16)) {
+            memcpy(g_area.spr_pal, cand, 16);
+            uint32_t hsh = 2166136261u; for (int k = 0; k < 16; k++) hsh = (hsh ^ cand[k]) * 16777619u;
+            g_pal_hash = hsh;
+        }
+    }
     g_area.valid = true;
     {   /* test: PS_WORLDMAP_SELFTEST=1 renders the map every frame (soak tests run without the HUD) */
         static int st = -1; if (st < 0) st = getenv("PS_WORLDMAP_SELFTEST") != NULL;
         static uint32_t scratch[64 * 48];
-        if (st) ps_worldmap_draw(scratch, 64, 48, 0, 0, 64, 48);
+        if (st) ps_worldmap_draw(scratch, 64, 48, 0, 0, 64, 48, -1);
     }
 }
 
@@ -211,6 +227,7 @@ static void draw_screen(const TileSetView *v, int sx, int sy, uint32_t *dst, int
             }
             uint8_t lo = g_rom[mo + q * 2], hi = g_rom[mo + q * 2 + 1];
             int tile = lo | (hi & 1) << 8, pb = (hi & 8) ? 16 : 0;
+            if (pb) g_used_spr = true;
             const uint8_t *t = v->tiles + tile * 32;
             for (int y = 0; y < 8; y++) {
                 const uint8_t *row = t + ((hi & 4) ? 7 - y : y) * 4;
@@ -224,37 +241,41 @@ static void draw_screen(const TileSetView *v, int sx, int sy, uint32_t *dst, int
     }
 }
 
-/* render nw x nh screens (<= 3 x 3) with top-left screen (osx, osy) into g_img */
+/* towns: render nw x nh screens (<= 3 x 3) with top-left screen (osx, osy) into g_img */
 static int g_nw = 3, g_nh = 3;
 static void render_area(int tileset, int osx, int osy, int nw, int nh)
 {
     TileSetView v; tileset_view(tileset, &v);
-    g_gen++;
     for (int gy = 0; gy < nh; gy++) for (int gx = 0; gx < nw; gx++)
         draw_screen(&v, osx + gx, osy + gy, g_img + gy * SCR_H * AREA_W + gx * SCR_W, AREA_W);
+    g_img_gen++;
 }
 
-/* the whole planet (8 x 8 screens) at 1/4 size: 512 x 384, rendered once per tileset */
-#define PLANET_W (8 * SCR_W / 4)
-#define PLANET_H (8 * SCR_H / 4)
-static uint32_t g_planet[PLANET_W * PLANET_H];
-static void render_planet(int tileset)
+/* planets: the whole planet (8 x 8 screens = 2048 x 1536) at full size, rendered once per tileset
+   and sprite palette (a few ms); the surroundings view is a moving window into it (it wraps) */
+#define WORLD_W (8 * SCR_W)
+#define WORLD_H (8 * SCR_H)
+static uint32_t g_world[WORLD_W * WORLD_H];
+static bool ensure_world(void)
 {
-    static uint32_t scr[SCR_W * SCR_H];
-    TileSetView v; tileset_view(tileset, &v);
-    for (int sy = 0; sy < 8; sy++) for (int sx = 0; sx < 8; sx++) {
-        draw_screen(&v, sx, sy, scr, SCR_W);
-        for (int y = 0; y < SCR_H / 4; y++) for (int x = 0; x < SCR_W / 4; x++) {
-            unsigned r = 0, g = 0, b = 0;
-            for (int k = 0; k < 16; k++) {
-                uint32_t c = scr[(y * 4 + (k >> 2)) * SCR_W + x * 4 + (k & 3)];
-                r += c >> 16 & 255; g += c >> 8 & 255; b += c & 255;
-            }
-            g_planet[(sy * SCR_H / 4 + y) * PLANET_W + sx * SCR_W / 4 + x] = (r / 16) << 16 | (g / 16) << 8 | (b / 16);
-        }
+    if (!g_area.valid || g_df1 < 0 || g_area.tileset >= 4) return false;
+    if (g_tiles_from_vram && !g_tiles_ok[0]) return false;
+    /* key: tileset, plus the sprite palette only if a tile of this planet uses it */
+    uint32_t key = (uint32_t)g_area.tileset << 24 ^ (g_world_spr ? g_pal_hash & 0xFFFFFF : 0);
+    if (key != g_world_key && (g_world_key >> 24 != g_area.tileset || g_world_spr)) {
+        g_used_spr = false;
+        static int dbg = -1; if (dbg < 0) dbg = getenv("PS_WORLDMAP_DEBUG") != NULL;
+        clock_t t0 = clock();
+        TileSetView v; tileset_view(g_area.tileset, &v);
+        for (int sy = 0; sy < 8; sy++) for (int sx = 0; sx < 8; sx++)
+            draw_screen(&v, sx, sy, g_world + sy * SCR_H * WORLD_W + sx * SCR_W, WORLD_W);
+        g_world_spr = g_used_spr;
+        g_world_key = (uint32_t)g_area.tileset << 24 ^ (g_world_spr ? g_pal_hash & 0xFFFFFF : 0); g_world_gen++;
+        if (dbg) fprintf(stderr, "[worldmap] planet %d rendered in %ld ms\n", g_area.tileset, (long)((clock() - t0) * 1000 / CLOCKS_PER_SEC));
     }
-    g_planet_ts = tileset; g_gen++;
+    return true;
 }
+
 
 /* screen table of the current tileset as 8 x 8 pointers; returns the most common one (filler) */
 static unsigned screen_table(unsigned ptr[64])
@@ -299,7 +320,10 @@ static bool prepare(int *rx, int *ry)
         }
     }
     int key = g_area.tileset << 16 | (osy & 7) << 12 | (osx & 7) << 8 | nh << 4 | nw;
-    if (key != g_img_key) { render_area(g_area.tileset, osx, osy, nw, nh); g_img_key = key; g_nw = nw; g_nh = nh; }
+    if (key != g_img_key || (g_img_spr && g_img_pal != g_pal_hash)) {
+        g_used_spr = false;
+        render_area(g_area.tileset, osx, osy, nw, nh); g_img_key = key; g_img_pal = g_pal_hash; g_img_spr = g_used_spr; g_nw = nw; g_nh = nh;
+    }
     *rx = (csx - osx) * SCR_W + px % SCR_W; *ry = (csy - osy) * SCR_H + py % SCR_H;
     return true;
 }
@@ -331,106 +355,132 @@ const char *ps_worldmap_area_name(void)
 /* Fit src (sw x sh, stride) into the box keeping the aspect (centred): area average when scaling
    down, nearest when scaling up; source lines at multiples of (gx, gy) are darkened (screen grid,
    0 = none). Returns the destination rectangle. */
-static void blit_fit(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh,
-                     const uint32_t *src, int stride, int sw, int sh, int gx, int gy, int dark,
-                     int *omx, int *omy, int *odw, int *odh)
+
+/* ---- drawing ----
+ * A view = a source rectangle of g_world (wrapping) or g_img plus the party position in it. With
+ * the SDL window (hud_hires()) the picture is drawn by the host at the window's real resolution
+ * (hud_image); otherwise (headless tests, GPU path) it is area-averaged into the ARGB buffer. */
+typedef struct { const uint32_t *img; int iw, ih, sx, sy, sw, sh; bool wrap; uint32_t gen; int mx, my; } View;
+
+static int wrap_x(int x) { return ((x % WORLD_W) + WORLD_W) % WORLD_W; }
+static int wrap_y(int y) { return ((y % WORLD_H) + WORLD_H) % WORLD_H; }
+
+/* the surroundings: planets = 3 screens wide, as tall as the box allows (2..8 screens), centred on
+   the party and moving with it; towns = the whole town (<= 3 x 3 screens) */
+static bool view_area(int bw, int bh, View *v)
 {
-    int dw, dh;
-    if ((long)sw * bh > (long)bw * sh) { dw = bw; dh = (int)((long)bw * sh / sw); }
-    else { dh = bh; dw = (int)((long)bh * sw / sh); }
-    int mx = bx + (bw - dw) / 2, my = by + (bh - dh) / 2;
+    if (!g_area.valid || g_df1 < 0) return false;
+    if (g_area.tileset < 4) {
+        if (!ensure_world()) return false;
+        int vw = 3 * SCR_W, vh = (int)((long)vw * bh / bw);
+        if (vh < 2 * SCR_H) vh = 2 * SCR_H;
+        if (vh > WORLD_H) vh = WORLD_H;
+        int px = wrap_x(g_area.px), py = wrap_y(g_area.py);
+        *v = (View){ g_world, WORLD_W, WORLD_H, px - vw / 2, py - vh / 2, vw, vh, true, g_world_gen, vw / 2, vh / 2 };
+        return true;
+    }
+    int rx, ry;
+    if (!prepare(&rx, &ry)) return false;
+    *v = (View){ g_img, AREA_W, AREA_H, 0, 0, g_nw * SCR_W, g_nh * SCR_H, false, g_img_gen, rx, ry };
+    return true;
+}
+
+static bool view_planet(View *v)
+{
+    if (!ensure_world()) return false;
+    *v = (View){ g_world, WORLD_W, WORLD_H, 0, 0, WORLD_W, WORLD_H, false, g_world_gen, wrap_x(g_area.px), wrap_y(g_area.py) };
+    return true;
+}
+
+/* software path: area average (enlarging = nearest) of the view into (mx, my, dw, dh) */
+static void sample_view(uint32_t *fb, int w, int h, int mx, int my, int dw, int dh, const View *v)
+{
     for (int y = 0; y < dh; y++) {
         int yy = my + y; if (yy < 0 || yy >= h) continue;
-        int sy0 = (int)((long)y * sh / dh), sy1 = (int)((long)(y + 1) * sh / dh); if (sy1 <= sy0) sy1 = sy0 + 1;
-        bool gyl = false;
-        if (gy) for (int k = gy; k < sh; k += gy) gyl |= sy0 <= k && sy1 > k && (sy0 == k || sy1 - sy0 > 1 || dh <= sh);
+        int y0 = (int)((long)y * v->sh / dh), y1 = (int)((long)(y + 1) * v->sh / dh); if (y1 <= y0) y1 = y0 + 1;
         for (int x = 0; x < dw; x++) {
             int xx = mx + x; if (xx < 0 || xx >= w) continue;
-            int sx0 = (int)((long)x * sw / dw), sx1 = (int)((long)(x + 1) * sw / dw); if (sx1 <= sx0) sx1 = sx0 + 1;
+            int x0 = (int)((long)x * v->sw / dw), x1 = (int)((long)(x + 1) * v->sw / dw); if (x1 <= x0) x1 = x0 + 1;
             unsigned r = 0, g = 0, b = 0, n = 0;
-            for (int sy = sy0; sy < sy1; sy++) for (int sx = sx0; sx < sx1; sx++, n++) {
-                uint32_t c = src[sy * stride + sx];
-                r += c >> 16 & 255; g += c >> 8 & 255; b += c & 255;
+            for (int sy = y0; sy < y1; sy++) {
+                int iy = v->sy + sy; iy = v->wrap ? ((iy % v->ih) + v->ih) % v->ih : iy;
+                if (iy < 0 || iy >= v->ih) continue;
+                for (int sx = x0; sx < x1; sx++) {
+                    int ix = v->sx + sx; ix = v->wrap ? ((ix % v->iw) + v->iw) % v->iw : ix;
+                    if (ix < 0 || ix >= v->iw) continue;
+                    uint32_t c = v->img[iy * v->iw + ix];
+                    r += c >> 16 & 255; g += c >> 8 & 255; b += c & 255; n++;
+                }
             }
-            r /= n; g /= n; b /= n;
-            bool grid = gyl;
-            if (gx && !grid) for (int k = gx; k < sw; k += gx) grid |= sx0 <= k && sx1 > k && (sx0 == k || sx1 - sx0 > 1 || dw <= sw);
-            if (grid) { r = r * (unsigned)(100 - dark) / 100; g = g * (unsigned)(100 - dark) / 100; b = b * (unsigned)(100 - dark) / 100; }
+            if (n) { r /= n; g /= n; b /= n; }
             fb[yy * w + xx] = 0xFF000000u | r << 16 | g << 8 | b;
         }
     }
-    *omx = mx; *omy = my; *odw = dw; *odh = dh;
 }
 
-/* The scaled image only changes when the source is re-rendered or the box changes: keep the last
-   few results (HUD page and side panel use different sizes) and copy them instead of re-scaling. */
-typedef struct { long long key; int bw, bh, ox, oy, dw, dh; uint32_t px[256 * 256]; } BlitCache;
-static BlitCache g_bc[3];
-static int       g_bc_next;
-static void blit_cached(long long key, uint32_t *fb, int w, int h, int bx, int by, int bw, int bh,
-                        const uint32_t *src, int stride, int sw, int sh, int gx, int gy, int dark,
-                        int *mx, int *my, int *dw, int *dh)
-{
-    key = key ^ ((long long)g_gen << 40);
-    for (int i = 0; i < 3; i++) {
-        BlitCache *c = &g_bc[i];
-        if (c->dw > 0 && c->key == key && c->bw == bw && c->bh == bh) {
-            *mx = bx + c->ox; *my = by + c->oy; *dw = c->dw; *dh = c->dh;
-            for (int y = 0; y < c->dh; y++) {
-                int yy = *my + y; if (yy < 0 || yy >= h) continue;
-                for (int x = 0; x < c->dw; x++) { int xx = *mx + x; if (xx >= 0 && xx < w) fb[yy * w + xx] = c->px[y * c->dw + x]; }
-            }
-            return;
-        }
-    }
-    blit_fit(fb, w, h, bx, by, bw, bh, src, stride, sw, sh, gx, gy, dark, mx, my, dw, dh);
-    if (*dw * *dh > 256 * 256 || *mx < 0 || *my < 0 || *mx + *dw > w || *my + *dh > h) return;
-    BlitCache *c = &g_bc[g_bc_next++ % 3];
-    c->key = key; c->bw = bw; c->bh = bh; c->ox = *mx - bx; c->oy = *my - by; c->dw = *dw; c->dh = *dh;
-    for (int y = 0; y < *dh; y++) memcpy(c->px + y * *dw, fb + (*my + y) * w + *mx, (size_t)*dw * 4);
-}
-
-/* party: red square, ~1/40 of the map width (at least 5 px), rim alternating white / black every
-   20 draws (the panel and the HUD page redraw every presented frame) */
-static void party_marker(uint32_t *fb, int w, int h, int cx, int cy, int dw)
+/* Fit the view into the box (keeping its aspect, centred), optional screen grid (8 x 8, planet
+   view), party marker (red square, rim blinking white / black). space = HUD_SPACE_* of the buffer,
+   or -1 = always software. */
+static void draw_view(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space, const View *v, bool grid)
 {
     static unsigned calls;
     uint32_t rim = (calls++ / 20) & 1 ? 0xFF000000u : 0xFFFFFFFFu;
-    int r = dw / 80; if (r < 2) r = 2;
-    hud_fill(fb, w, h, cx - r - 1, cy - r - 1, cx + r + 2, cy + r + 2, rim, false);
-    hud_fill(fb, w, h, cx - r, cy - r, cx + r + 1, cy + r + 1, 0xFFEB3C3Cu, false);
+    float dw = (float)bw, dh = (float)bw * v->sh / v->sw;
+    if (dh > bh) { dh = (float)bh; dw = (float)bh * v->sw / v->sh; }
+    float mx = bx + (bw - dw) / 2, my = by + (bh - dh) / 2;
+    float cx = mx + v->mx * dw / v->sw, cy = my + v->my * dh / v->sh, r = dw / 70;
+    if (space >= 0 && hud_hires()) {
+        hud_fill(fb, w, h, (int)mx, (int)my, (int)(mx + dw), (int)(my + dh), 0xFF000000u, false);
+        hud_image(space, mx, my, dw, dh, v->img, v->iw, v->ih, v->sx, v->sy, v->sw, v->sh, v->wrap, v->gen);
+        if (grid) {
+            float lw = space == HUD_SPACE_GAME ? 0.34f : 1.0f;
+            for (int k = 1; k < 8; k++) {
+                hud_rect(space, mx + dw * k / 8 - lw / 2, my, lw, dh, 0x60000000u);
+                hud_rect(space, mx, my + dh * k / 8 - lw / 2, dw, lw, 0x60000000u);
+            }
+        }
+        if (r < 2) r = 2;
+        float e = r * 0.45f;
+        hud_rect(space, cx - r - e, cy - r - e, 2 * (r + e), 2 * (r + e), rim);
+        hud_rect(space, cx - r, cy - r, 2 * r, 2 * r, 0xFFEB3C3Cu);
+        return;
+    }
+    int ix = (int)mx, iy = (int)my, iw = (int)dw, ih = (int)dh;
+    sample_view(fb, w, h, ix, iy, iw, ih, v);
+    if (grid) for (int k = 1; k < 8; k++) {
+        hud_fill(fb, w, h, ix + iw * k / 8, iy, ix + iw * k / 8 + 1, iy + ih, 0xFF000000u, true);
+        hud_fill(fb, w, h, ix, iy + ih * k / 8, ix + iw, iy + ih * k / 8 + 1, 0xFF000000u, true);
+    }
+    int ir = (int)r; if (ir < 2) ir = 2;
+    hud_fill(fb, w, h, (int)cx - ir - 1, (int)cy - ir - 1, (int)cx + ir + 2, (int)cy + ir + 2, rim, false);
+    hud_fill(fb, w, h, (int)cx - ir, (int)cy - ir, (int)cx + ir + 1, (int)cy + ir + 1, 0xFFEB3C3Cu, false);
 }
 
-/* Draw the surroundings map fitted into the box (bx, by, bw, bh) of an ARGB buffer, with the party
-   marker. Returns false (nothing drawn) when there is no map yet. */
-bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh)
+/* Draw the surroundings map fitted into the box (bx, by, bw, bh) of an ARGB buffer (space =
+   HUD_SPACE_GAME / HUD_SPACE_PANEL, -1 = software only), with the party marker. Returns false
+   (nothing drawn) when there is no map yet. */
+bool ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space)
 {
-    int rx, ry, mx, my, dw, dh;
-    if (bw < 8 || bh < 8 || !prepare(&rx, &ry)) return false;
+    View v;
+    if (bw < 8 || bh < 8 || !view_area(bw, bh, &v)) return false;
     static bool dumped; if (!dumped) { debug_ppm(); dumped = true; }
-    int sw = g_nw * SCR_W, sh = g_nh * SCR_H;
-    blit_cached(g_img_key, fb, w, h, bx, by, bw, bh, g_img, AREA_W, sw, sh, SCR_W, SCR_H, 40, &mx, &my, &dw, &dh);
-    party_marker(fb, w, h, mx + (int)((long)rx * dw / sw), my + (int)((long)ry * dh / sh), dw);
+    draw_view(fb, w, h, bx, by, bw, bh, space, &v, false);
     return true;
 }
 
 /* The whole planet (planets only), faint screen grid, party marker. */
-bool ps_worldmap_draw_planet(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh)
+bool ps_worldmap_draw_planet(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space)
 {
-    int mx, my, dw, dh;
-    if (bw < 8 || bh < 8 || !g_area.valid || g_df1 < 0 || g_area.tileset >= 4) return false;
-    if (g_tiles_from_vram && !g_tiles_ok[0]) return false;
-    if (g_planet_ts != g_area.tileset) render_planet(g_area.tileset);
-    blit_cached(0x40000000LL | g_planet_ts, fb, w, h, bx, by, bw, bh, g_planet, PLANET_W, PLANET_W, PLANET_H, PLANET_W / 8, PLANET_H / 8, 20, &mx, &my, &dw, &dh);
-    int px = ((g_area.px % 2048) + 2048) % 2048, py = ((g_area.py % 1536) + 1536) % 1536;
-    party_marker(fb, w, h, mx + (int)((long)px * dw / 2048), my + (int)((long)py * dh / 1536), dw);
+    View v;
+    if (bw < 8 || bh < 8 || !view_planet(&v)) return false;
+    draw_view(fb, w, h, bx, by, bw, bh, space, &v, true);
     return true;
 }
 
 void ps_worldmap_screen(int *sx, int *sy)
 {
-    *sx = (((g_area.px % 2048) + 2048) % 2048) / SCR_W;
-    *sy = (((g_area.py % 1536) + 1536) % 1536) / SCR_H;
+    *sx = wrap_x(g_area.px) / SCR_W;
+    *sy = wrap_y(g_area.py) / SCR_H;
 }
 
 /* HUD page view: 0 = the screens around the party, 1 = the whole planet; Up/Down switch */
@@ -445,7 +495,8 @@ void ps_worldmap_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, in
     int bx = x0 + 2, by = y0 + 1;
     hud_fill(fb, w, h, bx - 1, by - 1, bx + bw + 1, by + bh + 1, 0xFF0C0C12u, false);
     bool planet = g_view == 1 && g_area.valid && g_area.tileset < 4;
-    bool ok = planet ? ps_worldmap_draw_planet(fb, w, h, bx, by, bw, bh) : ps_worldmap_draw(fb, w, h, bx, by, bw, bh);
+    bool ok = planet ? ps_worldmap_draw_planet(fb, w, h, bx, by, bw, bh, HUD_SPACE_GAME)
+                     : ps_worldmap_draw(fb, w, h, bx, by, bw, bh, HUD_SPACE_GAME);
     if (!ok) {
         hud_text(fb, w, h, x0 + 8, y0 + 4, "NO MAP YET", GREY);
         hud_text(fb, w, h, x0 + 8, y0 + 18, "SHOWN ONCE YOU ARE ON A PLANET", GREY);
