@@ -15,6 +15,15 @@ rom           = "../../ROMs/Golvellius - Valley of Doom (USA, Europe, Brazil) (E
 # vblank_count  = 0x____
 # player_object = 0x____
 
+[hooks]
+on_post_reset = "gv_on_post_reset"   # Common/Golvellius/gv_qol.c: options, map fixes
+
+# QoL hooks (gv_qol.c; each returns 0 = original code): a new sword swing (`ld a,4 ; ld ($C120),a`)
+[insn_hooks]
+addr   = [0x3F45, 0x43AC, 0x4678]
+func   = ["gv_sword_swing", "gv_sword_swing", "gv_sword_swing"]
+resume = [0x3F47, 0x43AE, 0x467A]
+
 [mapper]
 kind = "sega"   # frame regs $FFFC-$FFFF; reset banks 0/1/2; first 1KB fixed
 
