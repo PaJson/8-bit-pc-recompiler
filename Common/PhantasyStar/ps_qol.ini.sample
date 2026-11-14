@@ -22,6 +22,9 @@ automap            = 0      ; extra auto-map side window (old; the map is the HU
 ; SOUND tab
 music_volume       = 100    ; music volume in percent (0..100)
 sfx_volume         = 100    ; sound effects volume in percent (0..100)
+; sound_chip       = fm     ; fm, psg or psg_western: the Japanese FM driver, its PSG mode, or the Western PSG driver;
+;                             any of them works when its sound bank is in this ROM or in another Phantasy Star ROM
+;                             in the ROM folder (absent = the ROM's own: Western ROMs psg_western, Japanese ROMs / AGES fm)
 
 ; ITEMS tab
 item_names         = 0      ; 0 = the game's item names, 1 = ps_item_names.txt (game folder or Common/PhantasyStar/)

@@ -34,6 +34,13 @@ GROUPS = [
     ("exp", [
         ("ps_exp_add", "2a d0 c2 19 30 03 21 ff ff fd 75 .. fd 74 .. d8", 3, 6),
     ]),
+    # SOUND CHIP (ps_sound.c): the three sound shims in bank 0, `ld hl,$FFFF ; ld (hl),BANK ; jp ENTRY`
+    #   x3 (update, init, mute) -> hook each `ld hl,$FFFF` (0 = original shim, 2 = return; resume unused)
+    ("sound", [
+        ("ps_snd_update", "21 ff ff 36 .. c3 .. .. 21 ff ff 36 .. c3 .. .. 21 ff ff 36 .. c3 .. ..", 0, 5),
+        ("ps_snd_init",   "21 ff ff 36 .. c3 .. .. 21 ff ff 36 .. c3 .. .. 21 ff ff 36 .. c3 .. ..", 8, 5),
+        ("ps_snd_mute",   "21 ff ff 36 .. c3 .. .. 21 ff ff 36 .. c3 .. .. 21 ff ff 36 .. c3 .. ..", 16, 5),
+    ]),
     ("damage", [
         ("ps_damage", "f5 3e ad 32 04 c0 cd .. .. f1 dd 86 01 38 01 af dd 77 01 c0", 10, 3),
         ("ps_damage", "0f e6 7f 2f dd 86 01 38 01 af dd 77 01 20", 4, 3),

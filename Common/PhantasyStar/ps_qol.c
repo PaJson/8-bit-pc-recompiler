@@ -109,6 +109,16 @@ static int s_reveal_i = 0, s_secrets_i = 1;    /* dungeon map: explored / whole 
 static int s_panel_i = 0;                      /* widescreen side panel (party, meseta, map) off / on */
 static int s_hover_i = 0;                      /* hovercraft also drives on land: off / on */
 static int s_bgm_i = 100, s_sfx_i = 100;       /* music / sound effects volume, percent */
+/* SOUND CHIP (ps_sound.c): ini key sound_chip = fm | psg | psg_western (absent = the ROM's own) */
+extern void        ps_sound_init(void);
+extern int         ps_sound_mode_from_key(const char *k);
+extern const char *ps_sound_mode_key(int m);
+extern const char *ps_sound_mode_name(int m);
+extern bool        ps_sound_mode_available(int m);
+extern int         ps_sound_native_mode(void);
+extern int         ps_sound_mode(void);
+extern void        ps_sound_select(int m);
+static int s_chip_pref = -1;                   /* mode from the ini, -1 = native */
 static const double k_ff_vals[] = { 0.5, 1, 2, 4 };   /* fast-forward speed while TAB / pad RT is held */
 static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
 #define N_FF 4
@@ -158,6 +168,10 @@ static void load_config(void)
         else if (!strcmp(key, "hovercraft_land")) s_hover_i = v != 0;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "sound_chip")) {
+            char w[32] = ""; sscanf(val, " %31s", w);
+            s_chip_pref = ps_sound_mode_from_key(w);
+        }
         else if (!strcmp(key, "encounter_percent") && v >= 0) s_enc_i = nearest_enc((int)(v + 0.5));
         else if (!strcmp(key, "fast_forward") && v > 0) {
             s_ff_i = 0;
@@ -187,6 +201,8 @@ static void save_config(void)
     fprintf(f, "side_panel         = %d      ; widescreen window with a side panel: party, meseta, map (like SEGA AGES)\n", s_panel_i);
     fprintf(f, "hovercraft_land    = %d      ; 1 = the hovercraft also drives on land like the Land Rover (board it anywhere)\n", s_hover_i);
     fprintf(f, "music_volume       = %-6d ; music volume in percent (0..100)\n", s_bgm_i);
+    {   int m = ps_sound_mode() >= 0 ? ps_sound_mode() : s_chip_pref;
+        if (m >= 0) fprintf(f, "sound_chip         = %-6s ; fm, psg or psg_western (a sound bank from another PS ROM in the ROM folder is used when needed)\n", ps_sound_mode_key(m)); }
     fprintf(f, "sfx_volume         = %-6d ; sound effects volume in percent (0..100)\n", s_sfx_i);
     fprintf(f, "fast_forward       = %-6g ; speed while TAB / pad RT is held (LT = x0.5): 0.5, 1, 2 or 4 (default 4)\n", k_ff_vals[s_ff_i]);
     fclose(f);
@@ -646,10 +662,35 @@ static void sound_frame(void)
     }
 }
 static void on_volume_changed(void) { sound_frame(); }
-static const HudOption k_sound_opts[] = {
-    { "MUSIC",             k_pct_names,  101,    &s_bgm_i, on_volume_changed },
-    { "SOUND EFFECTS",     k_pct_names,  101,    &s_sfx_i, on_volume_changed },
-};
+/* SOUND CHIP choices: the modes available for this ROM (its own driver bank(s) + other PS ROMs in
+   the ROM folder), the ROM's own mode marked ORIGINAL; the option exists only with 2+ modes */
+static int  s_chip_i, s_chip_n, s_chip_modes[3];
+static char s_chip_buf[3][32];
+static const char *s_chip_names[3];
+static void on_chip_changed(void) { if (s_chip_i >= 0 && s_chip_i < s_chip_n) ps_sound_select(s_chip_modes[s_chip_i]); }
+static HudOption k_sound_opts[3];
+static int k_sound_nopts;
+static void build_sound_opts(void)
+{
+    s_chip_n = 0;
+    for (int m = 0; m < 3; m++) {
+        if (!ps_sound_mode_available(m)) continue;
+        snprintf(s_chip_buf[s_chip_n], sizeof s_chip_buf[0], "%s%s", ps_sound_mode_name(m),
+                 m == ps_sound_native_mode() ? " (ORIGINAL)" : "");
+        s_chip_names[s_chip_n] = s_chip_buf[s_chip_n];
+        s_chip_modes[s_chip_n++] = m;
+    }
+    int want = s_chip_pref >= 0 && ps_sound_mode_available(s_chip_pref) ? s_chip_pref
+             : ps_sound_mode() >= 0 ? ps_sound_mode() : ps_sound_native_mode();
+    s_chip_i = 0;
+    for (int i = 0; i < s_chip_n; i++) if (s_chip_modes[i] == want) s_chip_i = i;
+    if (s_chip_n) ps_sound_select(s_chip_modes[s_chip_i]);
+    k_sound_nopts = 0;
+    k_sound_opts[k_sound_nopts++] = (HudOption){ "MUSIC",         k_pct_names, 101, &s_bgm_i, on_volume_changed };
+    k_sound_opts[k_sound_nopts++] = (HudOption){ "SOUND EFFECTS", k_pct_names, 101, &s_sfx_i, on_volume_changed };
+    if (s_chip_n >= 2)
+        k_sound_opts[k_sound_nopts++] = (HudOption){ "SOUND CHIP", s_chip_names, s_chip_n, &s_chip_i, on_chip_changed };
+}
 static const HudOption k_mult_opts[] = {
     { "EXP",               k_mult_names, N_MULT, &s_exp_i, NULL },
     { "MESETA",            k_mult_names, N_MULT, &s_mes_i, NULL },
@@ -768,8 +809,10 @@ static int hud_open_page(void)   /* always the first tab, MAP (test: PS_HUD_PAGE
 void ps_on_post_reset(void)
 {
     static bool pages_added;
+    ps_sound_init();          /* first: may append sound banks from other ROMs to the ROM image */
     init_names();
     load_config();
+    build_sound_opts();
     ps_automap_init();
     ps_worldmap_init();
     hover_init();
@@ -783,7 +826,7 @@ void ps_on_post_reset(void)
         hud_add_page_ex("ITEMS", ps_items_hud_draw, ps_items_hud_key, true);
         hud_add_page_ex("MAP", map_page_draw, map_page_key, true);
         hud_add_page_ex("FLY", ps_fly_hud_draw, ps_fly_hud_key, true);
-        hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0]));
+        hud_add_option_page("SOUND", k_sound_opts, k_sound_nopts);
         hud_add_page("BUTTONS", buttons_draw, NULL);
         static const char *const order[] = { "MAP", "FLY", "ITEMS", "OPTIONS", "MULTIPLIERS", "SOUND", "BUTTONS" };
         hud_set_page_order(order, (int)(sizeof order / sizeof order[0]));
