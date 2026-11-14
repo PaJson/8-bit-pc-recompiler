@@ -7,7 +7,8 @@
  * Party data (ps1.constants.asm): stats at $C400 + $10 * n (Alis, Myau, Odin, Noah): +0 status
  * (1 = alive), +1 HP, +2 MP, +5 level, +6 max HP, +7 max MP; Party_curr_num $C4F0 (0-based);
  * Current_money $C4E0 (word).
- * Portraits: placeholders (initial letter) until the user supplies images.
+ * Portraits: the game's own character pictures (the cutscene portraits), decoded from the ROM at
+ * start-up; ROMs whose picture packer differs (2.5 retranslation) keep the initial-letter tiles.
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -36,6 +37,101 @@ extern int         ps_map_context(void);       /* ps_qol.c: 0 none, 1 dungeon, 2
 #define MPCOL   0xFF4080F0u
 #define DEADCOL 0xFFC03C3Cu
 
+/* ---- portraits ----
+ * LABEL_46D1(n) (ps1.asm) shows cutscene picture n from LABEL_471E: 5-byte entries {bank, ptr, map};
+ * at ptr 16 palette bytes, then the tiles packed for LABEL_3FA (4 bit planes, each RLE: n < $80 =
+ * repeat the next byte n times, n >= $80 = copy n & $7F bytes, 0 = end; every 4th byte), written to
+ * VRAM $2000 (tile 256); the map (bank 24 in every ROM, found after the call) is 12 rows x 20 name-
+ * table words (LABEL_390) = a 160 x 96 picture. Pictures 3..6 = Alis, Myau, Odin, Noah (0 Nero hurt,
+ * 1 Nero, 2 Alis praying, 7/8 Myau's winged forms). Found by code pattern in all 10 PS ROMs. */
+#define POR_W 160
+#define POR_H 96
+static uint32_t g_por[4][POR_W * POR_H];
+static int      g_por_state;                           /* 0 not tried, 1 ok, -1 not available */
+/* face crop (x, y) of a 72 x 72 square in each picture */
+static const int k_face[4][2] = { { 52, 4 }, { 60, 8 }, { 20, 8 }, { 38, 6 } };
+#define FACE 72
+extern uint8_t *glue_rom_image(size_t *size);
+
+static uint32_t por_rgb(uint8_t c) { return 0xFF000000u | (uint32_t)(c & 3) * 85u << 16 | (uint32_t)(c >> 2 & 3) * 85u << 8 | (uint32_t)(c >> 4 & 3) * 85u; }
+
+static void portraits_init(void)
+{
+    g_por_state = -1;
+    size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
+    if (!rom || n < 0x10000) return;
+    /* ld l,a ; add a,a ; add a,a ; add a,l ; ld l,a ; ld h,0 ; ld de,LABEL_471E */
+    static const uint8_t pat[] = { 0x6F, 0x87, 0x87, 0x85, 0x6F, 0x26, 0x00, 0x11 };
+    long i = -1;
+    for (size_t k = 0; k + sizeof pat + 2 <= 0x8000 && k + sizeof pat + 2 <= n; k++) if (!memcmp(rom + k, pat, sizeof pat)) { i = (long)k; break; }
+    if (i < 0) return;
+    long tbl = rom[i + 8] | rom[i + 9] << 8;
+    /* ... ld de,$6000 ; call LABEL_3FA ; ld hl,$FFFF ; ld (hl),map bank */
+    long c = -1, mb = -1;
+    for (long k = i; k < i + 64 && k + 6 < (long)n; k++) {
+        if (c < 0 && rom[k] == 0x11 && rom[k + 1] == 0x00 && rom[k + 2] == 0x60 && rom[k + 3] == 0xCD) c = rom[k + 4] | rom[k + 5] << 8;
+        if (c >= 0 && rom[k] == 0x21 && rom[k + 1] == 0xFF && rom[k + 2] == 0xFF && rom[k + 3] == 0x36) { mb = rom[k + 4]; break; }
+    }
+    /* the call must go to the standard unpacker (ld b,4 ; push bc ; push de ; call ; pop de ; inc de ;
+       pop bc ; djnz ; ret), else the pictures are packed another way (2.5 retranslation) */
+    static const uint8_t u1[] = { 0x06, 0x04, 0xC5, 0xD5, 0xCD }, u2[] = { 0xD1, 0x13, 0xC1, 0x10, 0xF6, 0xC9 };
+    if (c < 0 || mb < 0 || c + 13 > (long)n || memcmp(rom + c, u1, sizeof u1) || memcmp(rom + c + 7, u2, sizeof u2)) {
+        fprintf(stderr, "[panel] character pictures use another packer: portraits shown as letters\n");
+        return;
+    }
+    static uint8_t tiles[0x4000];
+    for (int p = 0; p < 4; p++) {
+        const uint8_t *e = rom + tbl + (3 + p) * 5;
+        long pal = (long)e[0] * 0x4000 + (e[1] | e[2] << 8) - 0x8000, map = mb * 0x4000 + (e[3] | e[4] << 8) - 0x8000;
+        if (pal < 0 || map < 0 || pal + 16 >= (long)n || map + 12 * 40 > (long)n) return;
+        uint32_t cols[16]; for (int k = 0; k < 16; k++) cols[k] = por_rgb(rom[pal + k]);
+        memset(tiles, 0, sizeof tiles);
+        long o = pal + 16;
+        for (int plane = 0; plane < 4; plane++)
+            for (int a = plane;;) {
+                if (o >= (long)n) return;
+                uint8_t cc = rom[o++];
+                if (!cc) break;
+                int cnt = cc & 0x7F;
+                if (cc & 0x80) { for (int k = 0; k < cnt; k++, a += 4) { if (a < 0x4000 && o < (long)n) tiles[a] = rom[o]; o++; } }
+                else { uint8_t b = o < (long)n ? rom[o] : 0; o++; for (int k = 0; k < cnt; k++, a += 4) if (a < 0x4000) tiles[a] = b; }
+            }
+        for (int y = 0; y < POR_H; y++) for (int x = 0; x < POR_W; x++) {
+            long mo = map + ((y >> 3) * 20 + (x >> 3)) * 2;
+            unsigned w = rom[mo] | rom[mo + 1] << 8;
+            int t = (int)(w & 0x1FF) - 256, fy = (w & 0x400) ? 7 - (y & 7) : (y & 7), fx = (w & 0x200) ? 7 - (x & 7) : (x & 7);
+            int col = 0;
+            if (t >= 0 && t < 512) {
+                const uint8_t *r = tiles + t * 32 + fy * 4; int b = 7 - fx;
+                col = (r[0] >> b & 1) | (r[1] >> b & 1) << 1 | (r[2] >> b & 1) << 2 | (r[3] >> b & 1) << 3;
+            }
+            g_por[p][y * POR_W + x] = cols[col];
+        }
+    }
+    g_por_state = 1;
+}
+
+/* the face of character c into (x, y, s x s) of the panel: hi-res layer (sharp at any window size),
+   else area-averaged into the panel image; dead = darkened */
+static void draw_portrait(uint32_t *b, int w, int h, int c, int x, int y, int s, bool alive)
+{
+    const int fx = k_face[c][0], fy = k_face[c][1];
+    if (hud_hires()) {
+        hud_image(HUD_SPACE_PANEL, (float)x, (float)y, (float)s, (float)s, g_por[c], POR_W, POR_H, fx, fy, FACE, FACE, false, 0x9000u + (uint32_t)c);
+        if (!alive) hud_rect(HUD_SPACE_PANEL, (float)x, (float)y, (float)s, (float)s, 0xB0000000u);
+        return;
+    }
+    for (int yy = 0; yy < s; yy++) for (int xx = 0; xx < s; xx++) {
+        int x0 = fx + xx * FACE / s, x1 = fx + (xx + 1) * FACE / s, y0 = fy + yy * FACE / s, y1 = fy + (yy + 1) * FACE / s;
+        unsigned r = 0, g = 0, bl = 0, k = 0;
+        for (int sy = y0; sy < y1; sy++) for (int sx = x0; sx < x1; sx++) { uint32_t p = g_por[c][sy * POR_W + sx]; r += p >> 16 & 255; g += p >> 8 & 255; bl += p & 255; k++; }
+        if (!k) continue;
+        r /= k; g /= k; bl /= k;
+        if (!alive) { r = r * 30 / 100; g = g * 30 / 100; bl = bl * 30 / 100; }
+        if (x + xx >= 0 && x + xx < w && y + yy >= 0 && y + yy < h) b[(y + yy) * w + x + xx] = 0xFF000000u | r << 16 | g << 8 | bl;
+    }
+}
+
 static void box(uint32_t *b, int w, int h, int x0, int y0, int x1, int y1)
 {
     hud_fill(b, w, h, x0, y0, x1, y1, FRAME, false);
@@ -61,6 +157,7 @@ static int text_right(uint32_t *b, int w, int h, int xr, int y, const char *s, u
 extern const uint8_t *glue_sram_image(size_t *size);
 extern bool ps_worldmap_draw_at(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space,
                                 int tileset, int map, int px, int py, const char **name);
+extern int  ps_worldmap_map_tileset(int map, int fallback);
 extern bool ps_automap_draw_slot(uint32_t *fb, int w, int h, int x, int y, int cs, int slot, const uint8_t *blk);
 
 static const uint8_t *g_blk;                           /* previewed slot block, NULL = live RAM */
@@ -113,9 +210,12 @@ void ps_panel_draw(uint32_t *b, int w, int h)
         uint16_t s = (uint16_t)(0xC400 + 0x10 * c);
         bool alive = rd(s) & 1;
         box(b, w, h, 8, y, w - 8, y + 62);
-        /* portrait placeholder */
-        hud_fill(b, w, h, 14, y + 7, 62, y + 55, alive ? pcol[c] : 0xFF404040u, false);
-        { char ini[2] = { names[c][0], 0 }; hud_text_scaled(b, w, h, 14 + 13, y + 17, ini, 0xFFFFFFFFu, 4); }
+        if (!g_por_state) portraits_init();
+        if (g_por_state > 0) draw_portrait(b, w, h, c, 14, y + 7, 48, alive);
+        else {                                         /* placeholder: initial letter */
+            hud_fill(b, w, h, 14, y + 7, 62, y + 55, alive ? pcol[c] : 0xFF404040u, false);
+            char ini[2] = { names[c][0], 0 }; hud_text_scaled(b, w, h, 14 + 13, y + 17, ini, 0xFFFFFFFFu, 4);
+        }
         int tx = 70, tr = w - 14;
         hud_text_scaled(b, w, h, tx, y + 6, names[c], alive ? WHITE : DEADCOL, 2);
         snprintf(buf, sizeof buf, "LV%u", rd(s + 5));
@@ -133,7 +233,7 @@ void ps_panel_draw(uint32_t *b, int w, int h)
     /* Meseta */
     y = 8 + 4 * 68;
     box(b, w, h, 8, y, w - 8, y + 30);
-    hud_text_scaled(b, w, h, 16, y + 8, "M", GOLD, 2);
+    hud_text_scaled(b, w, h, 16, y + 8, "MST", GOLD, 2);
     snprintf(buf, sizeof buf, "%u", rd(0xC4E0) | (rd(0xC4E1) << 8));
     text_right(b, w, h, w - 16, y + 8, buf, WHITE, 2);
     /* map box */
@@ -150,7 +250,7 @@ void ps_panel_draw(uint32_t *b, int w, int h)
             const char *name = "MAP";
             hud_fill(b, w, h, mx0, my0, mx1, my1, 0xFF000000u, false);
             int px = rd(0xC302) * 256 + rd(0xC301) + 136, py = rd(0xC306) * 192 + rd(0xC305) + 104;
-            ok = ps_worldmap_draw_at(b, w, h, mx0, my0, mx1 - mx0, my1 - my0, HUD_SPACE_PANEL, rd(0xC308), rd(0xC309), px, py, &name);
+            ok = ps_worldmap_draw_at(b, w, h, mx0, my0, mx1 - mx0, my1 - my0, HUD_SPACE_PANEL, ps_worldmap_map_tileset(rd(0xC309), rd(0xC308)), rd(0xC309), px, py, &name);
             snprintf(buf, sizeof buf, "SLOT %d %s", slot, name);
         }
         hud_text_scaled(b, w, h, 16, y + 6, buf, CYAN, 2);

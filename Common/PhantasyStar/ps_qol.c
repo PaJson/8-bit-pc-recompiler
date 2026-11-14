@@ -88,6 +88,8 @@ static const uint8_t k_rate_sig[16] = {0x10,0x0C,0x10,0x0C,0x10,0x0C,0x10,0x0B,0
 #define N_MULT 101                              /* multipliers x0 .. x100 (= index) */
 static char        s_mult_buf[N_MULT][16];
 static const char *k_mult_names[N_MULT];        /* filled by init_names() */
+static char        s_pct_buf[101][8];
+static const char *k_pct_names[101];           /* 0%..100%, filled by init_names() */
 static const char *const k_enc_names[]  = { "NONE", "25%", "50%", "75%", "100% (ORIGINAL)", "150%", "200%" };
 static const int         k_enc_vals[]   = { 0, 25, 50, 75, 100, 150, 200 };
 static const char *const k_onoff[]      = { "OFF", "ON" };
@@ -105,6 +107,7 @@ static int s_walk_i = 0;                       /* walk speed: 0 = x1 (original),
 static int s_reveal_i = 0, s_secrets_i = 1;    /* dungeon map: explored / whole floor; secrets hidden / shown */
 static int s_panel_i = 0;                      /* widescreen side panel (party, meseta, map) off / on */
 static int s_hover_i = 0;                      /* hovercraft also drives on land: off / on */
+static int s_bgm_i = 100, s_sfx_i = 100;       /* music / sound effects volume, percent */
 static const char *s_ini_path = "ps_qol.ini";
 
 static unsigned exp_mult(void)  { return (unsigned)s_exp_i; }
@@ -119,6 +122,7 @@ static void init_names(void)
         snprintf(s_mult_buf[i], sizeof s_mult_buf[i], i == 0 ? "X0 (NONE)" : i == 1 ? "X1 (ORIGINAL)" : "X%d", i);
         k_mult_names[i] = s_mult_buf[i];
     }
+    for (int i = 0; i <= 100; i++) { snprintf(s_pct_buf[i], sizeof s_pct_buf[i], "%d%%", i); k_pct_names[i] = s_pct_buf[i]; }
 }
 static int nearest_enc(int v)    { int b = 0; for (int i = 1; i < N_ENC; i++) if (abs(k_enc_vals[i] - v) < abs(k_enc_vals[b] - v)) b = i; return b; }
 
@@ -147,6 +151,8 @@ static void load_config(void)
         else if (!strcmp(key, "map_secrets")) s_secrets_i = v != 0;
         else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
         else if (!strcmp(key, "hovercraft_land")) s_hover_i = v != 0;
+        else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "encounter_percent") && v >= 0) s_enc_i = nearest_enc((int)(v + 0.5));
     }
     fclose(f);
@@ -171,6 +177,8 @@ static void save_config(void)
     fprintf(f, "item_names         = %d      ; HUD ITEMS page: 0 = the game's item names, 1 = ps_item_names.txt\n", g_ps_item_custom_names);
     fprintf(f, "side_panel         = %d      ; widescreen window with a side panel: party, meseta, map (like SEGA AGES)\n", s_panel_i);
     fprintf(f, "hovercraft_land    = %d      ; 1 = the hovercraft also drives on land like the Land Rover (board it anywhere)\n", s_hover_i);
+    fprintf(f, "music_volume       = %-6d ; music volume in percent (0..100)\n", s_bgm_i);
+    fprintf(f, "sfx_volume         = %-6d ; sound effects volume in percent (0..100)\n", s_sfx_i);
     fclose(f);
 }
 
@@ -204,6 +212,8 @@ static void apply_overworld_rate(void)
  * With walk speed x1 every hook returns 0 and the original instructions run. */
 #include "sms_runtime.h"
 #include "z80_ops.h"
+#include "audio/sn76489.h"
+#include "audio/ym2413.h"
 #define RAM_VEHICLE   0xC30E
 #define RAM_MOVE_CNT  0xC265
 /* Vehicles: at most x2 (4 px/frame). The map engine draws a newly exposed tile column in two halves
@@ -365,6 +375,45 @@ static const char *const k_reveal_names[]  = { "EXPLORED", "WHOLE FLOOR" };
 static const char *const k_secrets_names[] = { "HIDDEN", "SHOWN" };
 
 static const char *const k_walk_names[] = { "X1 (ORIGINAL)", "X2", "X4" };
+
+/* ---- music / sound effects volume ----
+ * The sound driver (bank 12 PSG driver, and the FM drivers of the Japanese ROMs / SEGA AGES) keeps
+ * 32-byte channel slots in RAM: music $C00E.. (FM) / $C06E..$C0CE (PSG) and the jingle set
+ * $C14E..$C1CE, sound effects in the three slots $C0EE, $C10E, $C12E (Rev A: commands $A0-$CF
+ * start in $C0EE / $C10E, $D0-$D4 in $C12E; all SFX headers checked). Slot +0 bit 7 = playing,
+ * +1 = the output: PSG $80/$A0/$C0/$E0 (tone 0-2, noise), FM $10+n (FM channel n). A playing SFX
+ * slot takes its channel over (the music slot of that channel is muted meanwhile), so every frame
+ * the channels used by a playing SFX slot get the SFX volume and all others the music volume.
+ * Measured 2026-11-14 (SMS_PSGLOG_IX): FM mode never makes the PSG audible (SFX on FM 4/5).
+ * Exception: SFX $B8 (Rev A) starts in the music slots (it stops the music) = music volume. */
+static unsigned vol_gain(int pct) { double g = pct / 100.0; return (unsigned)(g * g * 256.0 + 0.5); }  /* loudness-like curve */
+static void sound_frame(void)
+{
+    static const uint16_t slots[3] = { 0xC0EE, 0xC10E, 0xC12E };
+    bool sfx_psg[4] = { false }, sfx_fm[9] = { false };
+    for (int k = 0; k < 3; k++) {
+        if (!(sms_read8(slots[k]) & 0x80)) continue;
+        uint8_t c = sms_read8((uint16_t)(slots[k] + 1));
+        if (c & 0x80) sfx_psg[(c >> 5) & 3] = true;
+        else if ((c & 0xF0) == 0x10 && (c & 0x0F) < 9) sfx_fm[c & 0x0F] = true;
+    }
+    unsigned gb = vol_gain(s_bgm_i), gs = vol_gain(s_sfx_i);
+    for (unsigned i = 0; i < 4; i++) psg_set_channel_gain(i, sfx_psg[i] ? gs : gb);
+    for (unsigned i = 0; i < 14; i++) fm_set_channel_gain(i, i < 9 && sfx_fm[i] ? gs : gb);
+    {   /* test: PS_SND_LOG=1 prints every change of the SFX channel set */
+        static int on = -1; static unsigned last;
+        if (on < 0) on = getenv("PS_SND_LOG") != NULL;
+        unsigned m = 0;
+        for (int i = 0; i < 4; i++) m |= (unsigned)sfx_psg[i] << i;
+        for (int i = 0; i < 9; i++) m |= (unsigned)sfx_fm[i] << (8 + i);
+        if (on && m != last) { fprintf(stderr, "[snd] sfx psg %X fm %03X\n", m & 15, m >> 8); last = m; }
+    }
+}
+static void on_volume_changed(void) { sound_frame(); }
+static const HudOption k_sound_opts[] = {
+    { "MUSIC",             k_pct_names,  101,    &s_bgm_i, on_volume_changed },
+    { "SOUND EFFECTS",     k_pct_names,  101,    &s_sfx_i, on_volume_changed },
+};
 static const HudOption k_mult_opts[] = {
     { "EXP",               k_mult_names, N_MULT, &s_exp_i, NULL },
     { "MESETA",            k_mult_names, N_MULT, &s_mes_i, NULL },
@@ -510,6 +559,7 @@ void ps_on_post_reset(void)
         hud_add_page_ex("ITEMS", ps_items_hud_draw, ps_items_hud_key, true);
         hud_add_page_ex("MAP", map_page_draw, map_page_key, true);
         hud_add_page_ex("FLY", ps_fly_hud_draw, ps_fly_hud_key, true);
+        hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0]));
         pages_added = true;
     }
     hud_set_open_page(hud_open_page);
@@ -544,6 +594,7 @@ void ps_on_frame_post(uint64_t frame)
         } }
     ps_panel_frame(frame);
     ps_fly_frame();
+    sound_frame();
 
     {   /* test: PS_DAMAGE_LOG=1 prints every HP change of the party (P0..3) and the enemies (E0..7) */
         static int on = -1; static uint8_t prev[12];

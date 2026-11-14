@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <math.h>
 #include "hud.h"
 #include "video/sms_vdp.h"
 
@@ -64,7 +65,7 @@ static bool draw_whole(uint32_t *fb, int w, int h, int bx, int by, int bw, int b
 
 /* Rendered pictures: a tileset's whole 8 x 8 screen table at full size (2048 x 1536), rendered once
    per tileset (a few ms). Planets wrap. Towns: several towns share one table, so a town picture is
-   per town (= group of connected screens, town_clusters) and the screens of the others are dimmed.
+   per town (= group of connected screens, town_clusters); every other screen is the filler screen.
    Three buffers (the side panel shows the current map while the HUD's MAP page or the save-slot
    preview may show another one: with fewer they would re-render each other every frame); least
    recently used is replaced. `gen` changes with every render (hi-res texture uploads). */
@@ -86,6 +87,16 @@ static int      g_view;                        /* HUD page: 0 area, 1 whole plan
 static int town_clusters(int tileset, int cl[64]);
 
 static long bank_off(int bank, unsigned addr) { return (long)bank * 0x4000 + (long)(addr - 0x8000); }
+
+/* LABEL_DC1: map number -> tileset. GameMode_LoadMap runs with Game_mode already $09 and LABEL_787B
+   has stored the MAP number in $C308 too; LoadMap replaces it with the tileset ~36 frames later
+   (fade-out), so $C308 alone would show map 5 (Palma Spaceport) as tileset 5 (Gothic) meanwhile. */
+static int map_tileset(int map)
+{
+    if (g_dc1 < 0 || map < 0 || map >= 24 || g_dc1 + map >= (long)g_rom_n) return -1;
+    return g_rom[g_dc1 + map];
+}
+int ps_worldmap_map_tileset(int map, int fallback) { int t = map_tileset(map); return t >= 0 ? t : fallback; }
 
 static long find(const uint8_t *pat, size_t n, size_t lim)
 {
@@ -189,7 +200,7 @@ void ps_worldmap_frame(void)
     /* GameMode_LoadMap sets the mode to $09 first and unpacks the tiles during its fade-out
        (several frames), so copy them once the map has been running for a moment */
     if (g_tiles_from_vram && in_map == 30) {
-        int which = sms_read8(0xC308) < 4 ? 0 : 1;
+        int which = ps_worldmap_map_tileset(sms_read8(0xC309), sms_read8(0xC308)) < 4 ? 0 : 1;
         memcpy(g_tiles[which], g_vdp.vram, sizeof g_tiles[which]);
         g_tiles_ok[which] = true; invalidate_pictures();
     }
@@ -200,8 +211,8 @@ void ps_worldmap_frame(void)
        off-screen during fades and some menus. */
     int sx = 128, sy = 96;
     if (sms_read8(0xC800) & 0x7F) { sx = sms_read8(0xC804); sy = sms_read8(0xC802); }
-    g_area.tileset = sms_read8(0xC308);
     g_area.map = sms_read8(0xC309);
+    g_area.tileset = (uint8_t)ps_worldmap_map_tileset(g_area.map, sms_read8(0xC308));
     g_area.px = cam_x + sx + 8;                          /* centre of that cell */
     g_area.py = cam_y + sy + 8;
     /* sprite palette (BG tiles may use it): the map fades in by stepping CRAM every 4 frames (until
@@ -210,7 +221,10 @@ void ps_worldmap_frame(void)
         static uint8_t cand[16]; static int stable;
         if (memcmp(cand, g_vdp.cram + 16, 16)) { memcpy(cand, g_vdp.cram + 16, 16); stable = 0; }
         else if (stable < 1000) stable++;
-        if (stable >= 16 && memcmp(g_area.spr_pal, cand, 16)) {
+        /* not an all-black palette: LoadMap keeps CRAM black for longer than 16 frames while it
+           unpacks the new map, which made the filler around towns black until the fade-in ended */
+        bool black = true; for (int k = 0; k < 16; k++) if (cand[k]) black = false;
+        if (stable >= 16 && !black && memcmp(g_area.spr_pal, cand, 16)) {
             memcpy(g_area.spr_pal, cand, 16);
             uint32_t hsh = 2166136261u; for (int k = 0; k < 16; k++) hsh = (hsh ^ cand[k]) * 16777619u;
             g_pal_hash = hsh;
@@ -290,7 +304,7 @@ static void draw_screen(const TileSetView *v, int sx, int sy, uint32_t *dst, int
 }
 
 /* The picture of the current area (g_area): planets = the whole planet; towns = the whole screen
-   table with every screen outside the party's town dimmed (other towns sharing the table, filler).
+   table with every screen outside the party's town drawn as the filler screen.
    Rendered once per tileset / town and sprite palette (if a tile uses it); NULL if not possible. */
 static Pic *ensure_pic(void)
 {
@@ -316,25 +330,21 @@ static Pic *ensure_pic(void)
         clock_t t0 = clock();
         TileSetView v; tileset_view(ts, &v);
         b->x0 = 0; b->y0 = 0; b->x1 = 7; b->y1 = 7;
-        if (c) { b->x0 = b->y0 = 8; b->x1 = b->y1 = -1; }
+        int fx = 0, fy = 0;                   /* towns: a filler screen of the table */
+        if (c) {
+            b->x0 = b->y0 = 8; b->x1 = b->y1 = -1;
+            for (int i = 63; i >= 0; i--) if (!cl[i]) { fx = i & 7; fy = i >> 3; }
+        }
         for (int sy = 0; sy < 8; sy++) for (int sx = 0; sx < 8; sx++) {
             uint32_t *o = b->px + sy * SCR_H * WORLD_W + sx * SCR_W;
-            if (c && !cl[sy * 8 + sx]) {      /* filler (no town): the game never shows it; its colour
-                                                 is sprite colour 0, which differs per town -> black */
-                for (int y = 0; y < SCR_H; y++) for (int x = 0; x < SCR_W; x++) o[y * WORLD_W + x] = 0;
-                continue;
-            }
+            /* Towns: the filler screen (grass etc.) is what the game shows beyond the town wall (the
+               camera follows the party up to the wall); the other towns sharing the table are not
+               neighbours in the world, so they are drawn as filler too. */
+            if (c && cl[sy * 8 + sx] != c) { draw_screen(&v, fx, fy, o, WORLD_W); continue; }
             draw_screen(&v, sx, sy, o, WORLD_W);
             if (!c) continue;
-            if (cl[sy * 8 + sx] == c) {
-                if (sx < b->x0) b->x0 = sx; if (sx > b->x1) b->x1 = sx;
-                if (sy < b->y0) b->y0 = sy; if (sy > b->y1) b->y1 = sy;
-                continue;
-            }
-            for (int y = 0; y < SCR_H; y++) for (int x = 0; x < SCR_W; x++) {   /* not this town: 30 % */
-                uint32_t p = o[y * WORLD_W + x];
-                o[y * WORLD_W + x] = ((p >> 16 & 255) * 77 >> 8) << 16 | ((p >> 8 & 255) * 77 >> 8) << 8 | (p & 255) * 77 >> 8;
-            }
+            if (sx < b->x0) b->x0 = sx; if (sx > b->x1) b->x1 = sx;
+            if (sy < b->y0) b->y0 = sy; if (sy > b->y1) b->y1 = sy;
         }
         b->spr = g_used_spr; b->pal = g_pal_hash; b->ts = ts; b->cl = c;
         b->gen = ++g_gen; b->valid = true;
@@ -560,9 +570,7 @@ static void draw_view(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh
             }
         }
         if (r < 2) r = 2;
-        float e = r * 0.45f;
-        hud_rect(space, cx - r - e, cy - r - e, 2 * (r + e), 2 * (r + e), rim);
-        hud_rect(space, cx - r, cy - r, 2 * r, 2 * r, 0xFFEB3C3Cu);
+        hud_marker(space, cx, cy, r, r * 0.45f, 0xFFEB3C3Cu, rim);   /* snapped by the host: even rim */
         return;
     }
     int ix = (int)mx, iy = (int)my, iw = (int)dw, ih = (int)dh;
