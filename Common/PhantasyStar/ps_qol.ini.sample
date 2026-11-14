@@ -1,12 +1,27 @@
 ; Copy to "ps_qol.ini" in the folder you run the game from (Games/<slug>/ when using play.ps1).
-; All values below = original game. Everything can also be changed in game: F1 (or gamepad Back)
-; opens the settings HUD; closing it saves this file.
-exp_multiplier     = 1      ; battle EXP reward multiplier, 1..100 (capped so no character overflows 65535 EXP)
-meseta_multiplier  = 1      ; battle Meseta reward multiplier, 1..100 (money still tops out at 65535)
+; All values below = original game (except fast_forward, which is our own speed key).
+; Everything can also be changed in game: F1 or gamepad Start opens the settings HUD; closing it
+; saves this file (the BUTTONS tab lists all keys and pad buttons).
+
+; MULTIPLIERS tab
+exp_multiplier     = 1      ; battle EXP reward multiplier, 0..100 (0 = none; capped so no character overflows 65535 EXP)
+meseta_multiplier  = 1      ; battle Meseta reward multiplier, 0..100 (0 = none; money still tops out at 65535)
+damage_dealt       = 1      ; damage the party deals: 0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5 or 10 (1 = original)
+damage_received    = 1      ; damage the party takes: same steps, 1 = original, 0 = invincible
+
+; OPTIONS tab
 encounter_percent  = 100    ; random encounter chance: 100 = original, 50 = half, 0 = none (up to 200)
-automap            = 0      ; extra auto-map side window (the map is always on the HUD MAP page: F1 / pad Back opens on it)
 walk_speed         = 1      ; 1 = original, 2 or 4 = faster walking on maps (vehicles: x2 max); all builds except the 2.5 retranslations
+fast_forward       = 4      ; speed while TAB / gamepad RT is held: 0.5 (slow motion), 1, 2 or 4 (gamepad LT is always x0.5)
+side_panel         = 0      ; 1 = widescreen window with a side panel: party, meseta, map (like SEGA AGES; also gamepad Back / F2)
 map_reveal         = 0      ; dungeon map: 0 = explored cells only, 1 = the whole floor
 map_secrets        = 1      ; dungeon map: 1 = mark secret walls, pits, chests, events (like the SEGA AGES map); 0 = only where you have stood
-side_panel         = 0      ; 1 = widescreen window with a side panel: party, meseta, map (like SEGA AGES; HUD option SIDE PANEL)
-fast_forward       = 4      ; speed while TAB / gamepad RT is held (LT is always x0.5): 0.5 (slow motion), 1, 2 or 4 (HUD option FAST FORWARD)
+hovercraft_land    = 0      ; 1 = the hovercraft also drives on land like the Land Rover (board it anywhere; gamepad RB / key V)
+automap            = 0      ; extra auto-map side window (old; the map is the HUD's MAP tab, where the HUD opens)
+
+; SOUND tab
+music_volume       = 100    ; music volume in percent (0..100)
+sfx_volume         = 100    ; sound effects volume in percent (0..100)
+
+; ITEMS tab
+item_names         = 0      ; 0 = the game's item names, 1 = ps_item_names.txt (game folder or Common/PhantasyStar/)
