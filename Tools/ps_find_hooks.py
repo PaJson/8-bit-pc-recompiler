@@ -28,6 +28,12 @@ GROUPS = [
     #   call .. ; pop af ; add a,(ix+1) ; jr c,+ ; xor a ; + ld (ix+1),a ; ret nz
     # LABEL_15C2 (enemy attacks + enemy magic on the party): rrca ; and $7F ; cpl ; add a,(ix+1) ;
     #   jr c,+ ; xor a ; + ld (ix+1),a ; jr nz
+    # EXP multiplier, per character (ps_qol.c ps_exp_add): CalculateExp
+    #   ld hl,(CurrentBattle_EXPReward) ; add hl,de ; jr nc,+ ; ld hl,$FFFF ; + ld (iy+exp),l ;
+    #   ld (iy+exp+1),h ; ret c  -> hook the add (saturate without carry), resume at the store.
+    ("exp", [
+        ("ps_exp_add", "2a d0 c2 19 30 03 21 ff ff fd 75 .. fd 74 .. d8", 3, 6),
+    ]),
     ("damage", [
         ("ps_damage", "f5 3e ad 32 04 c0 cd .. .. f1 dd 86 01 38 01 af dd 77 01 c0", 10, 3),
         ("ps_damage", "0f e6 7f 2f dd 86 01 38 01 af dd 77 01 20", 4, 3),

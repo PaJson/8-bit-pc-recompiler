@@ -412,6 +412,22 @@ static bool has_item(uint8_t id)
     return false;
 }
 
+/* ---- EXP add per character ([insn_hooks] ps_exp_add, Tools/ps_find_hooks.py group "exp") ----
+ * CalculateExp: `ld hl,(CurrentBattle_EXPReward) ; add hl,de ; jr nc,+ ; ld hl,$FFFF ; + ld (iy+exp),l ;
+ * ld (iy+exp+1),h ; ret c ; ...level-up check`. On overflow the game stores 65535 and skips that
+ * character's level-up check (carry). With an EXP multiplier the hook adds with saturation at 65535
+ * and no carry, so every character gets the full reward (up to 65535) and its level-up check runs;
+ * an earlier version capped the whole party's reward at the fullest member's headroom instead (user
+ * report 2026-11-14: Alis at 65535 -> everybody got x1). At x1 the original code runs. */
+int ps_exp_add(void)
+{
+    if (exp_mult() == 1) return 0;
+    uint32_t sum = (uint32_t)z80_hl(&g_z80) + z80_de(&g_z80);
+    z80_set_hl(&g_z80, (uint16_t)(sum > 0xFFFF ? 0xFFFF : sum));
+    z80f_set(&g_z80, Z80_FLAG_C, false);
+    return 1;                                  /* -> ld (iy+exp),l */
+}
+
 /* ---- battle auto attack: RB / key V = on, LB / key C = off (only during a battle) ----
  * LABEL_100F runs a battle; each round it walks the party (LABEL_1074, $C267 = character) and for
  * every living member without a command opens the command menu (LABEL_108A: draws the enemy-name,
@@ -425,25 +441,25 @@ static bool has_item(uint8_t id)
  * "In battle" = from LABEL_100F (ps_battle_begin) to the next walking step (ps_items_walk_mark):
  * there LB / RB switch auto attack instead of the vehicles. Auto attack is off at every battle start.
  * Test env PS_VEH_PRESS (1 = LB, 2 = RB), PS_BATTLE_LOG=1. */
-static bool s_in_battle, s_auto;
+static bool s_in_battle, s_auto, s_battle_won;   /* won: all enemies down, victory texts follow */
 static uint16_t s_cmd_ret;                     /* return address of the battle menu's CheckOptionSelect */
 static void battle_init(void)
 {
     long m = find_rom("11 0c 00 19 7e b7 20 .. cd .. .. cd .. .. cd .. .. 21 82 78 22 69 c2 3e 04 32 6e c2 cd .. .. cb 61 c2 .. .. 21 .. .. cd .. .. cd .. .. 3a 67 c2 fe 04");
     s_cmd_ret = m > 0 ? (uint16_t)(m + 31) : 0;
-    s_in_battle = s_auto = false;
+    s_in_battle = s_auto = s_battle_won = false;
 }
 static int battle_log(void) { static int on = -1; if (on < 0) on = getenv("PS_BATTLE_LOG") != NULL; return on; }
 int ps_battle_begin(void)
 {
-    s_in_battle = true; s_auto = false;
+    s_in_battle = true; s_auto = s_battle_won = false;
     if (battle_log()) fprintf(stderr, "[battle] begin\n");
     return 0;
 }
 void ps_battle_walking(void)                   /* ps_items_walk_mark: walking again = no battle */
 {
     if (s_in_battle && battle_log()) fprintf(stderr, "[battle] end (walking)\n");
-    s_in_battle = s_auto = false;
+    s_in_battle = s_auto = s_battle_won = false;
 }
 int ps_battle_cmd(void)
 {
@@ -463,6 +479,17 @@ int ps_battle_select(void)
         if (battle_log()) fprintf(stderr, "[battle] auto attack: open menu answered\n");
     }
     return 0;
+}
+/* auto attack ends with the battle: as soon as no enemy has HP left (the battle loop's own victory
+   test after each action, LABEL_10E7: HP at $C441 + 16*n, 8 slots) - before the victory texts */
+static void battle_frame(void)
+{
+    if (!s_in_battle || s_battle_won) return;
+    for (int n = 0; n < 8; n++) if (sms_read8((uint16_t)(0xC441 + 16 * n))) return;
+    s_battle_won = true;
+    if (!s_auto) return;
+    s_auto = false;
+    if (battle_log()) fprintf(stderr, "[battle] all enemies down: auto attack off\n");
 }
 static void battle_overlay(uint32_t *fb, int w, int h)
 {
@@ -487,6 +514,7 @@ static void vehicle_frame(uint64_t frame)
         } }
     uint8_t rise = (uint8_t)(m & ~last); last = m;
     if (s_in_battle) {                         /* battle: LB / RB = auto attack off / on */
+        if (s_battle_won) rise = 0;            /* victory texts: nothing to switch any more */
         if (rise & HUD_EXTRA_2) s_auto = true;
         if (rise & HUD_EXTRA_1) s_auto = false;
         if ((rise & 3) && battle_log()) fprintf(stderr, "[battle] auto attack %s\n", s_auto ? "on" : "off");
@@ -796,6 +824,7 @@ void ps_on_frame_post(uint64_t frame)
     ps_panel_frame(frame);
     ps_fly_frame();
     vehicle_frame(frame);
+    battle_frame();
     sound_frame();
 
     {   /* test: PS_DAMAGE_LOG=1 prints every HP change of the party (P0..3) and the enemies (E0..7) */
@@ -811,26 +840,17 @@ void ps_on_frame_post(uint64_t frame)
     static uint16_t last_exp;           /* last EXP reward value we produced (0 = none yet) */
     static int      enc_base = -1, enc_written = -1;
 
-    /* Battle rewards: scale once, right after the battle setup stored a new EXP value.
-     * EXP: CalculateExp adds the reward to each living member's 16-bit EXP; on overflow it stores
-     * 65535 and returns BEFORE the level-up check (`ret c`), so a character pushed to 65535 would
-     * never level up again. The scaled reward is therefore capped at what every living member can
-     * still take (never below the original reward = original behaviour). The game levels a
-     * character up at most once per battle, also with huge rewards (original behaviour, kept).
+    /* Battle rewards: scale once, right after the battle setup stored a new EXP value (16-bit,
+     * clamped at 65535; AwardEXP shows it in the victory text and CalculateExp adds it to every
+     * living member). The overflow of a character's EXP is handled per character by ps_exp_add.
+     * The game levels a character up at most once per battle (original behaviour, kept).
      * Meseta: 16-bit; the game's add (LABEL_297A) clamps the money at 65535 itself. */
     if (exp_mult() != 1 || mes_mult() != 1) {
         uint16_t exp = (uint16_t)(sms_read8(RAM_EXP) | (sms_read8(RAM_EXP + 1) << 8));
         if (exp == 0) last_exp = 0;
         else if (exp != last_exp) {
             uint32_t ne = (uint32_t)exp * exp_mult();
-            uint32_t room = 0xFFFF;
-            for (int c = 0; c < 4; c++) {
-                uint16_t sb = (uint16_t)(RAM_STATS + 0x10 * c);
-                if (!(sms_read8(sb) & 1)) continue;                  /* not alive / not in the party */
-                uint32_t have = sms_read8((uint16_t)(sb + 3)) | (sms_read8((uint16_t)(sb + 4)) << 8);
-                if (0xFFFFu - have < room) room = 0xFFFFu - have;
-            }
-            if (ne > room) ne = room > exp ? room : exp;
+            if (ne > 0xFFFF) ne = 0xFFFF;
             sms_write8(RAM_EXP, (uint8_t)ne); sms_write8(RAM_EXP + 1, (uint8_t)(ne >> 8));
             last_exp = (uint16_t)ne;
             if (mes_mult() != 1) {
