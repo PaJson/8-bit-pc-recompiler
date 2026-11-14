@@ -388,7 +388,7 @@ int ps_hover_board(void)
  *     LABEL_7732 (hovercraft: land next to it, by the facing direction $C2D7) -> $C30E = 0.
  *   The menu then goes back through GameMode_LoadInteraction / _Interaction to GameMode_LoadMap,
  *   which builds the party / vehicle object for $C30E. We do the RAM writes of that path (LABEL_B41,
- *   LoadInteraction's camera fraction reset, the Interaction exit) and set GameMode_LoadMap: one fade
+ *   the Interaction exit; not LoadInteraction's scroll reset, LoadMap does that) and set GameMode_LoadMap: one fade
  *   out / in like Fly. The Interaction_Type check of the item code always passes there (LoadInteraction
  *   makes it non-zero), so it is not repeated. Runs in the ps_fly_go hook (GameMode_Map, standing
  *   still, after the battle check); a refused press does nothing. Test env PS_VEH_PRESS=frame:n,...
@@ -458,7 +458,9 @@ int ps_vehicle_go(void)
     sms_write8(0xC29D, 0);                                     /* LABEL_B41 */
     for (uint16_t p = 0xC26F; p <= 0xC286; p++) sms_write8(p, 0);
     for (uint16_t p = 0xC800; p <= 0xC8FF; p++) sms_write8(p, 0);
-    sms_write8(0xC300, 0); sms_write8(0xC304, 0); sms_write8(0xC2E9, 0);   /* GameMode_LoadInteraction */
+    sms_write8(0xC2E9, 0);                                     /* GameMode_LoadInteraction (its $C300/$C304 = 0 are
+                                                                  the VDP scroll shadows: LoadMap sets them after its own
+                                                                  fade-out; zeroing them here moved the picture mid-fade) */
     sms_write8(s_it_addr, 0); sms_write8(0xC2D5, 0);           /* GameMode_Interaction exit */
     sms_write8(0xC2DB, 0); sms_write8(0xC2DC, 0);
     sms_write8(RAM_GAME_MODE, 0x08);                           /* GameMode_LoadMap */

@@ -37,3 +37,6 @@ __pycache__/
 # Reference material from fan sites / sprite rips (the user's, not ours; ROM-derived art)
 Meta/
 Games/*/build_log.txt
+
+# user bug reports (screenshots / recordings of the game)
+Bugs/
