@@ -43,3 +43,7 @@ Bugs/
 
 # the user's own launcher artwork (Images/Background.jpg is used if present; never committed)
 Images/
+
+# launcher: local settings and build output
+launcher.ini
+Launcher/build/
