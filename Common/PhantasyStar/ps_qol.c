@@ -540,7 +540,7 @@ static int hud_open_page(void)   /* in a dungeon: the map (test: PS_HUD_PAGE=n f
     ps_fly_hud_opened();
     const char *e = getenv("PS_HUD_PAGE");
     if (e) return atoi(e);
-    return ps_automap_in_dungeon() ? 3 : 0;
+    return hud_page_index(ps_automap_in_dungeon() ? "MAP" : "OPTIONS");
 }
 
 void ps_on_post_reset(void)
@@ -560,6 +560,8 @@ void ps_on_post_reset(void)
         hud_add_page_ex("MAP", map_page_draw, map_page_key, true);
         hud_add_page_ex("FLY", ps_fly_hud_draw, ps_fly_hud_key, true);
         hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0]));
+        static const char *const order[] = { "MAP", "FLY", "ITEMS", "OPTIONS", "MULTIPLIERS", "SOUND" };
+        hud_set_page_order(order, (int)(sizeof order / sizeof order[0]));
         pages_added = true;
     }
     hud_set_open_page(hud_open_page);
