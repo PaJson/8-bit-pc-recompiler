@@ -281,10 +281,10 @@ void ps_panel_draw(uint32_t *b, int w, int h)
 /* test: PS_PANEL_PPM=<file> + PS_PANEL_FRAME=<n> writes the panel of frame n (headless, no window) */
 void ps_panel_frame(uint64_t frame)
 {
-    {   /* test: PS_PANEL_TOGGLE=<n> flips the panel on/off at frame n (as the HUD option does) */
+    {   /* test: PS_PANEL_TOGGLE=<n> flips the panel at frame n (as pad Back / F2 do) */
         static long tog = -2;
         if (tog == -2) { const char *t = getenv("PS_PANEL_TOGGLE"); tog = t ? atol(t) : -1; }
-        if (tog >= 0 && frame == (uint64_t)tog) hud_set_panel_enabled(!hud_panel_active());
+        if (tog >= 0 && frame == (uint64_t)tog) hud_toggle_panel();
         /* test: PS_HUD_OPEN=<n> opens the HUD at frame n (window tests: SMS_WINDOW_SHOT + _EXIT) */
         static long hop = -2;
         if (hop == -2) { const char *t = getenv("PS_HUD_OPEN"); hop = t ? atol(t) : -1; }

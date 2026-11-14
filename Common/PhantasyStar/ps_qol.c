@@ -472,6 +472,42 @@ static void on_map_changed(void) { ps_automap_enable(s_map_i != 0); }
 static void on_panel_changed(void) { hud_set_panel_enabled(s_panel_i != 0); }
 static void on_view_changed(void) { ps_automap_set_view(s_reveal_i, s_secrets_i); }
 static void on_ff_changed(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
+static void on_panel_toggled(bool on) { s_panel_i = on; save_config(); }   /* pad Back / F2 */
+
+/* ---- BUTTONS page: every pad button / key and what it does (incl. our additions) ---- */
+static void buttons_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
+{
+    const uint32_t CYAN = 0xFF60D0FF, WHITE = 0xFFFFFFFF, GREY = 0xFFA0A0B0, YEL = 0xFFFFE040;
+    char ff[16];
+    snprintf(ff, sizeof ff, "FAST X%g", k_ff_vals[s_ff_i]);
+    bool st = hud_start_opens();
+    const char *rows[][3] = {
+        { NULL,          "PAD",         "KEYBOARD" },
+        { "MOVE",        "D-PAD/STICK", "ARROWS" },
+        { "BUTTON 1",    "A, X",        "Z" },
+        { "BUTTON 2",    "B, Y",        "X" },
+        { "HUD",         st ? "START" : "BACK", "F1" },
+        { "SIDE PANEL",  st ? "BACK" : "-",     "F2" },
+        { ff,            "RT (HOLD)",   "TAB (HOLD)" },
+        { "SLOW X0.5",   "LT (HOLD)",   "-" },
+        { "ROVER/DIGR",  "LB",          "C" },
+        { "HOVERCRAFT",  "RB",          "V" },
+        { "FULLSCREEN",  "-",           "F11, ALT+ENTER" },
+        { "QUIT",        "-",           "ESC" },
+        { "",            NULL,          NULL },          /* heading: in the HUD */
+        { "TABS",        "LB, RB",      "Q, E" },
+        { "CONFIRM",     "B",           "ENTER/SPACE/X" },
+        { "CLOSE",       st ? "A, START" : "A, BACK", "ESC, Z, F1" },
+    };
+    int n = (int)(sizeof rows / sizeof rows[0]), y = y0, cp = x0 + 4 + 6 * 12, ck = cp + 6 * 12;   /* 11 + 11 + 14 chars */
+    for (int i = 0; i < n && y + 7 <= y1; i++, y += 8) {
+        if (!rows[i][0]) { hud_text(fb, w, h, cp, y, rows[i][1], CYAN); hud_text(fb, w, h, ck, y, rows[i][2], CYAN); continue; }
+        if (!rows[i][1]) { hud_text(fb, w, h, x0 + 4, y, "IN THE HUD", CYAN); continue; }
+        hud_text(fb, w, h, x0 + 4, y, rows[i][0], i == 6 || i == 7 ? YEL : WHITE);
+        hud_text(fb, w, h, cp, y, rows[i][1], strcmp(rows[i][1], "-") ? WHITE : GREY);
+        hud_text(fb, w, h, ck, y, rows[i][2], strcmp(rows[i][2], "-") ? WHITE : GREY);
+    }
+}
 static const char *const k_reveal_names[]  = { "EXPLORED", "WHOLE FLOOR" };
 static const char *const k_secrets_names[] = { "HIDDEN", "SHOWN" };
 
@@ -648,7 +684,8 @@ void ps_on_post_reset(void)
         hud_add_page_ex("MAP", map_page_draw, map_page_key, true);
         hud_add_page_ex("FLY", ps_fly_hud_draw, ps_fly_hud_key, true);
         hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0]));
-        static const char *const order[] = { "MAP", "FLY", "ITEMS", "OPTIONS", "MULTIPLIERS", "SOUND" };
+        hud_add_page("BUTTONS", buttons_draw, NULL);
+        static const char *const order[] = { "MAP", "FLY", "ITEMS", "OPTIONS", "MULTIPLIERS", "SOUND", "BUTTONS" };
         hud_set_page_order(order, (int)(sizeof order / sizeof order[0]));
         pages_added = true;
     }
@@ -668,6 +705,7 @@ void ps_on_post_reset(void)
     hud_set_on_close(save_config);
     hud_set_panel(ps_panel_draw);
     hud_set_panel_enabled(s_panel_i != 0);
+    hud_set_on_panel_toggle(on_panel_toggled);
 }
 
 void ps_on_frame_post(uint64_t frame)
