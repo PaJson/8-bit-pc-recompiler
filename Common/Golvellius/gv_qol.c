@@ -34,6 +34,8 @@
 #include "sms_runtime.h"
 #include "safe_file.h"
 #include "gv_patch.h"
+#include "audio/sn76489.h"
+#include "audio/ym2413.h"
 #include "video/sms_vdp.h"
 
 extern uint8_t *glue_rom_image(size_t *size);
@@ -49,6 +51,7 @@ static const double k_ff_vals[] = { 0.5, 1, 2, 4 };
 static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
 static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i, s_free_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
+static int s_bgm_i = 100, s_sfx_i = 100;            /* SOUND tab: music / effects volume, percent */
 static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_8way_i, s_reach_i;
 extern int gv_cave_reveal;                         /* gv_cave.c: DUNGEON MAP option */
 extern int gv_cave_info_all;                       /* gv_info.c: CAVE INFO option */
@@ -106,6 +109,8 @@ static void load_config(void)
         else if (!strcmp(key, "eight_way_walking")) s_8way_i = v != 0;
         else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "overworld_music")) s_music_i = v < 0 ? 0 : v > 5 ? 5 : (int)v;
+        else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fast_forward") && v > 0) {
             s_ff_i = 0; for (int i = 1; i < 4; i++) if (fabs(k_ff_vals[i] - v) < fabs(k_ff_vals[s_ff_i] - v)) s_ff_i = i;
         }
@@ -132,6 +137,8 @@ static void save_config(void)
     fprintf(f, "eight_way_walking = %d  ; 1 = diagonal input walks diagonally on the overworld (original: left / right only)\n", s_8way_i);
     fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
     fprintf(f, "overworld_music = %d    ; 0 = the game's choice (by sword + shield), 1..5 = that theme once unlocked\n", s_music_i);
+    fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
+    fprintf(f, "sfx_volume     = %-5d ; sound effects volume in percent (0..100)\n", s_sfx_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
     safe_fclose(f, s_ini);
 }
@@ -175,8 +182,48 @@ static const HudOption k_mult_opts[] = {
 };
 static bool s_music_dirty;
 static void on_music(void) { s_music_dirty = true; }
-static const HudOption k_sound_opts[] = {
+
+/* MUSIC / SOUND EFFECTS volume (SOUND tab, like Phantasy Star's). The sound driver (bank 1, $6DF0..)
+   runs 10 channel structures of $26 bytes at $C64B ($7891 table): +0 = 0 when idle, +6 = the output
+   channel (set by a song command, $7248; read by the output stage $751C: FM channel 0..8 in FM mode,
+   $C646 bit 7), +$14 = the sound number that owns it ($77E2). Sounds $01-$20 are the songs and
+   jingles (4-5 tracks), $21 and up the effects (1-2 tracks). Every frame the outputs driven by an
+   active effect get the effect volume, all others the music volume (host mixing only). */
+static char s_pct_buf[101][6];
+static const char *k_pct[101];
+static unsigned vol_gain(int pct) { double g = pct / 100.0; return (unsigned)(g * g * 256.0 + 0.5); }  /* loudness-like curve */
+static void sound_frame(void)
+{
+    bool fm = (sms_read8(0xC646) & 0x80) != 0, sfx_fm[9] = { false }, sfx_psg[4] = { false };
+    for (int n = 0; n < 10; n++) {
+        uint16_t b = (uint16_t)(0xC64B + 0x26 * n);
+        if (!sms_read8(b) || sms_read8((uint16_t)(b + 0x14)) < 0x21) continue;
+        int c = sms_read8((uint16_t)(b + 6));
+        if (fm) { if (c < 9) sfx_fm[c] = true; } else sfx_psg[c & 3] = true;
+    }
+    unsigned gb = vol_gain(s_bgm_i), gs = vol_gain(s_sfx_i);
+    for (unsigned i = 0; i < 4; i++) psg_set_channel_gain(i, sfx_psg[i] ? gs : gb);
+    for (unsigned i = 0; i < 14; i++) fm_set_channel_gain(i, i < 9 && sfx_fm[i] ? gs : gb);
+    {   /* test: GV_SND_LOG=1 prints every change of the effect channel set */
+        static int on = -1; static unsigned last;
+        if (on < 0) on = getenv("GV_SND_LOG") != NULL;
+        unsigned m = 0;
+        for (int i = 0; i < 4; i++) m |= (unsigned)sfx_psg[i] << i;
+        for (int i = 0; i < 9; i++) m |= (unsigned)sfx_fm[i] << (8 + i);
+        if (on && m != last) {
+            fprintf(stderr, "[snd] effects on psg %X fm %03X:", m & 15, m >> 8);
+            for (int n = 0; n < 10; n++) { uint16_t b = (uint16_t)(0xC64B + 0x26 * n);
+                if (sms_read8(b)) fprintf(stderr, " s%d=%02X>%d", n, sms_read8((uint16_t)(b + 0x14)), sms_read8((uint16_t)(b + 6))); }
+            fprintf(stderr, "\n");
+            last = m;
+        }
+    }
+}
+static void on_volume_changed(void) { sound_frame(); }
+static HudOption k_sound_opts[] = {
     { "OVERWORLD MUSIC", k_music, 6, &s_music_i, on_music },
+    { "MUSIC",           k_pct, 101, &s_bgm_i,   on_volume_changed },
+    { "SOUND EFFECTS",   k_pct, 101, &s_sfx_i,   on_volume_changed },
 };
 
 /* ==== MULTIPLIERS, DINA, OVERWORLD MUSIC, MAP TELEPORT ([insn_hooks]; all return 0 = original) ==== */
@@ -521,6 +568,7 @@ void gv_on_frame_post(uint64_t frame)
     tp_place_tick();
     gv_cave_frame();
     gv_cave_test(frame);
+    sound_frame();
     { extern void gv_info_test(uint64_t); gv_info_test(frame); }
     gv_panel_test(frame);
     {   /* test: GV_SPR_LOG=1 prints overworld frames whose end-of-frame sprite table has no sprite near
@@ -601,6 +649,7 @@ void gv_on_post_reset(void)
     {   static bool pages;
         if (!pages) { pages = true;
             hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
+            for (int i = 0; i <= 100; i++) { snprintf(s_pct_buf[i], sizeof s_pct_buf[i], "%d%%", i); k_pct[i] = s_pct_buf[i]; }
             hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0])); } }
     {   static const char *const order[] = { "MAP", "OPTIONS", "MULTIPLIERS", "SOUND" };
         hud_set_page_order(order, 4); }
