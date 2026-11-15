@@ -2,6 +2,11 @@
 
     python -I Tools/apply_patch.py <patch.ips|patch.bps> <in.sms> <out.sms> [<patch2> ...] [--force]
 
+A patch can also be read straight out of the author's zip: "<archive.zip>::<file in it>" (the file
+name alone is enough when it is unique in the archive), e.g.
+    "ROMs/Patches/.../PhantasyStar-SMS-EN-2.6.1.zip::ps1jert.en.bps"
+"<archive.zip>::" alone lists the archive's patch files.
+
 Several patches are applied one after another (e.g. a translation and then its update). The output
 is only written when every patch applied cleanly, and never over the input file.
 
@@ -10,9 +15,22 @@ are checked (a wrong source ROM is refused unless --force). IPS ("PATCH" ... "EO
 records, the optional 3-byte truncation size after "EOF". IPS has no checksums, so check the result
 yourself (the patch author usually names the source ROM's CRC32).
 """
-import sys, zlib
+import sys, zlib, zipfile, os
 
 def crc(b): return zlib.crc32(b) & 0xFFFFFFFF
+
+def read_patch(spec):
+    """a patch file, or "<zip>::<member>" (member matched by full name or by its file name)"""
+    if '::' not in spec: return open(spec, 'rb').read()
+    zpath, member = spec.split('::', 1)
+    zf = zipfile.ZipFile(zpath)
+    names = [n for n in zf.namelist() if not n.endswith('/')]
+    hits = [n for n in names if n == member or os.path.basename(n) == member]
+    if not member or len(hits) != 1:
+        cands = [n for n in names if n.lower().endswith(('.ips', '.bps'))]
+        raise ValueError((f'"{member}" is ' + ('ambiguous' if hits else 'not') + ' in the archive; ' if member else '')
+                         + 'patch files in it: ' + ', '.join(cands))
+    return zf.read(hits[0])
 
 def apply_ips(p, src):
     if p[:5] != b'PATCH': raise ValueError('not an IPS patch')
@@ -88,8 +106,8 @@ def main(argv):
     if out_path == src_path: print('refusing to overwrite the input ROM'); return 2
     rom = open(src_path, 'rb').read()
     for pp in patches:
-        p = open(pp, 'rb').read()
         try:
+            p = read_patch(pp)
             rom = apply_bps(p, rom, force) if p[:4] == b'BPS1' else apply_ips(p, rom)
         except ValueError as e:
             print(f'{pp}: {e}'); return 1

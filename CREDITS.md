@@ -5,9 +5,11 @@ quality-of-life features on top. It stands on other people's work. This file nam
 patches, research, code or ideas we use, and says what we use them for.
 
 **No ROMs and no patch files are part of this project.** You supply your own ROMs and, for the options
-below that need one, the author's own patch file. Get the patches from their official pages and put
-them in `ROMs/Patches/` (any subfolder; keeping the authors' file names is recommended, but the game
-finds a patch by its content, so a renamed file works too). `ROMs/` is never committed.
+below that need one, the author's own patch file. Download the patches from their official pages and
+put the downloads, as they are, anywhere in `ROMs/Patches/` (a zip does not need to be unpacked: the
+game finds a patch by its content, loose or inside the author's zip, whatever the folder or file is
+called). `ROMs/` is never committed. `Tools/apply_patch.py` makes the patched ROMs for the translation
+builds, also straight from the zip (`"<archive.zip>::<patch file>"`).
 
 ## Game patches and hacks
 
