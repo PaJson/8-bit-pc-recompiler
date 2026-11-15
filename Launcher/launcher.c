@@ -18,11 +18,12 @@
  * never taken as the background.
  * Text uses the engine HUD font (runner/hud.c). Images are decoded with GDI+ (part of Windows).
  *
- * Start screen: the background with a blinking PRESS START; Enter / Space / click / pad Start, A or B
- * shows the game list (fades in). launcher.ini: `splash = 0` skips it, `press_start_y = 50` = its height
- * (% of the window, centre of the text).
- * Keys: Up/Down (PgUp/PgDn, Home/End) select, Enter/Space play (build first if needed), R rebuild,
- * F11 / Alt+Enter fullscreen, Esc quit. Gamepad: D-pad / stick, A or Start play, Y rebuild.
+ * Start screen: the background with a blinking PRESS START; Enter / click / pad Start shows the game
+ * list (fades in), Esc quits. In the list: Enter / pad A / double click play, R / pad Y rebuild,
+ * Esc / pad B / Back return to the start screen (while a build runs, Esc quits). launcher.ini:
+ * `splash = 0` skips it, `press_start_y = 50` = its height (% of the window, centre of the text).
+ * Keys: Up/Down (PgUp/PgDn, Home/End) select, Enter play (build first if needed), R rebuild,
+ * F11 / Alt+Enter fullscreen. Gamepad: D-pad / stick, A play, Y rebuild.
  * Mouse: wheel, click selects, double click plays.
  *
  * launcher.ini (project root, optional): background = <image path>, panel = right | left,
@@ -581,7 +582,7 @@ static void draw_ui(void)
         text(tx, dy + 22 * sc, line, state_col(g->state), sc);
     }
     if (g_status[0]) { char line[260]; snprintf(line, sizeof line, "%.*s", (L.x1 - L.x0 - 16 * sc) / (6 * sc), g_status); text(tx, dy + 33 * sc, line, g_status_col, sc); }
-    text(tx, L.y1 - 13 * sc, g_proc_kind == 2 ? "Please wait ...   ESC QUIT" : "ENTER/A PLAY   R/Y REBUILD   ESC QUIT", 0xFF8890A0, sc);
+    text(tx, L.y1 - 13 * sc, g_proc_kind == 2 ? "Please wait ...   ESC QUIT" : "ENTER/A PLAY   R/Y REBUILD   ESC/B BACK", 0xFF8890A0, sc);
     SDL_UpdateTexture(g_ui_tex, NULL, g_ui, w * 4);
 }
 
@@ -723,6 +724,7 @@ static void draw_splash(void)
     SDL_UpdateTexture(g_ui_tex, NULL, g_ui, w * 4);
 }
 static void leave_splash(void) { g_splash = false; g_list_t = g_no_fade ? 0 : SDL_GetTicks(); }
+static void enter_splash(void) { g_splash = true; g_splash_t = SDL_GetTicks(); }   /* back from the list */
 
 static void render(void)
 {
@@ -876,17 +878,17 @@ int main(int argc, char **argv)
                         bool fs = (SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
                         SDL_SetWindowFullscreen(g_win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
                     }
-                    else if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) leave_splash();
+                    else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) leave_splash();
                 }
                 else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
                     Uint8 b = e.cbutton.button;
-                    if (b == SDL_CONTROLLER_BUTTON_START || b == SDL_CONTROLLER_BUTTON_A || b == SDL_CONTROLLER_BUTTON_B) leave_splash();
+                    if (b == SDL_CONTROLLER_BUTTON_START) leave_splash();
                 }
                 else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) leave_splash();
             }
             else if (e.type == SDL_KEYDOWN) {
                 SDL_Keycode k = e.key.keysym.sym;
-                if (k == SDLK_ESCAPE) quit = true;
+                if (k == SDLK_ESCAPE && !e.key.repeat) { if (g_proc_kind == 2) quit = true; else enter_splash(); }   /* building: ESC QUIT */
                 else if (k == SDLK_F11 || (k == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT))) {
                     bool fs = (SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
                     SDL_SetWindowFullscreen(g_win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -897,14 +899,15 @@ int main(int argc, char **argv)
                 else if (k == SDLK_PAGEDOWN) move_sel(10);
                 else if (k == SDLK_HOME) g_sel = 0;
                 else if (k == SDLK_END) g_sel = g_ngames - 1;
-                else if (!e.key.repeat && (k == SDLK_RETURN || k == SDLK_SPACE)) play_selected(false);
+                else if (!e.key.repeat && (k == SDLK_RETURN || k == SDLK_KP_ENTER)) play_selected(false);
                 else if (!e.key.repeat && k == SDLK_r) play_selected(true);
             }
             else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
                 Uint8 b = e.cbutton.button;
                 if (b == SDL_CONTROLLER_BUTTON_DPAD_UP) { move_sel(-1); nav_dir = -1; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
                 else if (b == SDL_CONTROLLER_BUTTON_DPAD_DOWN) { move_sel(1); nav_dir = 1; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
-                else if (b == SDL_CONTROLLER_BUTTON_A || b == SDL_CONTROLLER_BUTTON_START || b == SDL_CONTROLLER_BUTTON_B) play_selected(false);
+                else if (b == SDL_CONTROLLER_BUTTON_A) play_selected(false);
+                else if ((b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) && !g_proc_kind) enter_splash();
                 else if (b == SDL_CONTROLLER_BUTTON_Y) play_selected(true);
             }
             else if (e.type == SDL_CONTROLLERBUTTONUP) {
