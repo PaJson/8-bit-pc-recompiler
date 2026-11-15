@@ -390,7 +390,9 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
     char t[64], cn[8], hn[8];
     screen_name(s_cur, cn, sizeof cn);
     if (hero >= 0) screen_name(hero, hn, sizeof hn);
-    {   const char *an = gv_area_name(s_cur);                     /* the cursor's area + screen (gv_info.c) */
+    {   /* the cursor's area + screen (gv_info.c); "?" until the screen was visited (no spoilers) */
+        extern int gv_cave_info_all;                               /* option CAVE INFO = all: everything */
+        const char *an = s_seen[s_cur] || gv_cave_info_all ? gv_area_name(s_cur) : "?";
         if (an[0]) snprintf(t, sizeof t, "%s (%s)", an, cn); else snprintf(t, sizeof t, "SCREEN %s", cn);
     }
     hud_text(fb, w, h, x0 + 4, y0, t, CYAN);
@@ -398,7 +400,7 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
         if (gv_cave_known(s_cur) && gv_cave_label(s_cur, cl, sizeof cl, &done)) {
             hud_text(fb, w, h, x0 + 4, y0 + 10, cl, gv_pw_cave(s_cur) ? 0xFFFF40FFu : 0xFFF0C030u);
             if (done) hud_text(fb, w, h, x0 + 4 + 6 * ((int)strlen(cl) + 1), y0 + 10, done == 2 ? "TAKEN" : "BOUGHT", 0xFF60E060u);
-        } else if (!gv_cave_known(s_cur)) hud_text(fb, w, h, x0 + 4, y0 + 10, "CAVE: NOT ENTERED YET", GREY);
+        } else hud_text(fb, w, h, x0 + 4, y0 + 10, "?", GREY);     /* not been inside (CAVE INFO = entered caves) */
     }
     snprintf(t, sizeof t, "%d/%d", seen, NSCR);
     hud_text(fb, w, h, x1 - 4 - 6 * (int)strlen(t), y0, t, GREY);

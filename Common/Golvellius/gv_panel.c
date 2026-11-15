@@ -263,7 +263,7 @@ void gv_panel_draw(uint32_t *b, int w, int h)
         if (gv_cave_known(hero) && gv_cave_label(hero, cl, sizeof cl, &done)) {
             hud_text(b, w, h, 16 + 6 * 4, y + 24, cl, gv_pw_cave(hero) ? 0xFFFF40FFu : GOLDC);
             if (done) hud_text(b, w, h, 16 + 6 * (5 + (int)strlen(cl)), y + 24, done == 2 ? "TAKEN" : "BOUGHT", 0xFF60E060u);
-        }
+        } else hud_text(b, w, h, 16 + 6 * 4, y + 24, "?", GREY);      /* not been inside yet */
     }
     float mx = (float)bx0 + 4, my = (float)y + 36;
     bool live = on_overworld();

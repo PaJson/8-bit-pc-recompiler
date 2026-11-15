@@ -121,7 +121,7 @@ static void save_config(void)
     fprintf(f, "remember_password = %d  ; 1 = the last password shown is saved and pre-filled on the password screen\n", s_pw_i);
     fprintf(f, "cave_wall_tweaks = %d   ; 1 = Alianger's top-down cave wall tweaks (needs his IPS file in ROMs/Patches)\n", s_cave_i);
     fprintf(f, "free_crystals  = %d     ; 1 = cheat: crystals cost nothing (Alianger's IPS file in ROMs/Patches)\n", s_free_i);
-    fprintf(f, "cave_info_all  = %d     ; what each screen's cave holds (panel / MAP tab): 0 = caves you have entered, 1 = all (spoiler)\n", gv_cave_info_all);
+    fprintf(f, "cave_info_all  = %d     ; MAP tab / panel: 0 = area names of visited screens, caves you have been inside, 1 = everything (spoiler)\n", gv_cave_info_all);
     fprintf(f, "damage_dealt   = %-5d ; sword damage to enemies x0..x10 (1 = original)\n", s_dealt_i);
     fprintf(f, "damage_received = %-4d ; damage you take x0..x10 (1 = original; healing is not changed)\n", s_recv_i);
     fprintf(f, "gold_multiplier = %-4d ; gold dropped by enemies x0..x10 (1 = original; GOLD MAX still caps it)\n", s_gold_i);
