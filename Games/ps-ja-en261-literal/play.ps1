@@ -3,4 +3,4 @@ param([int]$Scale = 3, [double]$Speed = 1.0)
 Set-Location $PSScriptRoot
 New-Item -ItemType Directory -Force saves | Out-Null
 $env:SMS_SAVE_DIR = (Resolve-Path saves).Path
-& .\build\PsJaEn25LiteralRecomp.exe (Resolve-Path '../../ROMs/Patched/Phantasy Star (Japan) [Retranslation 2.5 EN literal].sms').Path --window $Scale --speed $Speed
+& .\build\PsJaEn261LiteralRecomp.exe (Resolve-Path '../../ROMs/Patched/Phantasy Star (Japan) [Retranslation 2.6.1 EN literal].sms').Path --window $Scale --speed $Speed

@@ -61,13 +61,12 @@ Every generated build is tied to its ROM's CRC32 (the runner refuses another ROM
 | ps-japan, ps-japan-rev1, ps-ages-ja | Japan, Japan Rev 1, AGES Ja | code is shifted; the **Japanese cart also drives the YM2413** (FM writes seen); tables found by `ps_find_tables.py` |
 | ps-korea | Korea (Unl) | no TMR SEGA header, but standard Sega mapper works; Hangul text renders |
 `ps_find_tables.py` pairs the 12 `GetPtrAndJump` call sites with Rev A's in ROM order (conditional `jp cc,$00E6` included), plus the inline VInt table, the `$4769` helper and the two sound tables (patterns in the script). Entry counts are copied from Rev A.
-Screenshots (intro frame 1199) verified by eye for Korea, Japan, Brazil, EN 2.5.
+Screenshots (intro frame 1199) verified by eye for Korea, Japan, Brazil, EN 2.5 (and EN 2.6.1, frame 1699).
 
-### Patched ROMs (made with `python -I Tools/apply_patch.py <patch> <in.sms> <out.sms> [<patch2> ...]` into `ROMs/Patched/`)
-- `ps1jert.en.bps/.literal.bps` (Retranslation 2.5) require the **original Japan** ROM (CRC checked by BPS; Japan Rev 1 is rejected). IPS output == BPS output.
-- `ps-ja-en25`, `ps-ja-en25-literal`: 0 misses, 100% static, English text renders. Needed (see `Tools/regen_patched.sh`): the retranslation adds an options-menu entry (menu table `$33B8` has 6 entries, not 5); its decompressor in bank 29 does `ld l,(table+a) ; inc h ; jp (hl)` = a 256-byte **byte jump table** (new `page` array in `[jump_tables]`); `$67E6`/`$655E` is bank-29 code reached by tail jumps (new `[functions] banked = [addr, bank, ...]`).
-- `ps-ja-smspower` = Japan + 101 KB IPS (translation 2.0 w/ new sprites) + the 7 KB IPS (v2.01 update, applied on top). **Open:** 5 dispatch misses (`$6500,$6534,$7E84,$B197,$2929`, slot banks 16/18/22/31 - a different bank-paging scheme than EN 2.5); runs via the hybrid interpreter fallback (81% static).
-- The 7 KB IPS alone on the Japan ROM just gives Japanese with new sprites (not useful).
+### Patched ROMs (`sh Tools/regen_patched.sh`: makes them from the official zip with `Tools/apply_patch.py` into `ROMs/Patched/`, then the game folders)
+- **Retranslation 2.6.1 (2026-11-15, replaced the 2.5 builds; user decision):** `ps1jert.en.bps` / `ps1jert.literal.bps` from `PhantasyStar-SMS-EN-2.6.1.zip` need the **original Japan** ROM (CRC checked by BPS; Japan Rev 1 is rejected). ROMs: `Phantasy Star (Japan) [Retranslation 2.6.1 EN].sms` CRC32 2CD659D4, `... EN literal].sms` C5D7BEB0. Builds `ps-ja-en261`, `ps-ja-en261-literal`: 0 misses, 100% static, 0 `[stack]`, final state = `--interp` after 20000 frames of `rand1` and of `rand2` (both builds); intro frame 1699 shows the mixed-case English text; QoL hooks = the same set as the 2.5 builds (walk speed: none, the retranslation has its own option; battle: the "(2.5)" group).
+- Needed per release (see `Tools/regen_patched.sh`): the options-menu table `$33B8` has 6 entries (stock 5); the text decompressor `ld a,(hl) ; inc hl ; push hl ; ld l,a ; ld h,TBL>>8 ; ld l,(hl) ; inc h ; jp (hl)` (bytes `7E 23 E5 6F 26 xx 6E 24 E9`) = a 256-byte **byte jump table** (`page` in `[jump_tables]`): 2.6.1 EN bank 30 `$4E00` (page `$4F`), literal bank 29 `$7800` (page `$79`) (2.5: bank 29 `$5200` / `$5100`); one routine reached only by tail jumps (`[functions] banked`): 2.6.1 EN bank 30 `$612B`, literal bank 30 `$5377` (2.5: bank 29 `$67E6` / `$655E`), found as the single dispatch miss of the first soak. A new release (2.7 ...) = the same three checks.
+- Dropped 2026-11-15: the 2.5 builds (`ps-ja-en25`, `-literal`) and `ps-ja-smspower` (SMS Power 2.0 / 2.01 with new sprites: had 5 dispatch misses, a different bank-paging scheme) with their ROMs.
 
 ## Everyday commands (OLD per-game dir `PhantasyStarSMSRecomp/`, kept for reference)
 
@@ -221,7 +220,7 @@ Games generated with `sms_generic` (NO game-specific jump tables except Sonic 1'
 - Golvellius method: a miss address that appears as a little-endian word in the ROM (`python -I`: search for `lo hi`) usually sits in a pointer table; dump the words around it, add `[jump_tables]` addr/bank/count.
 
 ## User decisions + status (2026-11-12 evening / night session)
-- **Main base = Rev A** (`Phantasy Star (USA, Europe) (Rev A).sms`, official English). 2.5 retranslation builds stay supported variants. Sonic is NOT a goal (only an engine regression check); `ps-ja-smspower` dropped.
+- **Main base = Rev A** (`Phantasy Star (USA, Europe) (Rev A).sms`, official English). 2.5 retranslation builds stay supported variants (replaced by 2.6.1 on 2026-11-15). Sonic is NOT a goal (only an engine regression check); `ps-ja-smspower` dropped.
 - QoL: our own C implementations (not the 2.5 patch's Z80 code) so they work on all ROMs. Settings both as config file and an **in-game HUD/overlay** (change EXP multiplier, encounters, etc. while playing). Ideas parked for later: world map + per-dungeon stats (items found) in the HUD, **widescreen overworld** (render the 8 surrounding screens from ROM map data), dungeon map in the widescreen area, gamepad support (SDL GameController; user has not tried a pad yet).
 - User verified by hand: ps-reva (town, dungeon, save+load OK), miracle-warriors (save+load OK, a few steps), golvellius (title, new game, first dungeon; password system untested).
 - Order agreed: (1) 2.5 ROMs to 100% (2) QoL framework on Rev A (3) walking speed etc. (4) Golvellius play-testing. Golvellius `-O1` vs `-O2`: same behaviour, only speed; `-O2` possible overnight but pointless.
