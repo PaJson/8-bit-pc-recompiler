@@ -1,5 +1,5 @@
 #!/bin/sh
-# Regenerate the game folders for the patched Japanese ROMs (ROMs/Patched/*, made with flips from ROMPatches/).
+# Regenerate the game folders for the patched Japanese ROMs (ROMs/Patched/*, made with flips from ROMs/Patches/).
 # Patch-specific facts (found by static analysis of the patched ROMs, see CLAUDE.md "Patched ROMs"):
 #   * Retranslation 2.5 adds an options-menu entry: the menu table at $33B8 has 6 entries (stock: 5).
 #   * its decompressor (bank 29, slot 1) does `ld a,(hl) ; ld l,(table+a) ; inc h ; jp (hl)`:

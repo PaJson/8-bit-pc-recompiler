@@ -27,6 +27,7 @@ Disasm/
 Emulicious/
 Masterlator/
 Patchers/
+# old location of ROMs/Patches (moved 2026-11-15; ROMs/ is ignored as a whole)
 ROMPatches/
 
 # Build/tool leftovers
