@@ -108,6 +108,11 @@ static int s_walk_i = 0;                       /* walk speed: 0 = x1 (original),
 static int s_reveal_i = 0, s_secrets_i = 1;    /* dungeon map: explored / whole floor; secrets hidden / shown */
 static int s_panel_i = 0;                      /* widescreen side panel (party, meseta, map) off / on */
 static int s_hover_i = 0;                      /* hovercraft also drives on land: off / on */
+static int s_flyall_i = 0, s_flyfree_i = 0;    /* FLY page: visited places / all; the spell's rules / free */
+static const char *const k_flylist_names[] = { "VISITED", "ALL" };
+static const char *const k_flycost_names[] = { "SPELL (8 MP)", "FREE" };
+int ps_fly_opt_all(void)  { return s_flyall_i; }
+int ps_fly_opt_free(void) { return s_flyfree_i; }
 static int s_bgm_i = 100, s_sfx_i = 100;       /* music / sound effects volume, percent */
 /* SOUND CHIP (ps_sound.c): ini key sound_chip = fm | psg | psg_western (absent = the ROM's own) */
 extern void        ps_sound_init(void);
@@ -166,6 +171,8 @@ static void load_config(void)
         else if (!strcmp(key, "map_secrets")) s_secrets_i = v != 0;
         else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
         else if (!strcmp(key, "hovercraft_land")) s_hover_i = v != 0;
+        else if (!strcmp(key, "fly_list_all")) s_flyall_i = v != 0;
+        else if (!strcmp(key, "fly_free")) s_flyfree_i = v != 0;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sound_chip")) {
@@ -200,6 +207,8 @@ static void save_config(void)
     fprintf(f, "item_names         = %d      ; HUD ITEMS page: 0 = the game's item names, 1 = ps_item_names.txt\n", g_ps_item_custom_names);
     fprintf(f, "side_panel         = %d      ; widescreen window with a side panel: party, meseta, map (like SEGA AGES)\n", s_panel_i);
     fprintf(f, "hovercraft_land    = %d      ; 1 = the hovercraft also drives on land like the Land Rover (board it anywhere)\n", s_hover_i);
+    fprintf(f, "fly_list_all       = %d      ; FLY page: 0 = towns and dungeons visited in this save, 1 = every place (also script-only ones)\n", s_flyall_i);
+    fprintf(f, "fly_free           = %d      ; FLY page: 0 = the Fly spell's rules (8 MP, on a map), 1 = free, also from inside a dungeon\n", s_flyfree_i);
     fprintf(f, "music_volume       = %-6d ; music volume in percent (0..100)\n", s_bgm_i);
     {   int m = ps_sound_mode() >= 0 ? ps_sound_mode() : s_chip_pref;
         if (m >= 0) fprintf(f, "sound_chip         = %-6s ; fm, psg or psg_western (a sound bank from another PS ROM in the ROM folder is used when needed)\n", ps_sound_mode_key(m)); }
@@ -706,6 +715,8 @@ static const HudOption k_opts[] = {
     { "MAP REVEAL",        k_reveal_names, 2,    &s_reveal_i, on_view_changed },
     { "MAP SECRETS",       k_secrets_names, 2,   &s_secrets_i, on_view_changed },
     { "HOVERCRAFT ON LAND", k_onoff,     2,      &s_hover_i, NULL },
+    { "FLY LIST",          k_flylist_names, 2,   &s_flyall_i, NULL },
+    { "FLY COST",          k_flycost_names, 2,   &s_flyfree_i, NULL },
 };
 
 /* ---- MAP page ----

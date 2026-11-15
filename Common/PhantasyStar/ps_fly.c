@@ -1,24 +1,39 @@
 /*
- * ps_fly.c - Phantasy Star (SMS) HUD "FLY" page: Alis's Fly spell to any town visited.
+ * ps_fly.c - Phantasy Star (SMS) HUD "FLY" page: Alis's Fly spell to any town or dungeon.
  *
  * The game's Fly (MapMagicList: Alis's 2nd map spell, MPCostData[$12] = 8 MP; handler LABEL_2140)
  * takes the party to the last church visited: the church sets $C317 (LABEL_2A85), Fly refuses
  * if Interaction_Type = 0, else sets $C2D8 = 8 and the player menu exit (LABEL_1C15) does
  * Game_mode = 8 (LoadMap), $C30E = 0 (vehicle), sound $BF and LABEL_787B with the 3-byte record
  * LABEL_1C7C[$C317] = (map, y, x) (9 church towns). LABEL_787B: $C308 = $C309 = map, camera
- * from the party cell (y: high nibble = screen row, low nibble = cell 0..11; x: cell 0..127),
+ * from the party cell (y: high nibble = screen row, low nibble = cell row 0..11; x: cell 0..127),
  * then LABEL_7908 clears the object RAM ($C800-$C8FF) and $C26F-$C286 and copies $C810 to $C2D7.
  *
- * This page does the same for any town in this save's visited list (ps_automap.c), with the same
- * conditions and cost (Alis alive, Fly learned = map_magic_num >= 2, MP >= cost, not refused
- * here). Landing: the game's own Fly spot for the 9 church towns, else the town gate (the planet
- * entrance tables, LABEL_DF1 + 12 in bank 3: 6-byte records y, x, type, and for type 8 (LoadMap)
- * a LABEL_787B record), else the party's last position there (map = the only map of that
- * tileset). Planet groups come from the entrance tables; towns without a planet gate (Air
- * Castle) are "Special". The warp itself is done by the [insn_hooks] hook ps_fly_go at the end
- * of GameMode_Map (`ld a,(Ctrl_1_held) ; and $30 ; ret z`, Rev A $0B35) = where the game opens
- * the player menu (standing still, after the battle check): the same RAM writes as the game,
- * then `ret z` returns to the main loop, which runs GameMode_LoadMap.
+ * Towns: the same for any town (landing: the game's Fly spot for the 9 church towns, else the town
+ * gate from the planet entrance tables (LABEL_DF1 + 12 in bank 3: 6-byte records y, x, type, a, b,
+ * c; type 8 = LoadMap with a LABEL_787B record), else the party's last position there).
+ * Dungeons: the entrance tables' type $0A records (a = floor, b = cell, c = facing): entering one
+ * on foot (LABEL_78BD) does Game_mode = $0A (LoadDungeon), Dungeon_position/index/direction =
+ * b/a/c, and the map camera = the camera from before the step onto the entrance ($C311/$C313),
+ * which is where you come out again. This page writes the same: floor, cell, facing, and the
+ * "return point" = the map cell one step outside the entrance (against the facing). Four places
+ * are only entered by scripts (no entrance record): the Governor's Palace basement (LABEL_4C70:
+ * floor $22 cell $E6, then the pit "fall" = $21), the credits dungeon (ending: $3D/$F7, fall =
+ * $3C), the jail of the fake-Roadpass robot (LABEL_534B: $15/$9C) and the Spaceport side of the
+ * Gothic Tunnel (LABEL_792A: $00/$DE; the tunnel is also entered from Gothic). Several floors are
+ * shared by different places (e.g. layout $00 = Medusa Cave, Gothic Tunnel and Baya Malay Pass as
+ * three separate parts of one 16 x 16 floor); the names below are per entrance (Tools/ps_dungeons.py
+ * splits every floor into its walkable parts and lists which entrance / stairs / pit reaches each).
+ *
+ * Options (ps_qol.c, OPTIONS tab): FLY LIST = VISITED (towns and dungeons this save has been to:
+ * ps_automap's visited maps / visited cells) or ALL; FLY COST = SPELL (the game's rules: on a map,
+ * Alis alive, Fly learned, 8 MP, not where the game refuses) or FREE (no spell, no MP, also from
+ * inside a dungeon). The warp runs in [insn_hooks] hooks: ps_fly_go at the end of GameMode_Map
+ * (`ld a,(Ctrl_1_held) ; and $30 ; ret z`, Rev A $0B35 = where the game opens the player menu,
+ * standing still after the battle check) and ps_fly_dungeon_go at GameMode_Dungeon's
+ * `call LABEL_65EE` (after its WaitForVInt; resume = its `ret z`): the RAM writes of the game's own
+ * paths, then `ret z` returns to the main loop, which runs GameMode_LoadMap / LoadDungeon.
+ * Test env: PS_FLY_DEBUG=1 (destination table + flights).
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -37,18 +52,26 @@ extern int         ps_worldmap_town_place(int tileset, int sx, int sy);
 extern int         ps_worldmap_tileset_of(int map);
 extern long        ps_worldmap_df1(void);
 extern bool        ps_automap_map_known(int map, int *px, int *py);
+extern bool        ps_automap_cell_visited(int floor, int pos);
+extern const char *ps_automap_floor_name(int floor);
+extern int         ps_fly_opt_all(void);     /* ps_qol.c: FLY LIST = ALL */
+extern int         ps_fly_opt_free(void);    /* ps_qol.c: FLY COST = FREE */
 
 #define RAM_GAME_MODE 0xC202
 #define RAM_MOVE_CNT  0xC265
 #define RAM_ALIS      0xC400                 /* +0 status (bit 0 alive), +2 MP, +7 max MP, +$F map spells */
 #define MODE_MAP      0x09
-#define MAX_DEST      32
+#define MODE_DUNGEON  0x0B
+#define MAX_DEST      96
 
 typedef struct {
-    int     place, group;                    /* group: 0 Palma, 1 Motavia, 2 Dezoris, 3 Special */
+    const char *name, *type;
+    int     place, group;                    /* town place (-1 = dungeon); group 0 Palma, 1 Motavia, 2 Dezoris, 3 Special */
     int     map;                             /* -1 = no landing known */
-    uint8_t y, x;                            /* LABEL_787B record */
-    int     kind;                            /* 0 church (Fly), 1 gate, 2 last position */
+    uint8_t y, x;                            /* LABEL_787B record: town landing, or a dungeon's return point */
+    int     kind;                            /* towns: 0 church (Fly), 1 gate, 2 last position; dungeons: 3 entrance, 4 script */
+    int     floor, pos, dir;                 /* dungeons (floor >= 0) */
+    const char *ret_town;                    /* script dungeons: the return point = this town's landing */
 } Dest;
 
 static const uint8_t *g_rom; static size_t g_rom_n;
@@ -57,9 +80,44 @@ static int      s_cost = 8;
 static uint16_t s_it_addr;                   /* Interaction_Type */
 static Dest     s_dest[MAX_DEST]; static int s_ndest;
 static int      s_pending = -1, s_pending_age; /* index into s_dest */
-static int      s_col, s_row;                /* page selection */
 static char     s_msg[48];                   /* last refusal, shown on the page */
 static long     s_abf = -1;                  /* LABEL_ABF: spaceship routes */
+static unsigned s_frame, s_dng_hook_frame;   /* the dungeon hook exists in this build if it ran lately */
+
+/* dungeon names per entrance (floor, cell): layouts are shared by different places (ps_dungeons.py).
+   The pairs below are guesses from the entrance positions where two caves share a floor
+   (Naula = north of Scion, Iala = south; Dezoris Paths 1-5 from their mouths / stairs). */
+static const struct { uint8_t floor, pos; const char *name, *type; } k_dng[] = {
+    { 0x00, 0x15, "Baya Malay Pass", "pass" }, { 0x00, 0x5A, "Baya Malay Pass", "pass" },
+    { 0x00, 0xDC, "Medusa Cave", "cave" }, { 0x00, 0x2E, "Gothic Tunnel", "tunnel" },
+    { 0x01, 0xD2, "Triada Prison", "prison" },
+    { 0x02, 0x5E, "Camineet Warehouse", "warehouse" }, { 0x02, 0x12, "Abion Warehouse", "warehouse" }, { 0x02, 0xDE, "Abion Warehouse", "warehouse" },
+    { 0x04, 0xD8, "Medusa Tower", "tower" }, { 0x0B, 0xB9, "Baya Malay Tower", "tower" },
+    { 0x13, 0x13, "Naula Cave", "cave" }, { 0x13, 0xDE, "Iala Cave", "cave" },
+    { 0x14, 0xCB, "Baya Malay Prison", "prison" }, { 0x14, 0x21, "Baya Malay Prison", "prison" },
+    { 0x15, 0xD1, "Drasgow Warehouse", "warehouse" }, { 0x15, 0xD8, "Dr. Mad's Lab", "lab" },
+    { 0x16, 0x21, "Bortevo Pass", "pass" }, { 0x16, 0xDE, "Bortevo Pass", "pass" },
+    { 0x17, 0xD7, "Island Tower", "tower" },
+    { 0x1E, 0x69, "Maharu Cave", "cave" }, { 0x24, 0xD9, "Tarzimal Cave", "cave" },
+    { 0x27, 0xD3, "Casba Cave", "cave" }, { 0x27, 0xDC, "Casba Cave", "cave" },
+    { 0x21, 0x61, "Path to the Governor", "passage" }, { 0x21, 0xD4, "Path to the Governor", "passage" },
+    { 0x28, 0x23, "Skure Tunnel", "tunnel" }, { 0x28, 0x6B, "Skure Tunnel", "tunnel" },
+    { 0x28, 0xDD, "Twintown Tunnel", "tunnel" }, { 0x28, 0x87, "Twintown Tunnel", "tunnel" },
+    { 0x2A, 0xDD, "Fort Guaron", "fort" }, { 0x2B, 0xD1, "Corona Tower", "tower" },
+    { 0x34, 0xD3, "Laconian Shield Cave", "cave" },
+    { 0x2F, 0xD2, "Dezoris Path 1", "path" }, { 0x2F, 0xDD, "Dezoris Path 1", "path" },
+    { 0x30, 0x87, "Dezoris Path 2", "path" }, { 0x30, 0xED, "Dezoris Path 2", "path" },
+    { 0x32, 0x59, "Dezoris Path 3", "path" }, { 0x32, 0xDB, "Dezoris Path 3", "path" },
+    { 0x31, 0x1C, "Dezoris Path 4", "path" }, { 0x31, 0xE2, "Dezoris Path 4", "path" },
+    { 0x30, 0x2E, "Dezoris Path 5", "path" }, { 0x30, 0x79, "Dezoris Path 5", "path" },
+    { 0x3A, 0xDD, "Aeroprism Cave", "cave" }, { 0x39, 0xD6, "Air Castle", "castle" },
+};
+/* script-only places: floor, cell, facing, group, name, type, return town */
+static const struct { uint8_t floor, pos, dir, group; const char *name, *type, *ret_town; } k_script[] = {
+    { 0x21, 0xE6, 0, 1, "Governor's Palace", "basement", "Paseo" },
+    { 0x15, 0x9C, 1, 0, "Roadpass Jail", "jail", "Camineet" },
+    { 0x3C, 0xF7, 0, 3, "Credits Dungeon", "ending", "Camineet" },
+};
 
 /* During a spaceship flight (GameMode_LoadShip / GameMode_Ship, route $C2E9 & $7F = 1-based entry
    of LABEL_ABF: departure planet record, arrival planet record, town record): the take-off /
@@ -100,11 +158,30 @@ static Dest *dest_of(int place)
     for (int i = 0; i < s_ndest; i++) if (s_dest[i].place == place) return &s_dest[i];
     return NULL;
 }
+static Dest *town_named(const char *name)
+{
+    for (int i = 0; i < s_ndest; i++) if (s_dest[i].place >= 0 && !strcmp(s_dest[i].name, name)) return &s_dest[i];
+    return NULL;
+}
 static int place_of_record(const uint8_t *r)  /* (map, y, x) -> town place, -1 */
 {
     int ts = ps_worldmap_tileset_of(r[0]);
     if (ts < 4) return -1;
     return ps_worldmap_town_place(ts, (r[2] & 0x7F) >> 4, (r[1] >> 4) & 7);
+}
+static const char *town_type(const char *name)
+{
+    return strstr(name, "Spaceport") ? "spaceport" : !strcmp(name, "Air Castle") ? "grounds" : "town";
+}
+
+/* the map cell one step from (yb, xb) against facing `dir` (0 north, 1 east, 2 south, 3 west):
+   where the party stood before stepping onto a dungeon entrance = where it comes out again */
+static void step_back(uint8_t *yb, uint8_t *xb, int dir)
+{
+    int row = ((*yb >> 4) & 7) * 12 + (*yb & 15), col = *xb & 0x7F;
+    if (dir == 0) row++; else if (dir == 2) row--; else if (dir == 1) col--; else col++;
+    row = (row + 96) % 96; col &= 0x7F;
+    *yb = (uint8_t)((row / 12) << 4 | (row % 12)); *xb = (uint8_t)col;
 }
 
 void ps_fly_init(void)
@@ -124,8 +201,10 @@ void ps_fly_init(void)
         fprintf(stderr, "[fly] tables not found (fly %ld, it %04X, df1 %ld): no FLY page\n", s_fly_tbl, s_it_addr, df1);
         return;
     }
-    for (int p = 4; p < ps_worldmap_num_places() && s_ndest < MAX_DEST; p++)
-        s_dest[s_ndest++] = (Dest){ p, 3, -1, 0, 0, 2 };
+    for (int p = 4; p < ps_worldmap_num_places() && s_ndest < MAX_DEST; p++) {
+        const char *nm = ps_worldmap_place_name(p);
+        s_dest[s_ndest++] = (Dest){ nm, town_type(nm), p, 3, -1, 0, 0, 2, -1, 0, 0, NULL };
+    }
     /* 1. the game's Fly spots (church towns) */
     for (int k = 0; k < 9; k++) {
         const uint8_t *r = g_rom + s_fly_tbl + 3 * k;
@@ -164,18 +243,64 @@ void ps_fly_init(void)
     /* towns that exist twice (Dezoris: maps 19/20 with gates, 21/22 with the church spots) share the planet */
     for (int i = 0; i < s_ndest; i++) if (s_dest[i].group == 3)
         for (int j = 0; j < s_ndest; j++)
-            if (s_dest[j].group != 3 && !strcmp(ps_worldmap_place_name(s_dest[i].place), ps_worldmap_place_name(s_dest[j].place)))
-                s_dest[i].group = s_dest[j].group;
+            if (s_dest[j].group != 3 && !strcmp(s_dest[i].name, s_dest[j].name)) s_dest[i].group = s_dest[j].group;
+    /* 4. dungeon entrances (type $0A) of every tileset's list: planets 0-3 directly, towns via the
+       town the entrance is in (its planet group and map number). The lists overlap (Palma's runs on
+       through Motavia's, Dezoris's and the towns' up to one $FF): a record belongs to the list that
+       starts closest before it. */
+    long lst[11];
+    for (int t = 0; t < 11; t++) {
+        const uint8_t *e = g_rom + df1 + t * 14;
+        lst[t] = 3L * 0x4000 + (long)((e[12] | (e[13] << 8)) - 0x8000);
+        if (lst[t] < 3L * 0x4000 || lst[t] >= 4L * 0x4000 || lst[t] >= (long)g_rom_n) lst[t] = -1;
+    }
+    for (int t = 0; t < 11 && s_ndest < MAX_DEST; t++) {
+        long o = lst[t];
+        if (o < 0) continue;
+        for (int n = 0; n < 256 && o + 6 <= (long)g_rom_n && g_rom[o] != 0xFF && s_ndest < MAX_DEST; n++, o += 6) {
+            const uint8_t *r = g_rom + o;
+            if (r[2] != 0x0A) continue;
+            int own = t;
+            for (int u = 0; u < 11; u++) if (lst[u] >= 0 && lst[u] <= o && (lst[u] > lst[own] || (lst[u] == lst[own] && u < own))) own = u;
+            if (own != t) continue;
+            Dest d = { NULL, "dungeon", -1, 3, -1, r[0], r[1], 3, r[3], r[4], r[5] & 3, NULL };
+            if (t < 4) { d.group = t < 2 ? t : 2; d.map = t; }
+            else {
+                Dest *town = dest_of(ps_worldmap_town_place(t, (r[1] & 0x7F) >> 4, (r[0] >> 4) & 7));
+                if (town) { d.group = town->group; d.map = town->map; }
+                if (d.map < 0) for (int k = 4; k < 32; k++) if (ps_worldmap_tileset_of(k) == t) { d.map = k; break; }
+            }
+            step_back(&d.y, &d.x, d.dir);
+            for (unsigned k = 0; k < sizeof k_dng / sizeof k_dng[0]; k++)
+                if (k_dng[k].floor == r[3] && k_dng[k].pos == r[4]) { d.name = k_dng[k].name; d.type = k_dng[k].type; }
+            if (!d.name) {                          /* unknown entrance: the floor's first name */
+                static char buf[8][32]; static int nb;
+                const char *fn = ps_automap_floor_name(r[3]), *bar = fn ? strchr(fn, '|') : NULL;
+                char *o2 = buf[nb++ & 7];
+                snprintf(o2, 32, "%.*s", fn ? (int)(bar ? bar - fn : (long)strlen(fn)) : 0, fn ? fn : "");
+                if (!o2[0]) snprintf(o2, 32, "Floor %02X", r[3]);
+                d.name = o2;
+            }
+            s_dest[s_ndest++] = d;
+        }
+    }
+    /* 5. script-only places */
+    for (unsigned k = 0; k < sizeof k_script / sizeof k_script[0] && s_ndest < MAX_DEST; k++)
+        s_dest[s_ndest++] = (Dest){ k_script[k].name, k_script[k].type, -1, k_script[k].group, -1, 0, 0, 4,
+                                    k_script[k].floor, k_script[k].pos, k_script[k].dir, k_script[k].ret_town };
     if (getenv("PS_FLY_DEBUG"))
         for (int i = 0; i < s_ndest; i++)
-            fprintf(stderr, "[fly] %-18s group %d map %2d y %02X x %02X kind %d\n", ps_worldmap_place_name(s_dest[i].place),
-                    s_dest[i].group, s_dest[i].map, s_dest[i].y, s_dest[i].x, s_dest[i].kind);
+            fprintf(stderr, "[fly] %-22s %-9s group %d map %2d y %02X x %02X kind %d floor %02X pos %02X dir %d\n",
+                    s_dest[i].name, s_dest[i].type, s_dest[i].group, s_dest[i].map, s_dest[i].y, s_dest[i].x,
+                    s_dest[i].kind, s_dest[i].floor & 0xFF, s_dest[i].pos & 0xFF, s_dest[i].dir);
 }
 
-/* the landing record of a destination: (map, y, x); false if none */
+/* the map record of a destination: (map, y, x) = a town's landing / a dungeon's return point */
 static bool landing(const Dest *d, uint8_t r[3])
 {
+    if (d->ret_town) { const Dest *t = town_named(d->ret_town); return t && t != d && landing(t, r); }
     if (d->map >= 0) { r[0] = (uint8_t)d->map; r[1] = d->y; r[2] = d->x; return true; }
+    if (d->place < 0) return false;
     int px, py;                              /* last position there; map = the tileset's only map */
     if (!ps_automap_map_known(d->place, &px, &py)) return false;
     int ts = ps_worldmap_place_tileset(d->place), map = -1;
@@ -186,13 +311,25 @@ static bool landing(const Dest *d, uint8_t r[3])
     return true;
 }
 
-static bool visited(const Dest *d) { int px, py; return ps_automap_map_known(d->place, &px, &py); }
+static bool visited(const Dest *d)
+{
+    int px, py;
+    if (d->floor >= 0) return ps_automap_cell_visited(d->floor, d->pos);
+    return ps_automap_map_known(d->place, &px, &py);
+}
 
 /* why Fly is not possible now (NULL = possible) */
 static const char *refusal(void)
 {
+    uint8_t mode = sms_read8(RAM_GAME_MODE);
     if (s_fly_tbl < 0) return "NOT AVAILABLE IN THIS VERSION";
-    if (sms_read8(RAM_GAME_MODE) != MODE_MAP) return "ONLY WHILE WALKING ON A MAP";
+    if (ps_fly_opt_free()) {
+        if (mode == MODE_MAP) return NULL;
+        if (mode != MODE_DUNGEON) return "ONLY ON A MAP OR IN A DUNGEON";
+        if (s_frame - s_dng_hook_frame > 120) return "NOT FROM A DUNGEON IN THIS VERSION";
+        return NULL;
+    }
+    if (mode != MODE_MAP) return "ONLY WHILE WALKING ON A MAP";
     if (!(sms_read8(RAM_ALIS) & 1)) return "ALIS CANNOT CAST NOW";
     if (sms_read8(RAM_ALIS + 0x0F) < 2) return "ALIS HAS NOT LEARNED FLY";
     if (sms_read8(RAM_ALIS + 2) < s_cost) return "NOT ENOUGH MP";
@@ -200,18 +337,9 @@ static const char *refusal(void)
     return NULL;
 }
 
-/* [insn_hooks] ps_fly_go @ GameMode_Map `ld a,(Ctrl_1_held)` -> resume at its `ret z` */
-extern int ps_vehicle_go(void);              /* ps_qol.c: quick vehicles (LB / RB) share this hook */
-int ps_fly_go(void)
+/* LABEL_787B's camera writes for a party cell record (map, y, x), + LABEL_7908 */
+static void land_map_record(const uint8_t r[3])
 {
-    if (ps_vehicle_go()) return 1;
-    if (s_pending < 0 || sms_read8(RAM_MOVE_CNT)) return 0;   /* mid-step: next frame */
-    Dest *d = &s_dest[s_pending];
-    s_pending = -1;
-    uint8_t r[3];
-    if (refusal() || !landing(d, r)) return 0;
-    sms_write8(RAM_ALIS + 2, (uint8_t)(sms_read8(RAM_ALIS + 2) - s_cost));
-    /* LABEL_787B */
     sms_write8(0xC308, r[0]); sms_write8(0xC309, r[0]);
     unsigned hl = (unsigned)r[1] * 16u;
     uint8_t l = (uint8_t)hl, h = (uint8_t)(hl >> 8), a = (uint8_t)(l - 0x60);
@@ -226,64 +354,115 @@ int ps_fly_go(void)
     sms_write8(0xC2D7, sms_read8(0xC810));
     for (uint16_t p = 0xC26F; p <= 0xC286; p++) sms_write8(p, 0);
     for (uint16_t p = 0xC800; p <= 0xC8FF; p++) sms_write8(p, 0);
+}
+
+/* the pending flight, if it can start now; true = RAM written, the caller returns to the main loop */
+static bool do_pending(void)
+{
+    if (s_pending < 0) return false;
+    Dest *d = &s_dest[s_pending];
+    s_pending = -1;
+    uint8_t r[3];
+    if (refusal() || !landing(d, r)) return false;
+    if (!ps_fly_opt_free()) sms_write8(RAM_ALIS + 2, (uint8_t)(sms_read8(RAM_ALIS + 2) - s_cost));
+    land_map_record(r);
+    if (d->floor >= 0) {                       /* LABEL_78BD: into the dungeon */
+        sms_write8(0xC30C, (uint8_t)d->pos); sms_write8(0xC30D, (uint8_t)d->floor); sms_write8(0xC30A, (uint8_t)d->dir);
+        sms_write8(RAM_GAME_MODE, 0x0A);       /* GameMode_LoadDungeon */
+    } else sms_write8(RAM_GAME_MODE, 0x08);    /* GameMode_LoadMap */
     sms_write8(0xC004, 0xBF);                  /* the Fly departure sound */
-    sms_write8(RAM_GAME_MODE, 0x08);           /* GameMode_LoadMap */
+    if (getenv("PS_FLY_DEBUG")) fprintf(stderr, "[fly] to %s (%s): map %d y %02X x %02X floor %d pos %02X dir %d\n",
+                                        d->name, d->type, r[0], r[1], r[2], d->floor, d->pos & 0xFF, d->dir);
+    return true;
+}
+
+/* [insn_hooks] ps_fly_go @ GameMode_Map `ld a,(Ctrl_1_held)` -> resume at its `ret z` */
+extern int ps_vehicle_go(void);              /* ps_qol.c: quick vehicles (LB / RB) share this hook */
+int ps_fly_go(void)
+{
+    if (ps_vehicle_go()) return 1;
+    if (s_pending < 0 || sms_read8(RAM_MOVE_CNT)) return 0;   /* mid-step: next frame */
+    if (!do_pending()) return 0;
     z80f_set(&g_z80, Z80_FLAG_Z, true);        /* -> ret z */
-    if (getenv("PS_FLY_DEBUG")) fprintf(stderr, "[fly] to %s: map %d y %02X x %02X\n", ps_worldmap_place_name(d->place), r[0], r[1], r[2]);
+    return 1;
+}
+/* [insn_hooks] ps_fly_dungeon_go @ GameMode_Dungeon `call LABEL_65EE` -> resume at its `ret z` */
+int ps_fly_dungeon_go(void)
+{
+    s_dng_hook_frame = s_frame;
+    if (s_pending < 0 || !do_pending()) return 0;
+    z80f_set(&g_z80, Z80_FLAG_Z, true);
     return 1;
 }
 
-/* drop a pending flight that could not start (e.g. a battle came first) */
+/* per frame: drop a pending flight that could not start (e.g. a battle came first) */
 void ps_fly_frame(void)
 {
+    s_frame++;
     if (s_pending >= 0 && ++s_pending_age > 30) s_pending = -1;
 }
 
-/* ---- HUD page ---- */
-static const char *const k_group[4] = { "Palma", "Motavia", "Dezoris", "Special" };
-/* the visited destinations of one column, alphabetical, one per name: col 0 = Palma, 1 = the rest */
-static int column(int col, int *out, int max, int *grp_start)
+/* ---- HUD page: one scrolling list with planet headers ---- */
+static const char *const k_group[4] = { "PALMA", "MOTAVIA", "DEZORIS", "SPECIAL" };
+typedef struct { int dest, group; bool header; } Row;
+#define MAX_ROWS (MAX_DEST + 4)
+static int s_sel, s_top;                     /* selected row, first row shown */
+
+static int build_rows(Row *rows)
 {
     int n = 0;
-    for (int g = col ? 1 : 0; g <= (col ? 3 : 0); g++) {
-        if (grp_start) grp_start[g] = n;
-        int start = n;
-        for (int i = 0; i < s_ndest && n < max; i++) {
+    bool all = ps_fly_opt_all();
+    for (int g = 0; g < 4; g++) {
+        int start = n + 1;
+        for (int i = 0; i < s_ndest && n < MAX_ROWS - 1; i++) {
             const Dest *d = &s_dest[i];
             uint8_t r[3];
-            if (d->group != g || !visited(d) || !landing(d, r)) continue;
-            const char *nm = ps_worldmap_place_name(d->place);
-            bool dup = false;              /* same name twice (Dezoris): keep the lower kind (church spot) */
-            for (int k = start; k < n; k++)
-                if (!strcmp(ps_worldmap_place_name(s_dest[out[k]].place), nm)) {
+            if (d->group != g || !landing(d, r) || (!all && !visited(d))) continue;
+            if (n < start) rows[n++] = (Row){ -1, g, true };
+            bool dup = false;                  /* same name + type (two entrances, two Dezoris maps) */
+            for (int k = start; k < n; k++) {
+                const Dest *o = &s_dest[rows[k].dest];
+                if (!strcmp(o->name, d->name) && !strcmp(o->type, d->type)) {
                     dup = true;
-                    if (d->kind < s_dest[out[k]].kind) out[k] = i;
+                    if (d->kind < o->kind || (d->place < 0 && visited(d) && !visited(o))) rows[k].dest = i;
                 }
+            }
             if (dup) continue;
             int k = n++;                       /* insertion sort by name */
-            while (k > start && strcmp(ps_worldmap_place_name(s_dest[out[k - 1]].place), nm) > 0) { out[k] = out[k - 1]; k--; }
-            out[k] = i;
+            while (k > start && strcmp(s_dest[rows[k - 1].dest].name, d->name) > 0) { rows[k] = rows[k - 1]; k--; }
+            rows[k] = (Row){ i, g, false };
         }
     }
     return n;
 }
+static int first_entry(const Row *rows, int n, int from, int step)
+{
+    for (int k = from; k >= 0 && k < n; k += step) if (!rows[k].header) return k;
+    return -1;
+}
 
 void ps_fly_hud_key(int key)
 {
-    int c0[MAX_DEST], c1[MAX_DEST], n0 = column(0, c0, MAX_DEST, NULL), n1 = column(1, c1, MAX_DEST, NULL);
-    int n = s_col ? n1 : n0;
-    if (key == HUD_KEY_LEFT || key == HUD_KEY_RIGHT) {
-        int nc = s_col ^ 1, nn = nc ? n1 : n0;
-        if (nn) { s_col = nc; if (s_row >= nn) s_row = nn - 1; }
-        return;
-    }
+    Row rows[MAX_ROWS]; int n = build_rows(rows);
     if (!n) return;
-    if (key == HUD_KEY_UP) s_row = (s_row + n - 1) % n;
-    if (key == HUD_KEY_DOWN) s_row = (s_row + 1) % n;
-    if (key == HUD_KEY_SELECT) {
+    if (s_sel >= n || rows[s_sel].header) s_sel = first_entry(rows, n, 0, 1) < 0 ? 0 : first_entry(rows, n, 0, 1);
+    if (key == HUD_KEY_UP || key == HUD_KEY_DOWN) {
+        int k = first_entry(rows, n, s_sel + (key == HUD_KEY_DOWN ? 1 : -1), key == HUD_KEY_DOWN ? 1 : -1);
+        if (k < 0) k = first_entry(rows, n, key == HUD_KEY_DOWN ? 0 : n - 1, key == HUD_KEY_DOWN ? 1 : -1);
+        if (k >= 0) s_sel = k;
+    }
+    else if (key == HUD_KEY_LEFT || key == HUD_KEY_RIGHT) {   /* the previous / next planet's first entry */
+        int g = rows[s_sel].group, k = -1;
+        if (key == HUD_KEY_RIGHT) { for (int i = s_sel; i < n; i++) if (rows[i].header && rows[i].group > g) { k = i + 1; break; } }
+        else { for (int i = s_sel; i >= 0; i--) if (rows[i].header && rows[i].group < g) { while (i > 0 && !rows[i - 1].header) i--; k = i + 1; break; } }
+        if (k < 0) k = first_entry(rows, n, key == HUD_KEY_RIGHT ? 0 : n - 1, key == HUD_KEY_RIGHT ? 1 : -1);
+        if (key == HUD_KEY_LEFT && k >= 0 && rows[k].header) k = first_entry(rows, n, k, 1);
+        if (k >= 0 && k < n && !rows[k].header) s_sel = k;
+    }
+    else if (key == HUD_KEY_SELECT) {
         const char *why = refusal();
         if (why) { snprintf(s_msg, sizeof s_msg, "%s", why); return; }
-        s_pending = (s_col ? c1 : c0)[s_row < n ? s_row : 0];
+        s_pending = rows[s_sel].dest;
         s_pending_age = 0; s_msg[0] = 0;
         hud_key(HUD_KEY_CLOSE);
     }
@@ -295,31 +474,28 @@ void ps_fly_hud_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
 {
     const uint32_t GREY = 0xFFA0A0B0, CYAN = 0xFF60D0FF, YEL = 0xFFFFE040, WHITE = 0xFFFFFFFF, DIM = 0xFF606878;
     char buf[64];
-    snprintf(buf, sizeof buf, "ALIS MP %u/%u   FLY COSTS %d MP", sms_read8(RAM_ALIS + 2), sms_read8(RAM_ALIS + 7), s_cost);
+    if (ps_fly_opt_free()) snprintf(buf, sizeof buf, "FLY: FREE (OPTIONS)");
+    else snprintf(buf, sizeof buf, "ALIS MP %u/%u   FLY COSTS %d MP", sms_read8(RAM_ALIS + 2), sms_read8(RAM_ALIS + 7), s_cost);
     hud_text(fb, w, h, x0 + 4, y0, buf, CYAN);
     const char *why = s_msg[0] ? s_msg : refusal();
-    hud_text(fb, w, h, x0 + 4, y0 + 10, why ? why : "CONFIRM = FLY THERE", why ? YEL : GREY);
-    int c0[MAX_DEST], c1[MAX_DEST], g0[4], g1[4];
-    int n0 = column(0, c0, MAX_DEST, g0), n1 = column(1, c1, MAX_DEST, g1);
-    if (!n0 && !n1) { hud_text(fb, w, h, x0 + 4, y0 + 30, "NO TOWNS VISITED YET", GREY); return; }
-    if (s_col == 0 && !n0) s_col = 1;
-    if (s_col == 1 && !n1) s_col = 0;
-    int nsel = s_col ? n1 : n0; if (s_row >= nsel) s_row = nsel ? nsel - 1 : 0;
-    int cw = (x1 - x0 - 8) / 2, ty0 = y0 + 24;
-    for (int col = 0; col < 2; col++) {
-        const int *c = col ? c1 : c0, *gs = col ? g1 : g0; int n = col ? n1 : n0;
-        int x = x0 + 4 + col * cw, y = ty0;
-        for (int g = col ? 1 : 0; g <= (col ? 3 : 0); g++) {
-            int end = g < 3 && col ? gs[g + 1] : n;
-            if (gs[g] == end) continue;                      /* no visited town in this group */
-            hud_text(fb, w, h, x, y, k_group[g], DIM); y += 10;
-            for (int k = gs[g]; k < end; k++, y += 9) {
-                bool sel = col == s_col && k == s_row;
-                if (sel) hud_fill(fb, w, h, x + 4, y - 1, x + cw - 6, y + 8, 0xFF304060u, false);
-                hud_text(fb, w, h, x + 8, y, ps_worldmap_place_name(s_dest[c[k]].place), sel ? (why ? WHITE : YEL) : WHITE);
-            }
-            y += 3;
-        }
+    hud_text(fb, w, h, x0 + 4, y0 + 10, why ? why : "CONFIRM = FLY   LEFT/RIGHT = PLANET", why ? YEL : GREY);
+    Row rows[MAX_ROWS]; int n = build_rows(rows);
+    if (!n) { hud_text(fb, w, h, x0 + 4, y0 + 30, ps_fly_opt_all() ? "NO PLACES KNOWN" : "NO PLACES VISITED YET", GREY); return; }
+    if (s_sel >= n || rows[s_sel].header) { int k = first_entry(rows, n, 0, 1); s_sel = k < 0 ? 0 : k; }
+    int ty0 = y0 + 22, vis = (y1 - ty0) / 9;
+    if (vis < 1) vis = 1;
+    if (s_sel < s_top) s_top = s_sel;
+    if (s_sel >= s_top + vis) s_top = s_sel - vis + 1;
+    if (s_top > 0 && rows[s_top].header == false && rows[s_top - 1].header && s_sel > s_top) s_top--;   /* keep a header with its first entry */
+    if (s_top + vis > n) s_top = n - vis > 0 ? n - vis : 0;
+    for (int k = s_top, y = ty0; k < n && k < s_top + vis; k++, y += 9) {
+        if (rows[k].header) { hud_text(fb, w, h, x0 + 4, y, k_group[rows[k].group], DIM); continue; }
+        const Dest *d = &s_dest[rows[k].dest];
+        bool sel = k == s_sel, vst = visited(d);
+        if (sel) hud_fill(fb, w, h, x0 + 8, y - 1, x1 - 10, y + 8, 0xFF304060u, false);
+        snprintf(buf, sizeof buf, "%s (%s)", d->name, d->type);
+        hud_text(fb, w, h, x0 + 12, y, buf, sel ? (why ? WHITE : YEL) : vst ? WHITE : GREY);
     }
-    (void)y1;
+    if (s_top > 0) hud_text(fb, w, h, x1 - 8, ty0, "^", CYAN);
+    if (s_top + vis < n) hud_text(fb, w, h, x1 - 8, ty0 + (vis - 1) * 9, "v", CYAN);
 }

@@ -74,6 +74,12 @@ GROUPS = [
     ("fly", [
         ("ps_fly_go", "3a .. .. e6 30 c8 3a 65 c2 b7 c0 af 32 9d c2 21 02 c2 36 0c", 0, 5),
     ]),
+    # FLY from inside a dungeon (FLY COST = FREE): GameMode_Dungeon: ld a,(Game_is_paused) ; or a ;
+    #   call nz,PauseLoop ; ld a,$08 ; call WaitForVInt ; call LABEL_65EE (movement) ; ld a,($C2D2) ;
+    #   or a ; ret z   -> hook the LABEL_65EE call, resume = `ret z`
+    ("fly dungeon", [
+        ("ps_fly_dungeon_go", "3a 12 c2 b7 c4 .. .. 3e 08 cd .. .. cd .. .. 3a d2 c2 b7 c8", 12, 7),
+    ]),
     # Battle auto attack (ps_qol.c ps_battle_*). LABEL_100F (battle) starts `ld a,($C2E6) ; cp $48 ;
     #   ld c,$92 ; jr z ; cp $49` -> ps_battle_begin (observe only). Per character (LABEL_108A):
     #   ld de,$0C ; add hl,de ; ld a,(hl) ; or a ; jr nz,LABEL_1080 ; call LABEL_3105 ; call LABEL_30D5 ;

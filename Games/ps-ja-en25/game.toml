@@ -58,6 +58,6 @@ page  = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0x5
 #  0x88C2 bank 12 count  18  sound snd2 (bank 12)
 
 [insn_hooks]   # QoL hooks (Tools/ps_find_hooks.py; each returns 0 = original code unless enabled)
-addr   = [0x18CF, 0x0329, 0x0331, 0x0339, 0x13C4, 0x171E, 0x0C6B, 0x109F, 0x0056, 0x77D8, 0x77E1, 0x2451, 0x0C91, 0x116B, 0x11EE, 0x2EF3]
-func   = ["ps_exp_add", "ps_snd_update", "ps_snd_init", "ps_snd_mute", "ps_damage", "ps_damage", "ps_items_walk_mark", "ps_items_walk_mark", "ps_items_vwait", "ps_hover_pass", "ps_hover_pass", "ps_hover_board", "ps_fly_go", "ps_battle_begin", "ps_battle_cmd", "ps_battle_select"]
-resume = [0x18D5, 0x032E, 0x0336, 0x033E, 0x13C7, 0x1721, 0x0C6D, 0x10A1, 0x0059, 0x77DA, 0x77E3, 0x2463, 0x0C96, 0x116E, 0x1213, 0x2EF6]
+addr   = [0x18CF, 0x0329, 0x0331, 0x0339, 0x13C4, 0x171E, 0x0C6B, 0x109F, 0x0056, 0x77D8, 0x77E1, 0x2451, 0x0C91, 0x10A4, 0x116B, 0x11EE, 0x2EF3]
+func   = ["ps_exp_add", "ps_snd_update", "ps_snd_init", "ps_snd_mute", "ps_damage", "ps_damage", "ps_items_walk_mark", "ps_items_walk_mark", "ps_items_vwait", "ps_hover_pass", "ps_hover_pass", "ps_hover_board", "ps_fly_go", "ps_fly_dungeon_go", "ps_battle_begin", "ps_battle_cmd", "ps_battle_select"]
+resume = [0x18D5, 0x032E, 0x0336, 0x033E, 0x13C7, 0x1721, 0x0C6D, 0x10A1, 0x0059, 0x77DA, 0x77E3, 0x2463, 0x0C96, 0x10AB, 0x116E, 0x1213, 0x2EF6]

@@ -367,6 +367,7 @@ static const char *const k_floor_name[] = {
     "Dezoris Path 4|Laconian Shield Cave B3F", "Dezoris Path 3|Laconian Shield Cave B2F",
     "Laconian Shield Cave B1F", "Laconian Shield Cave 1F",
     "Air Castle B4F", "Air Castle B3F", "Air Castle B2F", "Air Castle B1F", "Air Castle 1F", "Aeroprism Cave",
+    "Credits Dungeon B1F", "Credits Dungeon 1F",                 /* $3B/$3C: the ending walks here */
 };
 const char *ps_automap_floor_name(int floor)
 {
@@ -465,6 +466,14 @@ bool ps_automap_map_known(int map, int *px, int *py)
     if (map < 0 || map >= N_MAPS || !g_work.map_seen[map]) return false;
     *px = g_work.map_px[map]; *py = g_work.map_py[map];
     return true;
+}
+/* the party has stood on cell `pos` of floor `floor` (this save's memory; FLY page: visited places) */
+bool ps_automap_cell_visited(int floor, int pos)
+{
+    if (pos < 0 || pos > 255) return false;
+    for (int i = 0; i < g_work.n; i++)
+        if (g_work.d[i].key == (uint32_t)floor) return (g_work.d[i].flags[pos] & VISITED) != 0;
+    return false;
 }
 static const DungeonMemory *explored(int floor)
 {
