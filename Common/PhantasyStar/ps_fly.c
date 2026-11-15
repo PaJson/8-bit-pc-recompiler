@@ -153,6 +153,8 @@ static long find_pat_n(const char *hex, bool first)
 static long find_pat(const char *hex) { return find_pat_n(hex, false); }        /* must be unique */
 static long find_pat_first(const char *hex) { return find_pat_n(hex, true); }
 
+static void areas_init(void);
+
 static Dest *dest_of(int place)
 {
     for (int i = 0; i < s_ndest; i++) if (s_dest[i].place == place) return &s_dest[i];
@@ -288,11 +290,97 @@ void ps_fly_init(void)
     for (unsigned k = 0; k < sizeof k_script / sizeof k_script[0] && s_ndest < MAX_DEST; k++)
         s_dest[s_ndest++] = (Dest){ k_script[k].name, k_script[k].type, -1, k_script[k].group, -1, 0, 0, 4,
                                     k_script[k].floor, k_script[k].pos, k_script[k].dir, k_script[k].ret_town };
+    areas_init();
     if (getenv("PS_FLY_DEBUG"))
         for (int i = 0; i < s_ndest; i++)
             fprintf(stderr, "[fly] %-22s %-9s group %d map %2d y %02X x %02X kind %d floor %02X pos %02X dir %d\n",
                     s_dest[i].name, s_dest[i].type, s_dest[i].group, s_dest[i].map, s_dest[i].y, s_dest[i].x,
                     s_dest[i].kind, s_dest[i].floor & 0xFF, s_dest[i].pos & 0xFF, s_dest[i].dir);
+}
+
+/* ---- the name of the place a dungeon cell belongs to ----
+   Many layouts are shared (floor $00 = Medusa Cave + Gothic Tunnel + Baya Malay Pass as separate
+   parts of one 16 x 16 floor, Medusa Tower 5F-7F = Baya Malay Tower B3F-B1F ...). Every floor of
+   B15_DungeonLayouts (128 bytes, a nibble per cell, found by the first floor's bytes) is split into
+   4-connected walkable parts; each dungeon destination (entrance / script) names the part it lands
+   in, and the names spread through stairs (cell 2: floor + 1, 3: floor - 1, same cell) and pits
+   (cell 8 without an object: floor - 1). The shown name = the floor-name variant that starts with the
+   dungeon's name ("Laconian Shield Cave" on $2F -> "Laconian Shield Cave B5F"), else the dungeon's
+   name itself (Roadpass Jail). Same method as Tools/ps_dungeons.py. */
+#define NFLOORS 64
+extern bool ps_automap_has_object(int floor, int pos);
+static uint8_t     s_part[NFLOORS][256];    /* part + 1 per cell, 0 = wall / no data */
+static const char *s_area[NFLOORS][128];    /* (floor, part) -> shown name */
+static char        s_area_pool[4096]; static size_t s_area_used;
+
+static const char *area_string(int floor, const char *base)
+{
+    const char *fn = ps_automap_floor_name(floor), *pick = NULL; size_t plen = 0, bl = strlen(base);
+    for (const char *p = fn; p && *p; ) {
+        size_t len = strcspn(p, "|");
+        if (len >= bl && !strncmp(p, base, bl) && (len == bl || p[bl] == ' ')) { pick = p; plen = len; break; }
+        p += len; if (*p == '|') p++;
+    }
+    if (!pick) { pick = base; plen = bl; }
+    if (s_area_used + plen + 1 > sizeof s_area_pool) return base;
+    char *o = s_area_pool + s_area_used;
+    memcpy(o, pick, plen); o[plen] = 0; s_area_used += plen + 1;
+    return o;
+}
+static void areas_init(void)
+{
+    static const uint8_t sig[] = { 0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0xA0,0x00,0x01,0x01,0x11,0xA1 };
+    memset(s_part, 0, sizeof s_part); memset(s_area, 0, sizeof s_area); s_area_used = 0;
+    long lo = -1;
+    for (size_t i = 0; i + sizeof sig <= g_rom_n; i++) if (!memcmp(g_rom + i, sig, sizeof sig)) { lo = (long)i; break; }
+    if (lo < 0) return;
+    int nf = 0;
+    for (int f = 0; f < NFLOORS && lo + 128L * (f + 1) <= (long)g_rom_n && ps_automap_floor_name(f); f++, nf++) {
+        uint8_t c[256], st[256];
+        for (int p = 0; p < 256; p++) { uint8_t b = g_rom[lo + 128 * f + p / 2]; c[p] = p & 1 ? b & 15 : b >> 4; }
+        int n = 0;
+        for (int p = 0; p < 256 && n < 127; p++) {
+            if (c[p] == 1 || s_part[f][p]) continue;
+            int sp = 0; st[sp++] = (uint8_t)p; s_part[f][p] = (uint8_t)(n + 1);
+            while (sp) {
+                int q = st[--sp], y = q >> 4, x = q & 15;
+                int nb[4] = { y > 0 ? q - 16 : -1, y < 15 ? q + 16 : -1, x > 0 ? q - 1 : -1, x < 15 ? q + 1 : -1 };
+                for (int k = 0; k < 4; k++)
+                    if (nb[k] >= 0 && c[nb[k]] != 1 && !s_part[f][nb[k]]) { s_part[f][nb[k]] = (uint8_t)(n + 1); st[sp++] = (uint8_t)nb[k]; }
+            }
+            n++;
+        }
+    }
+    /* seeds: the dungeon destinations in table order (entrances, then scripts); then spread */
+    static const char *base[NFLOORS][128];
+    memset(base, 0, sizeof base);
+    int qf[NFLOORS * 128], qp[NFLOORS * 128], qn = 0;
+    for (int i = 0; i < s_ndest; i++) {
+        const Dest *d = &s_dest[i];
+        if (d->floor < 0 || d->floor >= nf || !s_part[d->floor][d->pos]) continue;
+        int pt = s_part[d->floor][d->pos] - 1;
+        if (!base[d->floor][pt]) { base[d->floor][pt] = d->name; qf[qn] = d->floor; qp[qn] = pt; qn++; }
+    }
+    for (int k = 0; k < qn; k++) {
+        int f = qf[k], pt = qp[k];
+        for (int p = 0; p < 256; p++) {
+            if (s_part[f][p] != pt + 1) continue;
+            uint8_t b = g_rom[lo + 128 * f + p / 2], t = p & 1 ? b & 15 : b >> 4;
+            int tf = t == 2 ? f + 1 : t == 3 ? f - 1 : (t == 8 && !ps_automap_has_object(f, p)) ? (f > 0 ? f - 1 : 0) : -1;
+            if (tf < 0 || tf >= nf || tf == f || !s_part[tf][p]) continue;
+            int tp = s_part[tf][p] - 1;
+            if (!base[tf][tp] && qn < NFLOORS * 128) { base[tf][tp] = base[f][pt]; qf[qn] = tf; qp[qn] = tp; qn++; }
+        }
+    }
+    for (int f = 0; f < nf; f++) for (int pt = 0; pt < 128; pt++) if (base[f][pt]) s_area[f][pt] = area_string(f, base[f][pt]);
+    if (getenv("PS_FLY_DEBUG"))
+        for (int f = 0; f < nf; f++) for (int pt = 0; pt < 128; pt++) if (s_area[f][pt]) fprintf(stderr, "[fly] area %02X part %d: %s\n", f, pt, s_area[f][pt]);
+}
+/* the place cell `pos` of floor `floor` belongs to ("Gothic Tunnel", "Medusa Tower 6F"); NULL = unknown */
+const char *ps_fly_area_name(int floor, int pos)
+{
+    if (floor < 0 || floor >= NFLOORS || pos < 0 || pos > 255 || !s_part[floor][pos]) return NULL;
+    return s_area[floor][s_part[floor][pos] - 1];
 }
 
 /* the map record of a destination: (map, y, x) = a town's landing / a dungeon's return point */

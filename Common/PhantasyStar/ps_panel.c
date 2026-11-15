@@ -24,6 +24,8 @@ extern bool        ps_automap_draw(uint32_t *fb, int w, int h, int x, int y, int
 extern int         ps_automap_floor(void);
 extern bool        ps_automap_here(void);
 extern const char *ps_automap_floor_name(int floor);
+extern int         ps_automap_pos(void);
+extern const char *ps_fly_area_name(int floor, int pos);
 extern int         ps_map_context(void);       /* ps_qol.c: 0 none, 1 dungeon, 2 planet / town */
 
 #define BG      0xFF0A1024u
@@ -264,8 +266,10 @@ void ps_panel_draw(uint32_t *b, int w, int h)
     }
     int ctx = ps_map_context();
     if (ctx == 1 && ps_automap_floor() >= 0) {
-        /* the floor's name (the first of the places that share this layout), small font if long */
-        const char *nm = ps_automap_floor_name(ps_automap_floor());
+        /* the name of the place the party is in (shared layouts: by the part of the floor, ps_fly.c),
+           else the floor's first name; small font if long */
+        const char *area = ps_fly_area_name(ps_automap_floor(), ps_automap_pos());
+        const char *nm = area ? area : ps_automap_floor_name(ps_automap_floor());
         if (nm) { size_t n = strcspn(nm, "|"); if (n >= sizeof buf) n = sizeof buf - 1; memcpy(buf, nm, n); buf[n] = 0; }
         else snprintf(buf, sizeof buf, "FLOOR %02X", ps_automap_floor());
         if (!ps_automap_here()) { char t[sizeof buf]; snprintf(t, sizeof t, "Last: %s", buf); memcpy(buf, t, sizeof buf); }

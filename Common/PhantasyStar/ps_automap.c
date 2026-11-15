@@ -421,7 +421,11 @@ void ps_automap_hud_draw_floor(uint32_t *fb, int w, int h, int x0, int y0, int x
     /* info + legend to the right of the map */
     int tx = mx + 16 * cs + 7, ty = my, maxc = (x1 - tx) / 6;
     char buf[48];
-    const char *nm = ps_automap_floor_name(d->index);
+    /* the place's name: where the party is, its own part's name (a shared layout has several places);
+       else every name of the layout */
+    extern const char *ps_fly_area_name(int floor, int pos);
+    const char *nm = here && ps_fly_area_name(d->index, g_cur_py * 16 + g_cur_px) ? ps_fly_area_name(d->index, g_cur_py * 16 + g_cur_px)
+                                                                                  : ps_automap_floor_name(d->index);
     if (nm) {
         for (const char *p = nm; *p && ty + 8 <= y1; ) {
             const char *e = strchr(p, '|'); size_t len = e ? (size_t)(e - p) : strlen(p);
@@ -557,6 +561,8 @@ bool ps_automap_draw_slot(uint32_t *fb, int w, int h, int x, int y, int cs, int 
     return true;
 }
 int  ps_automap_floor(void) { return g_cur ? g_cur->index : -1; }
+int  ps_automap_pos(void)   { return g_cur ? g_cur_py * 16 + g_cur_px : -1; }   /* the party's (last) cell */
+bool ps_automap_has_object(int floor, int pos) { return object_at((uint8_t)floor, pos) != NULL; }   /* chest / event (else a cell 8 is a pit) */
 bool ps_automap_here(void)  { return g_in_dungeon; }
 
 int  ps_automap_in_dungeon(void) { return sms_read8(RAM_GAME_MODE) == MODE_DUNGEON; }
