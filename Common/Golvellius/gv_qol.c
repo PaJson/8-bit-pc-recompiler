@@ -81,7 +81,8 @@ static void save_config(void)
 static void on_map_fix(void) { apply_map_fix(); }
 extern void gv_map_init(void);
 extern void gv_map_save(void);
-static void on_close(void) { save_config(); gv_map_save(); }
+extern void gv_map_hud_closed(void);
+static void on_close(void) { save_config(); gv_map_save(); gv_map_hud_closed(); }
 static int open_page(void) { return hud_page_index("MAP"); }
 static void on_ff(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
 static const HudOption k_opts[] = {
