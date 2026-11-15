@@ -27,6 +27,8 @@ Disasm/
 Emulicious/
 Masterlator/
 Patchers/
+# third-party programs we use (FLIPS ...), not part of the project
+ExternalTools/
 # old location of ROMs/Patches (moved 2026-11-15; ROMs/ is ignored as a whole)
 ROMPatches/
 

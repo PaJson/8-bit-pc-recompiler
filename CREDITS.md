@@ -30,7 +30,8 @@ options; everything is our own implementation.
 
 | Code | Author / licence | Used for |
 |---|---|---|
-| smsggrecomp (upstream) | mstan | The recompiler and runner this project is built on. |
+| smsggrecomp (upstream) | Matthew Stanley (mstan); licence "not yet declared" in its README | The recompiler and runner this project is built on. |
+| z80-recomp-core (engine submodule) | Matthew Stanley; PolyForm Noncommercial 1.0.0 + `PERMISSIONS.md` (donations and advertising allowed; everything must stay free to get and play) | Shared Z80 state / instruction semantics used by the generated code. |
 | superzazu/z80 | Nicolas Allemand (superzazu), MIT | Z80 interpreter (fallback path and `--interp` reference). |
 | emu2413 | Mitsutaka Okazaki, MIT (`runner/audio/LICENSE.emu2413`) | YM2413 FM sound. |
 | stb_image | Sean Barrett, public domain / MIT | Loading the cover and logo images. |
