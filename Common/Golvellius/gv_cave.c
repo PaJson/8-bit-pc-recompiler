@@ -297,6 +297,20 @@ void gv_cave_frame(void)
     cave_load_file();
     s_in = false;
     if (!rom_ok()) return;
+    {   /* test: GV_CAVE_OPEN=<id> removes the inner walls of that dungeon's layout in the in-memory
+           ROM copy (keeps the outer cells), so a test can walk straight to the boss */
+        static int done; const char *e = getenv("GV_CAVE_OPEN");
+        if (e && !done) {
+            done = 1; int id = atoi(e), o = asset(0x50 + id);
+            for (int n = 0; o >= 0 && n < 4096; n++, o += 2) {
+                uint8_t *p = (uint8_t *)s_rom + o; int w = p[0] << 8 | p[1];     /* big-endian steps */
+                if (w == 0xFFFF) break;
+                w &= (id & 1) ? 0x003F : 0x007F;          /* every inner cell open (top-down 10, side-view 9) */
+                p[0] = (uint8_t)(w >> 8); p[1] = (uint8_t)w;
+            }
+            fprintf(stderr, "[cave] test: dungeon %d opened (layout at %X)\n", id, asset(0x50 + id));
+        }
+    }
     {   /* the screen whose cave the hero is in: a cave room (mode $11) or a dungeon */
         int m = sms_read8(0xC802), scr = sms_read8(0xC80D);
         if (scr < 182 && !s_entered[scr] && (m == 0x11 || m == 8 || m == 0x0A || (m == 7 && sms_read8(0xCAD7)))) {
@@ -307,11 +321,27 @@ void gv_cave_frame(void)
     /* modes 8 / 7 are set only by $1D96 / $1DD3 (entry); mode $0A = the boss fight: set when the row /
        column after the next one is the $FFFF end ($18A0 top-down, $145D side-view) */
     int mode = sms_read8(0xC802), id = sms_read8(0xCAD7);
+    {   static int last = -1;
+        if (cave_log() && mode != last) fprintf(stderr, "[cave] mode %02X -> %02X (dungeon %d, CADA %04X)\n", last, mode, id, sms_read8(0xCADA) | sms_read8(0xCADB) << 8);
+        last = mode; }
     bool boss = mode == 0x0A;
     bool td = (mode == 8 || boss) && (id & 1), sv = (mode == 7 || boss) && !(id & 1);
-    if (!(td || sv) || id >= NCAVE) return;
+    /* Sticky: once inside, the map stays until the overworld is really back (gv_panel's still-overworld
+       test: overworld display, an area palette, $CA00 = the screen), a cave room ($11) or the title
+       (< 5). The user saw the overworld panel in a boss room that is none of 7 / 8 / $0A; fades and
+       other in-between states keep the map too. The hero marker is hidden meanwhile. */
+    static bool sticky;
+    if (!(td || sv) || id >= NCAVE) {
+        extern bool gv_panel_overworld_shown(void);
+        if (sticky && (mode < 5 || mode == 0x11 || gv_panel_overworld_shown())) {
+            sticky = false;
+            if (cave_log()) fprintf(stderr, "[cave] left dungeon %d (mode %02X)%c", s_id, mode, 10);
+        }
+        if (sticky && s_id >= 0 && s_n) { s_in = true; s_hx = s_hy = -1; }
+        return;
+    }
     if (!select_cave(id)) return;
-    s_in = true;
+    s_in = true; sticky = true;
     if (!(g_vdp.reg[1] & 0x40)) return;                       /* display off: loading */
     int pal = asset(pal_code(id));
     bool steady = pal >= 0 && !memcmp(s_rom + pal, g_vdp.cram, 16);   /* the dungeon's palette, not mid-fade */
@@ -323,7 +353,8 @@ void gv_cave_frame(void)
     if (boss && steady)                     /* the end is reached: the rest (the boss room, partly never shown) */
         for (int s = k - (s_side ? 17 : 15); s < s_n; s++) mark_seen(id, s);
     static int trace = -1; if (trace < 0) trace = getenv("GV_CAVE_TRACE") != NULL;      /* test: positions */
-    if (trace) fprintf(stderr, "[cavetrace] id %d k %d x %d y %d r8 %d r9 %d c100 %02X\n", id, k, x, y, g_vdp.reg[8], g_vdp.reg[9], sms_read8(0xC100));
+    if (trace) fprintf(stderr, "[cavetrace] id %d k %d x %d y %d r8 %d r9 %d c100 %02X data %02X%02X\n", id, k, x, y, g_vdp.reg[8], g_vdp.reg[9], sms_read8(0xC100),
+                       s_rom[start + 2 * k + 1], s_rom[start + 2 * k]);
     if (!s_side) {
         int v = g_vdp.reg[9];
         if (steady) for (int l = 0; l < 192; l += 8) mark_seen(id, td_row(v + l, k));

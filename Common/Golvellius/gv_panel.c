@@ -128,6 +128,7 @@ static bool on_overworld(void)
     for (int id = 1; id <= 8; id++) { const uint8_t *p = palette(id); if (p && memcmp(p, g_vdp.cram, 16) == 0) return true; }
     return false;
 }
+bool gv_panel_overworld_shown(void) { if (!s_rom) s_rom = glue_rom_image(&s_rom_n); return s_rom && s_rom_n >= 0x20000 && on_overworld(); }
 
 /* $038F: 4 bit planes one after another, each RLE (n < $80: n literal bytes, n >= $80: the next byte
    (n & $7F) times (0 = 256), 0 = end of the plane), written to every 4th byte from plane p */
