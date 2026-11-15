@@ -319,6 +319,21 @@ static void play_song(int song)
     call_game(0x77A6);
     sms_write8(0xFFFF, (uint8_t)old);
 }
+/* The game's own load sequence (display off, area id $C819, its metatiles $CC00 / terrain $D000, the
+   screen $CA00, display on, fade-in) runs inside the teleport's call_game($0D1A / $1978) and takes
+   ~110 frames. The frame hook places the hero the frame the display comes back (else he is seen at
+   the old spot during the fade-in); after the calls he is placed again (same tables, same cell).
+   s_tp_place: 1 = waiting for the display to go off, 2 = to come back on, 0 = idle / done. */
+static int s_tp_place;
+static void tp_place_tick(void)                             /* every frame (gv_on_frame_post) */
+{
+    if (!s_tp_place) return;
+    bool on = (g_vdp.reg[1] & 0x40) != 0;
+    if (s_tp_place == 1) { if (!on) s_tp_place = 2; return; }
+    if (!on) return;
+    s_tp_place = 0;
+    if (sms_read8(0xC802) == 6) tp_place_hero();
+}
 int gv_frame_top(void)
 {
     if (s_tp_req < 0 && !s_music_dirty) return 0;
@@ -329,9 +344,12 @@ int gv_frame_top(void)
         if (getenv("GV_LOG")) fprintf(stderr, "[gv] teleport %d -> %d\n", sms_read8(0xC80D), to);
         sms_write8(0xC802, 6);                               /* as the password start ($2023) */
         sms_write8(0xC80D, (uint8_t)to);
+        s_tp_place = 1;                                      /* the hero: when the display is back on */
         call_game(0x0D1A);
         call_game(0x1978);                                   /* its music pick goes through gv_ow_music */
+        s_tp_place = 0;
         tp_place_hero();
+        if (qlog()) fprintf(stderr, "[gv] teleport: hero at %d,%d\n", sms_read8(0xC101), sms_read8(0xC102));
         s_music_dirty = false;
     } else if (s_music_dirty) {
         s_music_dirty = false;
@@ -482,6 +500,7 @@ int gv_pw_loop(void)
 void gv_on_frame_post(uint64_t frame)
 {
     if (frame % 30 == 0) music_names();              /* THEME n (LOCKED) follows the equipment */
+    tp_place_tick();
     gv_panel_test(frame);
     {   static long tf = -2; static int ts;              /* test: GV_TP_TEST=<frame>:<screen> = a teleport request */
         if (tf == -2) { const char *e = getenv("GV_TP_TEST"); tf = -1; if (e) sscanf(e, "%ld:%d", &tf, &ts); }

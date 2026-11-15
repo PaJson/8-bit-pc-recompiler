@@ -95,10 +95,21 @@ static const uint8_t *layout(int s)                /* ROM layout of screen s (18
     return o + 180 <= s_rom_n ? s_rom + o : NULL;
 }
 static int hero_screen(void) { int s = sms_read8(0xC80D); return sms_read8(0xC802) >= 5 && s < NSCR ? s : -1; }
+/* A still overworld screen: overworld mode, overworld display, no scroll running, and the screen
+   RAM $CA00 holds the hero's screen (= its ROM layout except a few opened caves / cut bushes).
+   In caves and dungeons $C80D keeps the overworld screen while $CA00 / $CC00 / $D000 hold the
+   cave's data; mid-scroll $CA00 is half old, half new. The panel only re-renders when this holds. */
 static bool on_overworld(void)
 {
-    uint8_t m = sms_read8(0xC802);
-    return (m == 6 || m == 7) && (g_vdp.reg[0] & 0x20) && sms_read8(0xC814) == 0 && sms_read8(0xC80D) < NSCR;
+    uint8_t m = sms_read8(0xC802); int s = sms_read8(0xC80D);
+    if (!((m == 6 || m == 7) && (g_vdp.reg[0] & 0x20) && (g_vdp.reg[1] & 0x40) && sms_read8(0xC814) == 0 && s < NSCR)) return false;
+    const uint8_t *l = s_rom ? layout(s) : NULL;
+    if (!l) return false;
+    int same = 0;
+    for (int i = 0; i < 180; i++) same += sms_read8((uint16_t)(0xCA00 + i)) == l[i];
+    if (same < 160) return false;
+    const uint8_t *p = palette(sms_read8(0xC819) & 15);  /* CRAM = this area's palette (not a cave's, not mid-fade) */
+    return p && memcmp(p, g_vdp.cram, 16) == 0;
 }
 
 /* keep the tiles of the current palette id (only while CRAM shows that palette: not mid-fade) */
@@ -241,7 +252,11 @@ void gv_panel_draw(uint32_t *b, int w, int h)
     hud_text_scaled(b, w, h, 16, y + 6, t, CYAN, 2);
     if (gv_pw_cave(hero)) hud_text(b, w, h, w - 16 - 6 * 8, y + 10, "PASSWORD", 0xFFFF40FFu);
     float mx = (float)bx0 + 4, my = (float)y + 24;
-    render(hero);
+    bool live = on_overworld();
+    if (live) render(hero);                         /* else: keep the last overworld picture */
+    if (s_c0 < 0) { s_c0 = hero % COLS - 1; s_r0 = hero / COLS - 1;
+        if (s_c0 < 0) s_c0 = 0; if (s_c0 > COLS - WIN) s_c0 = COLS - WIN;
+        if (s_r0 < 0) s_r0 = 0; if (s_r0 > ROWS - WIN) s_r0 = ROWS - WIN; }
     if (hud_hires()) hud_image(HUD_SPACE_PANEL, mx, my, (float)mw, (float)mh, s_img, WIN * SW, WIN * SH, 0, 0, WIN * SW, WIN * SH, false, s_gen);
     else
         for (int yy = 0; yy < mh; yy++)
@@ -253,7 +268,7 @@ void gv_panel_draw(uint32_t *b, int w, int h)
             hud_rect(HUD_SPACE_PANEL, mx, my + i * SH * sc, (float)mw, 0.5f, 0x50FFFFFFu);
         }
         static unsigned blink; blink++;
-        if (on_overworld() && (blink / 20) % 3) {     /* the hero (cell centre) */
+        if (live && (blink / 20) % 3) {               /* the hero (cell centre) */
             float hx = (float)((hero % COLS - s_c0) * SW + sms_read8(0xC102) - 8);
             float hy = (float)((hero / COLS - s_r0) * SH + sms_read8(0xC101));
             hud_marker(HUD_SPACE_PANEL, mx + hx * sc, my + hy * sc, 3.f, 1.f, 0xFFFFE040u, 0xFF000000u);
@@ -302,19 +317,32 @@ void gv_panel_draw(uint32_t *b, int w, int h)
     }
 }
 
-/* test: GV_PANEL_PPM=<file> writes the surroundings picture (720 x 576) at GV_PANEL_FRAME */
+/* test: GV_PANEL_PPM=<file> writes the surroundings picture (720 x 576) as the panel has it at each
+   frame of GV_PANEL_FRAME (comma list; the panel's update runs every frame meanwhile, as in the
+   window). With a list, "%d" in the file name = the frame. GV_PANEL_LOG=1: one line per re-render. */
 void gv_panel_test(uint64_t frame)
 {
     const char *p = getenv("GV_PANEL_PPM"), *f = getenv("GV_PANEL_FRAME");
-    if (!p || !f || frame != (uint64_t)atol(f)) return;
+    if (!p || !f) return;
     if (!s_rom) s_rom = glue_rom_image(&s_rom_n);
     int hero = hero_screen(); if (hero < 0) return;
-    snapshot(); s_key = 0xFFFFFFFFu; render(hero);
-    FILE *o = fopen(p, "wb"); if (!o) return;
+    snapshot();
+    uint32_t g0 = s_gen;
+    if (on_overworld()) render(hero);
+    if (s_gen != g0 && getenv("GV_PANEL_LOG")) {
+        fprintf(stderr, "[gv_panel] frame %llu render screen %d hero y %d x %d mode %d reach", (unsigned long long)frame, hero, sms_read8(0xC101), sms_read8(0xC102), sms_read8(0xC802));
+        for (int i = 0; i < WIN * WIN; i++) fprintf(stderr, " %d", s_reach[i]);
+        fprintf(stderr, "\n");
+    }
+    bool hit = false;
+    for (const char *q = f; *q; ) { if ((uint64_t)atoll(q) == frame) hit = true; q = strchr(q, ','); if (!q) break; q++; }
+    if (!hit) return;
+    char fn[512]; snprintf(fn, sizeof fn, p, (int)frame);
+    FILE *o = fopen(fn, "wb"); if (!o) return;
     fprintf(o, "P6\n%d %d\n255\n", WIN * SW, WIN * SH);
     for (int i = 0; i < WIN * SW * WIN * SH; i++) { uint8_t c[3] = { (uint8_t)(s_img[i] >> 16), (uint8_t)(s_img[i] >> 8), (uint8_t)s_img[i] }; fwrite(c, 1, 3, o); }
     fclose(o);
     fprintf(stderr, "[gv_panel] screen %d window %d,%d reach", hero, s_c0, s_r0);
     for (int i = 0; i < WIN * WIN; i++) fprintf(stderr, " %d", s_reach[i]);
-    fprintf(stderr, " -> %s\n", p);
+    fprintf(stderr, " -> %s\n", fn);
 }
