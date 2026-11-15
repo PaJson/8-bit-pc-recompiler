@@ -357,7 +357,12 @@ int gv_frame_top(void)
         if (getenv("GV_LOG")) fprintf(stderr, "[gv] teleport %d -> %d\n", sms_read8(0xC80D), to);
         sms_write8(0xC802, 6);                               /* as the password start ($2023) */
         sms_write8(0xC80D, (uint8_t)to);
-        s_tp_place = 1;                                      /* the hero: when the display is back on */
+        /* $C84C = the extra tile set of screens with a layout id >= $53 (set when walking in, $1BC5;
+           the full load $1978 -> $1BD8 only reads it): without this a teleport from a screen without
+           it showed the target with wrong tiles (checked: A1, E3 from L14) */
+        {   size_t n; const uint8_t *rom = glue_rom_image(&n);
+            if (rom && n >= 0x16000) sms_write8(0xC84C, rom[0x15947 + rom[0x15890 + to] * 7] >= 0x53); }
+        s_tp_place = 1;                                     /* the hero: when the display is back on */
         call_game(0x0D1A);
         call_game(0x1978);                                   /* its music pick goes through gv_ow_music */
         s_tp_place = 0;

@@ -3,7 +3,7 @@
  *
  * Areas: the per-screen area id (asset $5D = file $15E48 + screen, low nibble, 0 = the previous screen's)
  * splits the overworld into 7 regions; names = the game's own boss names (gv_cave.c, bank 7 $1D33C) in
- * title case + a landscape word (the regions of https://shrines.rpgclassics.com/sms/golvellius/maps.shtml,
+ * title case + 's + a landscape word (the regions of https://shrines.rpgclassics.com/sms/golvellius/maps.shtml,
  * matched by shape): id 1 rows 12-14 Despa Valley, id 1 rows 4-11 Rolick Desert, 3 Bachular Graveyard,
  * 4 + 5 Fosbus Swamp, 6 Warlic Lake, 7 Crawky Forest, 8 Haidee Forest.
  *
@@ -39,7 +39,7 @@ static int area_id(int scr)
     int v = s_rom[0x15E48 + scr] & 15;
     return v || scr == 0 ? v : s_rom[0x15E48 + scr - 1] & 15;
 }
-/* "Despa Valley" etc.; "" if unknown */
+/* "Despa's Valley", "Fosbus' Swamp" etc.; "" if unknown */
 const char *gv_area_name(int scr)
 {
     static char out[32];
@@ -58,7 +58,9 @@ const char *gv_area_name(int scr)
     const char *b = gv_boss_name(boss);
     size_t k = 0;
     for (; b[k] && k < 16; k++) out[k] = (char)(k ? (b[k] >= 'A' && b[k] <= 'Z' ? b[k] + 32 : b[k]) : b[k]);
-    snprintf(out + k, sizeof out - k, " %s", what);
+    /* possessive like the cave titles (user's choice; the game's own texts mix "ROLICK DESERT",
+       "WARLIC'S LAKE", "FOSBUS' SWAMP", "GRAVEYARD OF BACHULAR") */
+    snprintf(out + k, sizeof out - k, "%s %s", k && (b[k - 1] == 'S' || b[k - 1] == 's') ? "'" : "'s", what);
     return out;
 }
 

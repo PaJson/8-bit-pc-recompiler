@@ -331,11 +331,28 @@ static void build_log_tail(char *out, size_t n)
     snprintf(out, n, "%s", s);
 }
 
+/* the build's stage from the log's last line: ninja's "[n/m] Building / Linking ...", else the
+   recompiler / CMake steps before it */
+static void build_stage(const char *tail, char *out, size_t n)
+{
+    int a, b;
+    const char *br = strchr(tail, '[');
+    if (br && sscanf(br, "[%d/%d]", &a, &b) == 2 && b > 0) {
+        if (strstr(br, "Linking")) snprintf(out, n, "Building: linking the game (%d/%d)", a, b);
+        else snprintf(out, n, "Building: compiling (%d/%d)", a, b);
+        return;
+    }
+    if (strstr(tail, "Build ready") || strstr(tail, "-- Build files") || strstr(tail, "-- Generating") || strstr(tail, "-- Configuring"))
+        snprintf(out, n, "Building: preparing the compiler ...");
+    else snprintf(out, n, "Building: recompiling the ROM to C ...");
+}
+
 /* ---------------- drawing ---------------- */
 static SDL_Window *g_win; static SDL_Renderer *g_ren;
 static SDL_Texture *g_bg_tex; static int g_bg_w, g_bg_h; static bool g_bg_generic;
 static SDL_Texture *g_ui_tex; static uint32_t *g_ui; static int g_ui_w, g_ui_h;
 static int g_sel, g_top;
+static int g_rows = 10;                        /* visible list rows (set while drawing): one page */
 
 static uint32_t mix(uint32_t a, uint32_t b, float t)
 {
@@ -547,6 +564,7 @@ static void draw_ui(void)
         text(tx, L.row_y + 12 * sc, "Put your ROMs (.sms) in", 0xFFA0A0B0, sc);
         text(tx, L.row_y + 22 * sc, "the ROMs folder.", 0xFFA0A0B0, sc);
     }
+    g_rows = L.rows > 1 ? L.rows : 1;
     if (g_sel < g_top) g_top = g_sel;
     if (g_sel >= g_top + L.rows) g_top = g_sel - L.rows + 1;
     if (g_top < 0) g_top = 0;
@@ -794,7 +812,7 @@ static void poll_process(void)
     if (!g_proc_kind) return;
     if (g_proc_kind == 2) {
         char tail[200]; build_log_tail(tail, sizeof tail);
-        if (tail[0]) { snprintf(g_status, sizeof g_status, "Building: %s", tail); g_status_col = 0xFFFFE040; }
+        if (tail[0]) { build_stage(tail, g_status, sizeof g_status); g_status_col = 0xFFFFE040; }
     }
     if (WaitForSingleObject(g_proc.hProcess, 0) != WAIT_OBJECT_0) return;
     DWORD code = 1; GetExitCodeProcess(g_proc.hProcess, &code);
@@ -817,6 +835,8 @@ static void move_sel(int d)
     if (g_sel < 0) g_sel = 0;
     if (g_sel >= g_ngames) g_sel = g_ngames - 1;
 }
+/* held direction: +-1 = one row, +-2 = one page (left / right, LB / RB) */
+static int nav_step(int dir) { return dir == 2 ? g_rows : dir == -2 ? -g_rows : dir; }
 
 int main(int argc, char **argv)
 {
@@ -895,8 +915,8 @@ int main(int argc, char **argv)
                 }
                 else if (k == SDLK_UP) move_sel(-1);
                 else if (k == SDLK_DOWN) move_sel(1);
-                else if (k == SDLK_PAGEUP) move_sel(-10);
-                else if (k == SDLK_PAGEDOWN) move_sel(10);
+                else if (k == SDLK_PAGEUP || k == SDLK_LEFT) move_sel(-g_rows);
+                else if (k == SDLK_PAGEDOWN || k == SDLK_RIGHT) move_sel(g_rows);
                 else if (k == SDLK_HOME) g_sel = 0;
                 else if (k == SDLK_END) g_sel = g_ngames - 1;
                 else if (!e.key.repeat && (k == SDLK_RETURN || k == SDLK_KP_ENTER)) play_selected(false);
@@ -906,17 +926,22 @@ int main(int argc, char **argv)
                 Uint8 b = e.cbutton.button;
                 if (b == SDL_CONTROLLER_BUTTON_DPAD_UP) { move_sel(-1); nav_dir = -1; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
                 else if (b == SDL_CONTROLLER_BUTTON_DPAD_DOWN) { move_sel(1); nav_dir = 1; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
+                else if (b == SDL_CONTROLLER_BUTTON_DPAD_LEFT || b == SDL_CONTROLLER_BUTTON_LEFTSHOULDER) { move_sel(-g_rows); nav_dir = -2; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
+                else if (b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT || b == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) { move_sel(g_rows); nav_dir = 2; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
                 else if (b == SDL_CONTROLLER_BUTTON_A) play_selected(false);
                 else if ((b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) && !g_proc_kind) enter_splash();
                 else if (b == SDL_CONTROLLER_BUTTON_Y) play_selected(true);
             }
             else if (e.type == SDL_CONTROLLERBUTTONUP) {
                 Uint8 b = e.cbutton.button;
-                if (b == SDL_CONTROLLER_BUTTON_DPAD_UP || b == SDL_CONTROLLER_BUTTON_DPAD_DOWN) nav_dir = 0;
+                if (b == SDL_CONTROLLER_BUTTON_DPAD_UP || b == SDL_CONTROLLER_BUTTON_DPAD_DOWN || b == SDL_CONTROLLER_BUTTON_DPAD_LEFT
+                    || b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT || b == SDL_CONTROLLER_BUTTON_LEFTSHOULDER || b == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) nav_dir = 0;
             }
-            else if (e.type == SDL_CONTROLLERAXISMOTION && e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
-                int d = e.caxis.value < -16000 ? -1 : e.caxis.value > 16000 ? 1 : 0;
-                if (d != nav_dir) { nav_dir = d; if (d) { move_sel(d); nav_t = SDL_GetTicks(); nav_next = nav_t + 400; } }
+            else if (e.type == SDL_CONTROLLERAXISMOTION && (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTY || e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX)) {
+                int k2 = e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX ? 2 : 1;      /* 1 = rows, 2 = pages */
+                int d = e.caxis.value < -16000 ? -k2 : e.caxis.value > 16000 ? k2 : 0;
+                if (!d && nav_dir && (nav_dir == 2 || nav_dir == -2) != (k2 == 2)) continue;   /* the other axis went back to 0 */
+                if (d != nav_dir) { nav_dir = d; if (d) { move_sel(nav_step(d)); nav_t = SDL_GetTicks(); nav_next = nav_t + 400; } }
             }
             else if (e.type == SDL_MOUSEWHEEL) move_sel(-e.wheel.y);
             else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
@@ -935,7 +960,7 @@ int main(int argc, char **argv)
             }
         }
         if (nav_dir && SDL_GetTicks() >= nav_next) {               /* held D-pad / stick: repeat, faster */
-            move_sel(nav_dir);
+            move_sel(nav_step(nav_dir));
             Uint32 held = SDL_GetTicks() - nav_t;
             nav_next = SDL_GetTicks() + (held > 1500 ? 40 : held > 800 ? 80 : 120);
         }

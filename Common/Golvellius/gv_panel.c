@@ -11,7 +11,7 @@
  * more and not above the hero's terrain level $C817 (the test of $2D06 / $3DB9); openings lead into a
  * cave or house, not across the map. So rivers and mountain lines
  * hide what is behind them until the item that crosses them is found. Not modelled: things the
- * sword clears (bushes) and routes that leave the 3 x 3 window.
+ * sword clears (bushes) and routes that leave the window plus one ring of screens around it.
  *
  * Drawing (all from the ROM + the game's RAM / VRAM tables, nothing stored in the project):
  *   layout  : screen -> room byte `$15890 + s`, room records `$15947 + 7 * room` (byte 0 = layout id:
@@ -21,9 +21,9 @@
  *             with $C047 = 1 on the overworld); tiles from VRAM.
  *   palette : per screen, bank 5 table `$15E48 + s` low nibble (0 = the previous screen's), id ->
  *             code `$1A77[id]` -> 16 colours via the asset pointer table of bank code >> 4 ($0E0B).
- *   tiles   : part of the tile set is loaded per palette id (VRAM $2E00, $1A6B), so the panel keeps
- *             a copy of VRAM $2000-$3FFF per id, taken while the hero is on a screen of that id
- *             (and CRAM shows its palette); other ids use the current tiles until visited.
+ *   tiles   : tiles, metatiles and terrain depend on the screen's area (see "Set" below): the hero's
+ *             screen uses what the game has loaded, the others are rebuilt from the ROM per area.
+ * A screen is also shown when it was visited before (gv_map.c), even if the fill does not reach it.
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -59,13 +59,25 @@ extern const uint32_t *gv_map_overview(int *w, int *h, uint32_t *gen);
 #define POWC    0xFFE04040u
 
 static const uint8_t *s_rom; static size_t s_rom_n;
-static uint8_t  s_snap[16][0x2000];                 /* VRAM $2000-$3FFF per palette id */
-static bool     s_has_snap[16];
 static uint32_t s_img[WIN * SW * WIN * SH];
 static uint32_t s_gen = 1;
 static uint8_t  s_reach[WIN * WIN];
 static int      s_c0 = -1, s_r0 = -1;
 static uint32_t s_key = 0xFFFFFFFFu;
+
+/* What the game loads for a screen, rebuilt from the ROM (its full load $1978: $1BD8 common part, then
+   $1A3D / $1A80 the area's part). The game itself only has the set of the area it is in, so drawing
+   the neighbours with the live tables gave other areas' screens scrambled tiles (user report: K6).
+     common   : VRAM $2000 <- asset $D0 (4-plane RLE, $038F); metatiles $CC00 <- asset $84 ($160 bytes);
+                terrain $D000 <- asset $8B (RLE $1AAA), then $D000 = $80;
+     $C84C = 1 (screens whose layout id is >= $53, $1BC5): VRAM $2780 / $28E0 / $2AE0 <- asset $8D
+                ($60 / $100 / $80 bytes), metatiles $CCD8 / $CD14 <- asset $8E ($18 / $20), terrain <- $8F;
+     area id  : palette asset $1A77[id], VRAM $2E00 <- asset $1A77[id] + 1 (4-plane RLE), metatiles
+                $CD60 <- asset $1ABB[id] ($2A0), terrain $D058 <- (asset $8C)[id] (RLE).
+   Area id of a screen = $15E48[s] low nibble; 0 = keep the loaded set when walking in ($1A1D), the
+   screen to the left's on a full load ($1A3D): the panel uses the full-load rule. */
+typedef struct { uint8_t vram[0x2000]; uint8_t mt[0x400]; uint8_t ter[0x100]; bool ok; } Set;
+static Set s_set[16][2];
 
 static uint32_t argb(uint8_t c)
 {
@@ -111,50 +123,127 @@ static bool on_overworld(void)
     int same = 0;
     for (int i = 0; i < 180; i++) same += sms_read8((uint16_t)(0xCA00 + i)) == l[i];
     if (same < 160) return false;
-    const uint8_t *p = palette(sms_read8(0xC819) & 15);  /* CRAM = this area's palette (not a cave's, not mid-fade) */
-    return p && memcmp(p, g_vdp.cram, 16) == 0;
+    /* CRAM = an area's palette (not a cave's, not mid-fade). Not "$C819's": walking into a screen of
+       area id 0 sets $C819 = 0 and keeps the loaded set (and palette) of the area it came from. */
+    for (int id = 1; id <= 8; id++) { const uint8_t *p = palette(id); if (p && memcmp(p, g_vdp.cram, 16) == 0) return true; }
+    return false;
 }
 
-/* keep the tiles of the current palette id (only while CRAM shows that palette: not mid-fade) */
-static void snapshot(void)
+/* $038F: 4 bit planes one after another, each RLE (n < $80: n literal bytes, n >= $80: the next byte
+   (n & $7F) times (0 = 256), 0 = end of the plane), written to every 4th byte from plane p */
+static void unpack4(int o, uint8_t *dst, int n)
 {
-    int s = hero_screen(); if (s < 0 || !on_overworld()) return;
-    int id = sms_read8(0xC819) & 15;
-    const uint8_t *p = palette(id);
-    if (!p || memcmp(p, g_vdp.cram, 16) != 0) return;
-    memcpy(s_snap[id], g_vdp.vram + 0x2000, 0x2000);
-    if (!s_has_snap[id]) { s_has_snap[id] = true; s_key = 0xFFFFFFFFu; }
+    if (o < 0) return;
+    const uint8_t *p = s_rom + o, *end = s_rom + s_rom_n;
+    for (int pl = 0; pl < 4; pl++) {
+        int d = pl;
+        for (;;) {
+            if (p >= end) return;
+            int c = *p++;
+            if (!c) break;
+            if (c & 0x80) {
+                int k = c & 0x7F; if (!k) k = 256;
+                if (p >= end) return;
+                uint8_t v = *p++;
+                while (k--) { if (d < n) dst[d] = v; d += 4; }
+            } else
+                while (c--) { if (p >= end) return; if (d < n) dst[d] = *p; p++; d += 4; }
+        }
+    }
 }
-
-static uint8_t mt_at(int s, int cell, int hero)     /* metatile of a cell (the hero's screen: live) */
+/* $1AAA: records (last low address byte, value), 0 = end; fills from e up to that byte */
+static void rle_ter(size_t o, uint8_t *ter, int e)
 {
-    if (s == hero) return sms_read8((uint16_t)(0xCA00 + cell));
+    while (o + 1 < s_rom_n && s_rom[o]) {
+        int last = s_rom[o]; uint8_t v = s_rom[o + 1]; o += 2;
+        for (int k = 0; k < 256; k++) { int old = e; ter[e] = v; e = (e + 1) & 255; if (old == last) break; }
+    }
+}
+static void copy_rom(uint8_t *dst, int o, int n) { if (o >= 0 && (size_t)o + (size_t)n <= s_rom_n) memcpy(dst, s_rom + o, (size_t)n); }
+static const Set *area_set(int id, int fl)
+{
+    Set *S = &s_set[id & 15][fl & 1];
+    if (S->ok) return S;
+    memset(S, 0, sizeof *S);
+    unpack4(asset(0xD0), S->vram, 0x2000);
+    copy_rom(S->mt, asset(0x84), 0x160);
+    int o = asset(0x8B); if (o >= 0) rle_ter((size_t)o, S->ter, 0);
+    S->ter[0] = 0x80;
+    if (fl) {
+        o = asset(0x8D);
+        if (o >= 0) { copy_rom(S->vram + 0x780, o, 0x60); copy_rom(S->vram + 0x8E0, o + 0x60, 0x100); copy_rom(S->vram + 0xAE0, o + 0x160, 0x80); }
+        o = asset(0x8E);
+        if (o >= 0) { copy_rom(S->mt + 0xD8, o, 0x18); copy_rom(S->mt + 0x114, o + 0x18, 0x20); }
+        o = asset(0x8F); if (o >= 0) rle_ter((size_t)o, S->ter, 0);
+    }
+    if (id <= 8) {                                  /* the tables $1A77 / $1ABB have 9 entries */
+        int pc = s_rom[0x1A77 + id];
+        unpack4(asset(pc + 1), S->vram + 0xE00, 0x2000 - 0xE00);
+        copy_rom(S->mt + 0x160, asset(s_rom[0x1ABB + id]), 0x2A0);
+        o = asset(0x8C);
+        if (o >= 0) {
+            int p = s_rom[o + 2 * id] | s_rom[o + 2 * id + 1] << 8;
+            if (p >= 0x8000 && p < 0xC000) rle_ter((size_t)8 * 0x4000 + (size_t)(p - 0x8000), S->ter, 0x58);
+        }
+    }
+    S->ok = true;
+    return S;
+}
+static int scr_flag(int s) { return s_rom[0x15947 + s_rom[0x15890 + s] * 7] >= 0x53; }   /* $C84C ($1BC5) */
+
+/* the cells of screen s as the game shows them: the hero's screen live ($CA00: opened caves, cut
+   bushes), others from the ROM + the progress patches of $1AC4 (high nibble of $15E48[s] -> table
+   $1B03: a mask of $C845, then (cell, metatile) pairs up to $FF; 4 screens, e.g. bridges) */
+static void cells(int s, int hero, uint8_t out[180])
+{
+    if (s == hero) { for (int i = 0; i < 180; i++) out[i] = sms_read8((uint16_t)(0xCA00 + i)); return; }
     const uint8_t *l = layout(s);
-    return l ? l[cell] : 0xFF;
+    if (!l) { memset(out, 0xFF, 180); return; }
+    memcpy(out, l, 180);
+    int t = asset(0x5D), hi = t >= 0 ? s_rom[t + s] >> 4 : 0;
+    if (!hi || hi > 4) return;                      /* the table has 4 entries */
+    int p = s_rom[0x1B03 + (hi - 1) * 2] | s_rom[0x1B03 + (hi - 1) * 2 + 1] << 8;
+    if (p >= 0x8000 || !(s_rom[p] & sms_read8(0xC845))) return;
+    for (p++; (size_t)p + 1 < s_rom_n && s_rom[p] != 0xFF; p += 2) if (s_rom[p] < 180) out[s_rom[p]] = s_rom[p + 1];
+}
+/* terrain attribute of a metatile on screen s (the hero's: the live table) */
+static uint8_t terrain(int s, int hero, uint8_t m)
+{
+    if (s == hero) return sms_read8((uint16_t)(0xD000 + m));
+    return area_set(pal_id(s), scr_flag(s))->ter[m];
 }
 
-/* flood fill from the hero's cell over the 45 x 36 cells of the window */
+/* Flood fill from the hero's cell over the 3 x 3 window plus one ring of screens around it (routes
+   that leave the window: user report L11, K12 / M12 stayed black), clipped to the grid. A cell is
+   passable when its attribute is 1 .. $C817. */
+#define EXT (WIN + 2)
 static void reach(int hero)
 {
-    enum { GW = 15 * WIN, GH = 12 * WIN };
+    enum { GW = 15 * EXT, GH = 12 * EXT };
     static uint8_t pass[GW * GH], seen[GW * GH]; static int q[GW * GH];
     uint8_t lvl = sms_read8(0xC817);
-    for (int wy = 0; wy < WIN; wy++)
-        for (int wx = 0; wx < WIN; wx++) {
-            int s = (s_r0 + wy) * COLS + s_c0 + wx;
+    int c0 = s_c0 - 1, r0 = s_r0 - 1;               /* top-left screen of the extended window */
+    memset(pass, 0, sizeof pass);
+    for (int wy = 0; wy < EXT; wy++)
+        for (int wx = 0; wx < EXT; wx++) {
+            int c = c0 + wx, r = r0 + wy;
+            if (c < 0 || r < 0 || c >= COLS || r >= ROWS) continue;
+            int s = r * COLS + c; uint8_t cl[180];
+            cells(s, hero, cl);
             for (int cell = 0; cell < 180; cell++) {
-                uint8_t a = sms_read8((uint16_t)(0xD000 + mt_at(s, cell, hero)));
+                uint8_t a = terrain(s, hero, cl[cell]);
                 pass[(wy * 12 + cell / 15) * GW + wx * 15 + cell % 15] = a >= 1 && a <= lvl;   /* 0 = openings (into a cave / house) */
             }
         }
     memset(seen, 0, sizeof seen); memset(s_reach, 0, sizeof s_reach);
     int hr = (sms_read8(0xC101) - 8) / 16, hc = (sms_read8(0xC102) - 16) / 16;
     if (hr < 0) hr = 0; if (hr > 11) hr = 11; if (hc < 0) hc = 0; if (hc > 14) hc = 14;
-    int start = ((hero / COLS - s_r0) * 12 + hr) * GW + (hero % COLS - s_c0) * 15 + hc;
+    int start = ((hero / COLS - r0) * 12 + hr) * GW + (hero % COLS - c0) * 15 + hc;
     int qn = 0; q[qn++] = start; seen[start] = 1;
     for (int i = 0; i < qn; i++) {
         int p = q[i], x = p % GW, y = p / GW;
-        s_reach[(y / 12) * WIN + x / 15] = 1;
+        int wx = x / 15 - 1, wy = y / 12 - 1;       /* window coordinates */
+        if (wx >= 0 && wy >= 0 && wx < WIN && wy < WIN) s_reach[wy * WIN + wx] = 1;
         static const int dx[4] = { 1, -1, 0, 0 }, dy[4] = { 0, 0, 1, -1 };
         for (int d = 0; d < 4; d++) {
             int nx = x + dx[d], ny = y + dy[d];
@@ -168,20 +257,25 @@ static void reach(int hero)
 
 static void draw_screen(int s, int ox, int oy, int hero)
 {
-    int id = pal_id(s);
-    const uint8_t *pal = palette(id);
-    const uint8_t *tiles = s_has_snap[id] ? s_snap[id] : (on_overworld() ? g_vdp.vram + 0x2000 : NULL);
-    if (!tiles) for (int k = 0; k < 16 && !tiles; k++) if (s_has_snap[k]) tiles = s_snap[k];
-    uint32_t col[16];
-    for (int i = 0; i < 16; i++) col[i] = argb(pal ? pal[i] : g_vdp.cram[i]);
+    const uint8_t *tiles, *mt; uint32_t col[16];
+    if (s == hero) {                                /* what the game has loaded (on_overworld() holds) */
+        tiles = g_vdp.vram + 0x2000; mt = NULL;
+        for (int i = 0; i < 16; i++) col[i] = argb(g_vdp.cram[i]);
+    } else {
+        int id = pal_id(s);
+        const Set *S = area_set(id, scr_flag(s));
+        const uint8_t *pal = palette(id);
+        tiles = S->vram; mt = S->mt;
+        for (int i = 0; i < 16; i++) col[i] = argb(pal ? pal[i] : g_vdp.cram[i]);
+    }
+    uint8_t cl[180]; cells(s, hero, cl);
     for (int cell = 0; cell < 180; cell++) {
-        uint8_t m = mt_at(s, cell, hero);
+        uint8_t m = cl[cell];
         for (int q = 0; q < 4; q++) {
-            int t = sms_read8((uint16_t)(0xCC00 + m * 4 + q));      /* tile 256 + t */
+            int t = mt ? mt[m * 4 + q] : sms_read8((uint16_t)(0xCC00 + m * 4 + q));      /* tile 256 + t */
             int px = ox + (cell % 15) * 16 + (q & 1) * 8, py = oy + (cell / 15) * 16 + (q >> 1) * 8;
             for (int r = 0; r < 8; r++) {
                 uint32_t *dst = s_img + (size_t)(py + r) * (WIN * SW) + px;
-                if (!tiles) { for (int x = 0; x < 8; x++) dst[x] = 0xFF000000u; continue; }
                 const uint8_t *row = tiles + t * 32 + r * 4;
                 for (int x = 0; x < 8; x++) {
                     int b = 7 - x;
@@ -197,7 +291,8 @@ static void fill_screen(int ox, int oy, uint32_t c)
     for (int y = 0; y < SH; y++) for (int x = 0; x < SW; x++) s_img[(size_t)(oy + y) * (WIN * SW) + ox + x] = c;
 }
 
-/* re-render when the window, the hero's cell / screen data, the terrain level or the tiles change */
+/* re-render when the window, the hero's cell / screen data, the terrain level, the progress flags
+   or the set of visited screens change */
 static void render(int hero)
 {
     int hc = hero % COLS, hr = hero / COLS;
@@ -208,6 +303,8 @@ static void render(int hero)
                  | (uint32_t)((sms_read8(0xC102) - 16) / 16) << 20;
     uint32_t h = 2166136261u;                       /* the hero's live screen (revealed caves etc.) */
     for (int i = 0; i < 180; i++) h = (h ^ sms_read8((uint16_t)(0xCA00 + i))) * 16777619u;
+    h = (h ^ sms_read8(0xC845)) * 16777619u;
+    for (int i = 0; i < WIN * WIN; i++) h = (h ^ (uint32_t)gv_map_seen((r0 + i / WIN) * COLS + c0 + i % WIN)) * 16777619u;
     key ^= h;
     if (key == s_key && c0 == s_c0 && r0 == s_r0) return;
     s_key = key; s_c0 = c0; s_r0 = r0;
@@ -215,7 +312,9 @@ static void render(int hero)
     for (int wy = 0; wy < WIN; wy++)
         for (int wx = 0; wx < WIN; wx++) {
             int s = (r0 + wy) * COLS + c0 + wx;
-            if (s_reach[wy * WIN + wx]) draw_screen(s, wx * SW, wy * SH, hero);
+            /* reachable now, or visited before (the hero has seen it: e.g. across a river crossed
+               before, or by a route the flood fill does not see) */
+            if (s_reach[wy * WIN + wx] || gv_map_seen(s)) draw_screen(s, wx * SW, wy * SH, hero);
             else fill_screen(wx * SW, wy * SH, 0xFF000000u);
         }
     s_gen++;
@@ -241,7 +340,6 @@ void gv_panel_draw(uint32_t *b, int w, int h)
         else hud_text_scaled(b, w, h, (w - 10 * 12) / 2, h / 2 - 7, "GOLVELLIUS", CYAN, 2);
         return;
     }
-    snapshot();
     char t[48];
     int y = 8;
     /* logo / title */
@@ -340,13 +438,31 @@ void gv_panel_test(uint64_t frame)
     if (!p || !f) return;
     if (!s_rom) s_rom = glue_rom_image(&s_rom_n);
     int hero = hero_screen(); if (hero < 0) return;
-    snapshot();
     uint32_t g0 = s_gen;
     if (on_overworld()) render(hero);
     if (s_gen != g0 && getenv("GV_PANEL_LOG")) {
         fprintf(stderr, "[gv_panel] frame %llu render screen %d hero y %d x %d mode %d reach", (unsigned long long)frame, hero, sms_read8(0xC101), sms_read8(0xC102), sms_read8(0xC802));
         for (int i = 0; i < WIN * WIN; i++) fprintf(stderr, " %d", s_reach[i]);
         fprintf(stderr, "\n");
+    }
+    /* GV_PANEL_SELFTEST=1: the hero's screen drawn from the ROM-built set (as for a neighbour) must
+       equal the live drawing (the game's own tables): prints the number of differing pixels */
+    if (getenv("GV_PANEL_SELFTEST") && on_overworld() && s_c0 >= 0) {
+        static int last = -1, still = 0;
+        still = hero == last ? still + 1 : 0; last = hero;
+        if (still == 60) {
+            int ox = (hero % COLS - s_c0) * SW, oy = (hero / COLS - s_r0) * SH;
+            static uint32_t live[SW * SH];
+            draw_screen(hero, ox, oy, hero);
+            for (int y = 0; y < SH; y++) memcpy(live + y * SW, s_img + (size_t)(oy + y) * (WIN * SW) + ox, SW * 4);
+            draw_screen(hero, ox, oy, -1);
+            int diff = 0, cdiff = 0; uint8_t cl[180]; cells(hero, -1, cl);
+            for (int y = 0; y < SH; y++) for (int x = 0; x < SW; x++) diff += live[y * SW + x] != s_img[(size_t)(oy + y) * (WIN * SW) + ox + x];
+            for (int i = 0; i < 180; i++) cdiff += cl[i] != sms_read8((uint16_t)(0xCA00 + i));
+            fprintf(stderr, "[gv_panel] selftest screen %c%d area %d flag %d loaded C819 %d C84C %d: %d pixels differ (%d cells differ from $CA00)\n",
+                    'A' + hero % COLS, hero / COLS + 1, pal_id(hero), scr_flag(hero), sms_read8(0xC819), sms_read8(0xC84C), diff, cdiff);
+            draw_screen(hero, ox, oy, hero);
+        }
     }
     bool hit = false;
     for (const char *q = f; *q; ) { if ((uint64_t)atoll(q) == frame) hit = true; q = strchr(q, ','); if (!q) break; q++; }
