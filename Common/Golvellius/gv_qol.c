@@ -39,12 +39,17 @@ static const struct { uint32_t off; uint8_t orig, fixed; } k_map_fix[2] = {
 static const char *const k_onoff[] = { "OFF (ORIGINAL)", "ON" };
 static const double k_ff_vals[] = { 0.5, 1, 2, 4 };
 static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
-static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i;
+static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i, s_free_i;
 /* Alianger's cave wall tweaks (Improvement Hack v1.1, level data in bank 5): applied from the user's own
    IPS file at run time (gv_patch.c); takes effect at the next cave screen the game loads */
 static GvPatch s_cave = { "Golvellius v1.1 top down cave wall tweaks.ips", 0xAC5D5CDDu, 434 };
+/* Alianger's free crystals (a cheat, user decision: default off): the price bytes of the crystal caves in
+   the cave table bank 7 $8D87 (2 bytes per cave, `($CAD3-$B0)*2`, copied to $C16C/$C16D when a cave is
+   entered: so it applies from the next cave entered) and the crystal seller's text at $A486. All data. */
+static GvPatch s_free = { "Golvellius free crystals.ips", 0x0C3E537Bu, 288 };
 static const char *const k_alianger[] = { "OFF (ORIGINAL)", "ON (ALIANGER)" };
 static const char *const k_missing[]  = { "IPS FILE MISSING" };
+static const char *const k_cheat[]    = { "OFF (ORIGINAL)", "ON (CHEAT, ALIANGER)" };
 static bool s_rom_ok;
 static const char *s_ini = "gv_qol.ini";
 
@@ -69,6 +74,7 @@ static void load_config(void)
         else if (!strcmp(key, "sword_hit_fix")) s_hitfix_i = v != 0;
         else if (!strcmp(key, "remember_password")) s_pw_i = v != 0;
         else if (!strcmp(key, "cave_wall_tweaks")) s_cave_i = v != 0;
+        else if (!strcmp(key, "free_crystals")) s_free_i = v != 0;
         else if (!strcmp(key, "fast_forward") && v > 0) {
             s_ff_i = 0; for (int i = 1; i < 4; i++) if (fabs(k_ff_vals[i] - v) < fabs(k_ff_vals[s_ff_i] - v)) s_ff_i = i;
         }
@@ -83,12 +89,14 @@ static void save_config(void)
     fprintf(f, "sword_hit_fix  = %d     ; 1 = every sword swing can hit (original: every other swing only stuns)\n", s_hitfix_i);
     fprintf(f, "remember_password = %d  ; 1 = the last password shown is saved and pre-filled on the password screen\n", s_pw_i);
     fprintf(f, "cave_wall_tweaks = %d   ; 1 = Alianger's top-down cave wall tweaks (needs his IPS file in ROMs/Patches)\n", s_cave_i);
+    fprintf(f, "free_crystals  = %d     ; 1 = cheat: crystals cost nothing (Alianger's IPS file in ROMs/Patches)\n", s_free_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
     safe_fclose(f, s_ini);
 }
 
 static void on_map_fix(void) { apply_map_fix(); }
 static void on_cave(void) { gv_patch_set(&s_cave, s_cave_i != 0); }
+static void on_free(void) { gv_patch_set(&s_free, s_free_i != 0); }
 extern void gv_map_init(void);
 extern void gv_map_save(void);
 extern void gv_map_hud_closed(void);
@@ -101,6 +109,7 @@ static HudOption k_opts[] = {          /* not const: an option whose IPS file is
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
     { "REMEMBER PASSWORD", k_onoff, 2, &s_pw_i,     NULL },
     { "CAVE WALL TWEAKS", k_alianger, 2, &s_cave_i, on_cave },
+    { "FREE CRYSTALS",  k_cheat,    2, &s_free_i,   on_free },
 };
 
 /* [insn_hooks] gv_sword_swing at the three swing starts `ld a,4 ; ld ($C120),a`: observe only */
@@ -218,13 +227,16 @@ void gv_on_post_reset(void)
         if (t && strlen(t) >= 64) { for (int i = 0; i < 32; i++) { unsigned v; sscanf(t + 2 * i, "%2x", &v); s_pw[i] = (uint8_t)v; } s_pw_have = true; } }
     apply_map_fix();
     {   static bool patches_done;                     /* once: they remember the original bytes */
-        if (!patches_done) { patches_done = true; gv_patch_init(&s_cave); } }
-    if (!s_cave.avail) {                              /* file missing: the option stays off */
-        s_cave_i = 0;
-        for (unsigned i = 0; i < sizeof k_opts / sizeof k_opts[0]; i++)
-            if (k_opts[i].value == &s_cave_i) { k_opts[i].choices = k_missing; k_opts[i].nchoices = 1; }
-    }
-    gv_patch_set(&s_cave, s_cave_i != 0);
+        if (!patches_done) { patches_done = true; gv_patch_init(&s_cave); gv_patch_init(&s_free); } }
+    {   GvPatch *const pp[] = { &s_cave, &s_free }; int *const pv[] = { &s_cave_i, &s_free_i };
+        for (int k = 0; k < 2; k++) {
+            if (!pp[k]->avail) {                      /* file missing: the option stays off */
+                *pv[k] = 0;
+                for (unsigned i = 0; i < sizeof k_opts / sizeof k_opts[0]; i++)
+                    if (k_opts[i].value == pv[k]) { k_opts[i].choices = k_missing; k_opts[i].nchoices = 1; }
+            }
+            gv_patch_set(pp[k], *pv[k] != 0);
+        } }
     hud_set_turbo_speed(k_ff_vals[s_ff_i]);
     hud_set_title("GOLVELLIUS - OPTIONS");
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
