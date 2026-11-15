@@ -328,10 +328,20 @@ static void frame_rect(float x, float y, float w, float h, float lw, uint32_t co
     }
 }
 
+extern const char *gv_area_name(int scr);
+extern bool gv_cave_label(int scr, char *out, size_t n, int *done);
+extern bool gv_cave_known(int scr);
+extern int gv_cave_text(int scr, char lines[][32], int max);
 static void draw_zoom(uint32_t *fb, int w, int h, float bx, float by, float bw, float bh, int idx)
 {
     static uint32_t img[FW * FH];
     static int img_idx = -1; static uint32_t img_src_gen, img_gen = 1;
+    /* the advice of the person in this screen's cave (option CAVE INFO): lines below the picture */
+    char lines[6][32]; int nl = gv_cave_known(idx) ? gv_cave_text(idx, lines, 6) : 0;
+    if (nl > 0) {
+        bh -= nl * 9 + 3;
+        for (int i = 0; i < nl; i++) hud_text(fb, w, h, (int)bx + 2, (int)(by + bh) + 3 + i * 9, lines[i], 0xFFFFFFFFu);
+    }
     float s = bw / FW < bh / FH ? bw / FW : bh / FH;
     float dw = FW * s, dh = FH * s, dx = bx + (bw - dw) / 2, dy = by + (bh - dh) / 2;
     hud_fill(fb, w, h, (int)dx - 1, (int)dy - 1, (int)(dx + dw) + 1, (int)(dy + dh) + 1, 0xFF000000u, false);
@@ -380,9 +390,16 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
     char t[64], cn[8], hn[8];
     screen_name(s_cur, cn, sizeof cn);
     if (hero >= 0) screen_name(hero, hn, sizeof hn);
-    if (s_zoom) snprintf(t, sizeof t, "SCREEN %s", cn);
-    else snprintf(t, sizeof t, "WORLD MAP");
+    {   const char *an = gv_area_name(s_cur);                     /* the cursor's area + screen (gv_info.c) */
+        if (an[0]) snprintf(t, sizeof t, "%s (%s)", an, cn); else snprintf(t, sizeof t, "SCREEN %s", cn);
+    }
     hud_text(fb, w, h, x0 + 4, y0, t, CYAN);
+    {   char cl[48]; int done = 0;                                  /* what its cave holds (option CAVE INFO) */
+        if (gv_cave_known(s_cur) && gv_cave_label(s_cur, cl, sizeof cl, &done)) {
+            hud_text(fb, w, h, x0 + 4, y0 + 10, cl, gv_pw_cave(s_cur) ? 0xFFFF40FFu : 0xFFF0C030u);
+            if (done) hud_text(fb, w, h, x0 + 4 + 6 * ((int)strlen(cl) + 1), y0 + 10, done == 2 ? "TAKEN" : "BOUGHT", 0xFF60E060u);
+        } else if (!gv_cave_known(s_cur)) hud_text(fb, w, h, x0 + 4, y0 + 10, "CAVE: NOT ENTERED YET", GREY);
+    }
     snprintf(t, sizeof t, "%d/%d", seen, NSCR);
     hud_text(fb, w, h, x1 - 4 - 6 * (int)strlen(t), y0, t, GREY);
 
@@ -402,7 +419,7 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
         hud_text(fb, w, h, x1 - 4 - 6 * (int)strlen(z), ly, z, GREY);
     }
 
-    int by0 = y0 + 11, bw = x1 - x0 - 8, bh = ly - 2 - by0 - 1;
+    int by0 = y0 + 21, bw = x1 - x0 - 8, bh = ly - 2 - by0 - 1;
     if (s_zoom) { draw_zoom(fb, w, h, x0 + 4, by0, bw, bh, s_cur); return; }
 
     float s = (float)bw / MW < (float)bh / MH ? (float)bw / MW : (float)bh / MH;

@@ -36,6 +36,9 @@
 
 extern uint8_t *glue_rom_image(size_t *size);
 extern bool gv_pw_cave(int idx);
+extern const char *gv_area_name(int scr);
+extern bool gv_cave_label(int scr, char *out, size_t n, int *done);
+extern bool gv_cave_known(int scr);
 extern bool gv_map_seen(int idx);
 extern const uint32_t *gv_map_overview(int *w, int *h, uint32_t *gen);
 
@@ -248,12 +251,21 @@ void gv_panel_draw(uint32_t *b, int w, int h)
     y += 78;
 
     /* surroundings */
-    snprintf(t, sizeof t, "SCREEN %c%d", 'A' + hero % COLS, hero / COLS + 1);
+    /* area name, then the screen + what its cave holds (gv_info.c; option CAVE INFO) */
+    const char *area = gv_area_name(hero);
+    if (area[0]) snprintf(t, sizeof t, "%s", area); else snprintf(t, sizeof t, "SCREEN %c%d", 'A' + hero % COLS, hero / COLS + 1);
     int bx0 = 8, bx1 = w - 8, mw = bx1 - bx0 - 8, mh = mw * (WIN * SH) / (WIN * SW);
-    box(b, w, h, bx0, y, bx1, y + 24 + mh + 8);
-    hud_text_scaled(b, w, h, 16, y + 6, t, CYAN, 2);
-    if (gv_pw_cave(hero)) hud_text(b, w, h, w - 16 - 6 * 8, y + 10, "PASSWORD", 0xFFFF40FFu);
-    float mx = (float)bx0 + 4, my = (float)y + 24;
+    box(b, w, h, bx0, y, bx1, y + 36 + mh + 8);
+    hud_text_scaled(b, w, h, 16, y + 6, t, CYAN, (int)strlen(t) * 12 <= w - 32 ? 2 : 1);
+    {   char cl[48], line[64]; int done = 0;
+        snprintf(line, sizeof line, "%c%d", 'A' + hero % COLS, hero / COLS + 1);
+        hud_text(b, w, h, 16, y + 24, line, WHITE);
+        if (gv_cave_known(hero) && gv_cave_label(hero, cl, sizeof cl, &done)) {
+            hud_text(b, w, h, 16 + 6 * 4, y + 24, cl, gv_pw_cave(hero) ? 0xFFFF40FFu : GOLDC);
+            if (done) hud_text(b, w, h, 16 + 6 * (5 + (int)strlen(cl)), y + 24, done == 2 ? "TAKEN" : "BOUGHT", 0xFF60E060u);
+        }
+    }
+    float mx = (float)bx0 + 4, my = (float)y + 36;
     bool live = on_overworld();
     if (live) render(hero);                         /* else: keep the last overworld picture */
     if (s_c0 < 0) { s_c0 = hero % COLS - 1; s_r0 = hero / COLS - 1;
@@ -276,7 +288,7 @@ void gv_panel_draw(uint32_t *b, int w, int h)
             hud_marker(HUD_SPACE_PANEL, mx + hx * sc, my + hy * sc, 3.f, 1.f, 0xFFFFE040u, 0xFF000000u);
         }
     }
-    y += 24 + mh + 8 + 8;
+    y += 36 + mh + 8 + 8;
 
     /* gold + power */
     box(b, w, h, 8, y, w - 8, y + 92);

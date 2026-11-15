@@ -99,7 +99,15 @@ static void names_init(void)
     }
 }
 
-/* ---- file: "GVC1", per dungeon: seen bits (MAXST / 8), has_snap, [snapshot] ---- */
+/* ---- file: "GVC2", per dungeon: seen bits (MAXST / 8), has_snap, [snapshot]; then 182 bytes: the screens
+   whose cave the hero has been in (gv_info.c: CAVE INFO = entered caves). "GVC1" = without them. ---- */
+static uint8_t s_entered[182];
+bool gv_cave_entered(int scr) { return scr >= 0 && scr < 182 && s_entered[scr]; }
+const char *gv_boss_name(int id)                    /* the game's names, upper case */
+{
+    static bool init; if (!init && rom_ok()) { names_init(); init = true; }
+    return id >= 0 && id < NCAVE ? s_names[id] : "";
+}
 static void cave_path(char *out, size_t n)
 {
     const char *sp = glue_save_path(); out[0] = 0;
@@ -114,12 +122,13 @@ void gv_cave_save(void)
     if (!s_dirty || getenv("SMS_NO_SAVE")) return;
     char p[1100]; cave_path(p, sizeof p); if (!p[0]) return;
     FILE *f = safe_fopen_w(p, "wb"); if (!f) return;
-    fwrite("GVC1", 1, 4, f);
+    fwrite("GVC2", 1, 4, f);
     for (int i = 0; i < NCAVE; i++) {
         fwrite(s_seen[i], 1, sizeof s_seen[i], f);
         uint8_t h = s_has_snap[i]; fwrite(&h, 1, 1, f);
         if (h) fwrite(s_snap[i], 1, sizeof s_snap[i], f);
     }
+    fwrite(s_entered, 1, sizeof s_entered, f);
     if (safe_fclose(f, p)) s_dirty = false;
 }
 static void cave_load_file(void)
@@ -130,12 +139,15 @@ static void cave_load_file(void)
     char p[1100]; cave_path(p, sizeof p);
     FILE *f = p[0] ? fopen(p, "rb") : NULL; if (!f) return;
     char mg[4];
-    if (fread(mg, 1, 4, f) == 4 && !memcmp(mg, "GVC1", 4))
-        for (int i = 0; i < NCAVE; i++) {
+    bool v2 = false, ok = true;
+    if (fread(mg, 1, 4, f) == 4 && (!memcmp(mg, "GVC1", 4) || (v2 = !memcmp(mg, "GVC2", 4)))) {
+        for (int i = 0; i < NCAVE && ok; i++) {
             uint8_t h = 0;
-            if (fread(s_seen[i], 1, sizeof s_seen[i], f) != sizeof s_seen[i] || fread(&h, 1, 1, f) != 1) break;
-            if (h) { if (fread(s_snap[i], 1, sizeof s_snap[i], f) != sizeof s_snap[i]) break; s_has_snap[i] = true; }
+            if (fread(s_seen[i], 1, sizeof s_seen[i], f) != sizeof s_seen[i] || fread(&h, 1, 1, f) != 1) { ok = false; break; }
+            if (h) { if (fread(s_snap[i], 1, sizeof s_snap[i], f) != sizeof s_snap[i]) { ok = false; break; } s_has_snap[i] = true; }
         }
+        if (ok && v2 && fread(s_entered, 1, sizeof s_entered, f) != sizeof s_entered) memset(s_entered, 0, sizeof s_entered);
+    }
     fclose(f);
 }
 
@@ -270,6 +282,13 @@ void gv_cave_frame(void)
     cave_load_file();
     s_in = false;
     if (!rom_ok()) return;
+    {   /* the screen whose cave the hero is in: a cave room (mode $11) or a dungeon */
+        int m = sms_read8(0xC802), scr = sms_read8(0xC80D), kind = sms_read8(0xC100) & 0x7F;
+        if (scr < 182 && !s_entered[scr] && (m == 0x11 || (m == 8 && kind == 3) || (m == 7 && kind == 2 && sms_read8(0xCAD7)))) {
+            s_entered[scr] = 1; s_dirty = true;
+            if (cave_log()) fprintf(stderr, "[cave] entered the cave of screen %c%d (mode %02X)\n", 'A' + scr % 13, scr / 13 + 1, m);
+        }
+    }
     int mode = sms_read8(0xC802), kind = sms_read8(0xC100) & 0x7F, id = sms_read8(0xCAD7);
     bool td = mode == 8 && kind == 3 && (id & 1), sv = mode == 7 && kind == 2 && !(id & 1);
     if (!(td || sv) || id >= NCAVE) return;

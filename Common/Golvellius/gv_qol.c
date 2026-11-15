@@ -51,6 +51,8 @@ static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i, s_free_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
 static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_8way_i, s_reach_i;
 extern int gv_cave_reveal;                         /* gv_cave.c: DUNGEON MAP option */
+extern int gv_cave_info_all;                       /* gv_info.c: CAVE INFO option */
+static const char *const k_cinfo[] = { "ENTERED CAVES", "ALL CAVES (SPOILER)" };
 static const char *const k_dmap[] = { "EXPLORED PART", "WHOLE DUNGEON" };
 static const char *const k_reach[] = { "ORIGINAL", "+4 PIXELS", "+8 PIXELS" };
 static const char *const k_mult[] = { "X0", "X1 (ORIGINAL)", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10" };
@@ -99,6 +101,7 @@ static void load_config(void)
         else if (!strcmp(key, "dina_2600")) s_dina_i = v != 0;
         else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
         else if (!strcmp(key, "dungeon_map_whole")) gv_cave_reveal = v != 0;
+        else if (!strcmp(key, "cave_info_all")) gv_cave_info_all = v != 0;
         else if (!strcmp(key, "teleport")) s_tp_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "eight_way_walking")) s_8way_i = v != 0;
         else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
@@ -118,6 +121,7 @@ static void save_config(void)
     fprintf(f, "remember_password = %d  ; 1 = the last password shown is saved and pre-filled on the password screen\n", s_pw_i);
     fprintf(f, "cave_wall_tweaks = %d   ; 1 = Alianger's top-down cave wall tweaks (needs his IPS file in ROMs/Patches)\n", s_cave_i);
     fprintf(f, "free_crystals  = %d     ; 1 = cheat: crystals cost nothing (Alianger's IPS file in ROMs/Patches)\n", s_free_i);
+    fprintf(f, "cave_info_all  = %d     ; what each screen's cave holds (panel / MAP tab): 0 = caves you have entered, 1 = all (spoiler)\n", gv_cave_info_all);
     fprintf(f, "damage_dealt   = %-5d ; sword damage to enemies x0..x10 (1 = original)\n", s_dealt_i);
     fprintf(f, "damage_received = %-4d ; damage you take x0..x10 (1 = original; healing is not changed)\n", s_recv_i);
     fprintf(f, "gold_multiplier = %-4d ; gold dropped by enemies x0..x10 (1 = original; GOLD MAX still caps it)\n", s_gold_i);
@@ -155,6 +159,7 @@ static HudOption k_opts[] = {          /* not const: an option whose IPS file is
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
     { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },
     { "DUNGEON MAP",    k_dmap,     2, &gv_cave_reveal, NULL },
+    { "CAVE INFO",      k_cinfo,    2, &gv_cave_info_all, NULL },
     { "REMEMBER PASSWORD", k_onoff, 2, &s_pw_i,     NULL },
     { "CAVE WALL TWEAKS", k_alianger, 2, &s_cave_i, on_cave },
     { "FREE CRYSTALS",  k_cheat,    2, &s_free_i,   on_free },
@@ -511,6 +516,7 @@ void gv_on_frame_post(uint64_t frame)
     tp_place_tick();
     gv_cave_frame();
     gv_cave_test(frame);
+    { extern void gv_info_test(uint64_t); gv_info_test(frame); }
     gv_panel_test(frame);
     {   static long tf = -2; static int ts;              /* test: GV_TP_TEST=<frame>:<screen> = a teleport request */
         if (tf == -2) { const char *e = getenv("GV_TP_TEST"); tf = -1; if (e) sscanf(e, "%ld:%d", &tf, &ts); }
