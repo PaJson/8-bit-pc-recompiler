@@ -523,7 +523,29 @@ void gv_on_frame_post(uint64_t frame)
     gv_cave_test(frame);
     { extern void gv_info_test(uint64_t); gv_info_test(frame); }
     gv_panel_test(frame);
-    {   static long tf = -2; static int ts;              /* test: GV_TP_TEST=<frame>:<screen> = a teleport request */
+    {   /* test: GV_SPR_LOG=1 prints overworld frames whose end-of-frame sprite table has no sprite near
+           the hero ($C101 / $C102) although the frame before had one (user: the hero vanishes for one
+           frame when the top bar goes); the table's first 12 Y values show what changed */
+        static int on = -1; if (on < 0) on = getenv("GV_SPR_LOG") != NULL;
+        static int had;
+        if (on && sms_read8(0xC802) == 6 && (g_vdp.reg[1] & 0x40)) {
+            int sat = (g_vdp.reg[5] & 0x7E) << 7, hy = sms_read8(0xC101), hx = sms_read8(0xC102), n = 0, near = 0;
+            for (int i = 0; i < 64; i++) {
+                int y = g_vdp.vram[(sat + i) & 0x3FFF]; if (y == 0xD0) break;
+                n++;
+                int x = g_vdp.vram[(sat + 128 + 2 * i) & 0x3FFF];
+                int dy = ((y + 1 - hy) & 255); if (dy > 127) dy -= 256;
+                if (x + 8 > hx - 16 && x < hx + 16 && dy > -40 && dy < 24) near++;
+            }
+            if (had && !near) {
+                fprintf(stderr, "[spr] frame %llu: no hero sprite (hero y %d x %d), %d sprites, Y:", (unsigned long long)frame, hy, hx, n);
+                for (int i = 0; i < 12; i++) fprintf(stderr, " %d", g_vdp.vram[(sat + i) & 0x3FFF]);
+                fprintf(stderr, "\n");
+            }
+            had = near > 0;
+        } else had = 0;
+    }
+    {   static long tf = -2; static int ts;             /* test: GV_TP_TEST=<frame>:<screen> = a teleport request */
         if (tf == -2) { const char *e = getenv("GV_TP_TEST"); tf = -1; if (e) sscanf(e, "%ld:%d", &tf, &ts); }
         if (tf >= 0 && frame == (uint64_t)tf) s_tp_req = ts; }
     {   static long mf = -2; static int mv;              /* test: GV_MUSIC_TEST=<frame>:<option 0..5> */
