@@ -193,14 +193,23 @@ typedef void (*FillFn)(int x0, int y0, int x1, int y1, uint32_t rgb);   /* [x0,x
 #define C_YOU     0xEB3C3Cu
 #define C_EXIT    0x40E070u   /* corner mark: stairs/door that leads out (B03_DungeonTransitionData) */
 
+/* Cells are cs px with a gap of g_u px (1 for the small pixel-art sizes; cs / 8 for the big
+   picture the hi-res layer shows, so the shapes keep their proportions). Sizes below 16 keep the
+   original hand-tuned pixel shapes. */
+static int g_u = 1;
+static int parity_fit(int wd, int e) { if (wd < 1) wd = 1; if ((e - wd) & 1) wd++; return wd > e ? e : wd; }
+
 static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
 {
-    int e = cs - 1, q = cs / 4 > 0 ? cs / 4 : 1;
+    int u = g_u, e = cs - u, q = cs / 4 > 0 ? cs / 4 : 1;
+    bool big = cs >= 16;
     uint32_t floor = visited ? C_FLOOR_V : C_FLOOR;
     switch (k) {
     case K_WALL:   f(sx, sy, sx + e, sy + e, C_WALL); break;
     case K_SECRET: f(sx, sy, sx + e, sy + e, C_SECRET);                  /* wall with a hole pattern */
-                   for (int y = 0; y < e; y += 2) for (int x = (y / 2) & 1; x < e; x += 2) f(sx + x, sy + y, sx + x + 1, sy + y + 1, C_WALL);
+                   for (int y = 0; y < e; y += 2 * u)
+                       for (int x = ((y / (2 * u)) & 1) * u; x < e; x += 2 * u)
+                           f(sx + x, sy + y, sx + (x + u < e ? x + u : e), sy + (y + u < e ? y + u : e), C_WALL);
                    break;
     case K_DOOR: case K_LOCKED: case K_MAGIC:
         f(sx, sy, sx + e, sy + e, C_WALL);
@@ -208,7 +217,13 @@ static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
         break;
     case K_UP: case K_DOWN:
         f(sx, sy, sx + e, sy + e, floor);
-        {   /* centred triangle, 2 px wider every 2 rows, 1 px margin; pointing up or down */
+        if (big) {                                  /* centred triangle, 9/16 of the cell tall */
+            int th = e * 9 / 16, wmax = e - 4 * u, top = sy + (e - th) / 2;
+            for (int i = 0; i < th; i++) {
+                int wd = parity_fit(wmax * (i + 1) / th, e), r = k == K_UP ? i : th - 1 - i, x0 = sx + (e - wd) / 2;
+                f(x0, top + r, x0 + wd, top + r + 1, C_STAIRS);
+            }
+        } else {   /* centred triangle, 2 px wider every 2 rows, 1 px margin; pointing up or down */
             int rows = 0, wid[16];
             for (int i = 0; i < 16; i++) {
                 int wd = (e % 2 == 0) ? 2 * (i / 2 + 1) : 2 * (i / 2) + 1;
@@ -223,9 +238,11 @@ static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
         }
         break;
     case K_PIT:
-        f(sx, sy, sx + e, sy + e, floor);
-        f(sx + 1, sy + 1, sx + e - 1, sy + e - 1, C_PIT_RIM);
-        f(sx + 2, sy + 2, sx + e - 2, sy + e - 2, C_PIT);
+        {   int p = big ? e / 6 : 1;
+            f(sx, sy, sx + e, sy + e, floor);
+            f(sx + p, sy + p, sx + e - p, sy + e - p, C_PIT_RIM);
+            f(sx + p + u, sy + p + u, sx + e - p - u, sy + e - p - u, C_PIT);
+        }
         break;
     case K_CHEST: case K_CHEST_OPEN:
         f(sx, sy, sx + e, sy + e, floor);
@@ -234,9 +251,14 @@ static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
     case K_EVENT: case K_EVENT_DONE:
         f(sx, sy, sx + e, sy + e, floor);           /* "!" */
         {   uint32_t c = k == K_EVENT ? C_EVENT : C_OPENED;
-            int bw = e % 2 ? 1 : 2, x0 = sx + (e - bw) / 2;   /* centred for odd and even sizes */
-            if (e >= 5) { f(x0, sy + 1, x0 + bw, sy + e - 3, c); f(x0, sy + e - 2, x0 + bw, sy + e - 1, c); }
-            else f(x0, sy, x0 + bw, sy + e, c);
+            if (big) {
+                int bw = parity_fit(e / 6, e), x0 = sx + (e - bw) / 2, d0 = sy + e * 3 / 4;
+                f(x0, sy + e / 8, x0 + bw, sy + e * 5 / 8, c); f(x0, d0, x0 + bw, d0 + bw, c);
+            } else {
+                int bw = e % 2 ? 1 : 2, x0 = sx + (e - bw) / 2;   /* centred for odd and even sizes */
+                if (e >= 5) { f(x0, sy + 1, x0 + bw, sy + e - 3, c); f(x0, sy + e - 2, x0 + bw, sy + e - 1, c); }
+                else f(x0, sy, x0 + bw, sy + e, c);
+            }
         }
         break;
     default:       f(sx, sy, sx + e, sy + e, floor); break;
@@ -246,7 +268,9 @@ static void draw_glyph(FillFn f, int k, bool visited, int sx, int sy, int cs)
 /* Draws the 16x16 map at (mx,my) with cell size cs; returns the number of explored cells. */
 static int draw_map(FillFn f, int mx, int my, int cs)
 {
-    f(mx - 1, my - 1, mx + 16 * cs + 1, my + 16 * cs + 1, C_BG);
+    g_u = cs >= 16 ? cs / 8 : 1;
+    int u = g_u;
+    f(mx - u, my - u, mx + 16 * cs + u, my + 16 * cs + u, C_BG);
     int seen = 0;
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
         int p = y * 16 + x;
@@ -259,12 +283,13 @@ static int draw_map(FillFn f, int mx, int my, int cs)
         }
         int sx = mx + x * cs, sy = my + y * cs;
         draw_glyph(f, k, (fl & VISITED) != 0, sx, sy, cs);
-        if (ev && (g_show_secrets || (fl & VISITED))) f(sx, sy, sx + 2, sy + 2, C_EXIT);    /* exit / warp corner */
+        if (ev && (g_show_secrets || (fl & VISITED))) f(sx, sy, sx + 2 * u, sy + 2 * u, C_EXIT);    /* exit / warp corner */
     }
     if (g_in_dungeon) {                                  /* player: arrow (head + shaft) pointing the facing way */
-        int sx = mx + g_cur_px * cs, sy = my + g_cur_py * cs, e = cs - 1, head = (e + 1) / 2;
+        int sx = mx + g_cur_px * cs, sy = my + g_cur_py * cs, e = cs - u, head = (e + 1) / 2;
+        int shaft = cs >= 16 ? parity_fit(e * 3 / 7, e) : (e % 2 ? 3 : 4);
         for (int i = 0; i < e; i++) {                    /* row i, counted from the tip */
-            int wd = i < head ? (e % 2 ? 2 * i + 1 : 2 * i + 2) : (e % 2 ? 3 : 4); if (wd > e) wd = e;
+            int wd = i < head ? (e % 2 ? 2 * i + 1 : 2 * i + 2) : shaft; if (wd > e) wd = e;
             int a = (e - wd) / 2;                        /* span [a, a+wd) across the arrow */
             uint32_t c = C_YOU;
             switch (g_cur_dir) {
@@ -276,6 +301,47 @@ static int draw_map(FillFn f, int mx, int my, int cs)
         }
     }
     return seen;
+}
+
+/* ---- the map as a big picture for the engine's hi-res layer (sharp at any window size) ----
+   48 px cells (+ a 6 px border) = 780 x 780; the host shrinks it (area average) or enlarges it to
+   the real window pixels. Redrawn only when what the small map would draw changes (signature =
+   hash of the draw calls at 8 px cells). One MapImg per place it is shown in the same frame. */
+#define HI_CS 48
+#define HI_U  (HI_CS / 8)
+#define HI_SZ (16 * HI_CS + 2 * HI_U)
+typedef struct { uint32_t *img; uint32_t sig, gen; } MapImg;
+static uint32_t g_sig, *g_ifb;
+static void sig_fill(int x0, int y0, int x1, int y1, uint32_t rgb)
+{
+    uint32_t v[5] = { (uint32_t)x0, (uint32_t)y0, (uint32_t)x1, (uint32_t)y1, rgb };
+    const uint8_t *p = (const uint8_t *)v;
+    for (size_t i = 0; i < sizeof v; i++) { g_sig ^= p[i]; g_sig *= 16777619u; }
+}
+static void img_fill(int x0, int y0, int x1, int y1, uint32_t rgb)
+{
+    if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > HI_SZ) x1 = HI_SZ; if (y1 > HI_SZ) y1 = HI_SZ;
+    for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) g_ifb[y * HI_SZ + x] = 0xFF000000u | rgb;
+}
+/* draws the current map state (g_cur ...) into m when it changed; returns the explored cell count */
+static int map_image(MapImg *m)
+{
+    g_sig = 2166136261u;
+    int seen = draw_map(sig_fill, 1, 1, 8);
+    if (!m->img && !(m->img = malloc((size_t)HI_SZ * HI_SZ * 4))) return seen;
+    if (m->gen == 0 || g_sig != m->sig) {
+        g_ifb = m->img;
+        draw_map(img_fill, HI_U, HI_U, HI_CS);
+        m->sig = g_sig; m->gen++;
+    }
+    return seen;
+}
+/* shows it in `space` with the 16 x 16 cells at (x, y), cs units per cell (border around it) */
+static void map_image_show(MapImg *m, int space, float x, float y, float cs)
+{
+    if (!m->img) return;
+    float b = cs * HI_U / HI_CS;
+    hud_image(space, x - b, y - b, 16 * cs + 2 * b, 16 * cs + 2 * b, m->img, HI_SZ, HI_SZ, 0, 0, HI_SZ, HI_SZ, false, m->gen);
 }
 
 /* ---- HUD page ---- */
@@ -343,8 +409,13 @@ void ps_automap_hud_draw_floor(uint32_t *fb, int w, int h, int x0, int y0, int x
     g_hfb = fb; g_hw = w; g_hh = h;
     int avail = (y1 - y0) < (x1 - x0) ? (y1 - y0) : (x1 - x0);
     int cs = avail / 16; if (cs > 8) cs = 8; if (cs < 3) cs = 3;
-    int mx = x0 + 2, my = y0 + 1;
-    int seen = draw_map(hud_fill_rgb, mx, my, cs);
+    int mx = x0 + 2, my = y0 + 1, seen;
+    if (hud_hires()) {                                   /* sharp at the window's resolution */
+        static MapImg hud_img;
+        seen = map_image(&hud_img);
+        hud_fill_rgb(mx - 1, my - 1, mx + 16 * cs + 1, my + 16 * cs + 1, C_BG);
+        map_image_show(&hud_img, HUD_SPACE_GAME, (float)mx, (float)my, (float)cs);
+    } else seen = draw_map(hud_fill_rgb, mx, my, cs);
     g_cur = cur; g_in_dungeon = in;
     /* info + legend to the right of the map */
     int tx = mx + 16 * cs + 7, ty = my, maxc = (x1 - tx) / 6;
@@ -363,15 +434,18 @@ void ps_automap_hud_draw_floor(uint32_t *fb, int w, int h, int x0, int y0, int x
     snprintf(buf, sizeof buf, "EXPLORED %d%%", seen * 100 / 256); hud_text(fb, w, h, tx, ty, buf, GREY); ty += 9;
     for (int i = 0; i < nlines; i++, ty += 9) hud_text(fb, w, h, tx, ty, lines[i], WHITE);
     ty += 4;
-    static const struct { int k; const char *t; } leg[] = {
-        { K_UP, "STAIRS UP" }, { K_DOWN, "STAIRS DOWN" }, { K_DOOR, "DOOR" }, { K_LOCKED, "LOCKED DOOR" },
-        { K_MAGIC, "MAGIC DOOR" }, { K_SECRET, "SECRET WALL" }, { K_PIT, "PIT" }, { K_CHEST, "CHEST" },
-        { K_EVENT, "EVENT/BATTLE" }, { K_UP, "EXIT/WARP" } };
+    /* legend: a second glyph = the other state (stairs down, opened chest, event done) */
+    static const struct { int k, k2; const char *t; } leg[] = {
+        { K_UP, K_DOWN, "STAIRS UP/DN" }, { K_DOOR, -1, "DOOR" }, { K_LOCKED, -1, "LOCKED DOOR" },
+        { K_MAGIC, -1, "MAGIC DOOR" }, { K_SECRET, -1, "SECRET WALL" }, { K_PIT, -1, "PIT" },
+        { K_CHEST, K_CHEST_OPEN, "CHEST/OPEN" }, { K_EVENT, K_EVENT_DONE, "EVENT/DONE" }, { K_UP, -1, "EXIT/WARP" } };
     int ls = cs < 8 ? cs : 8;                            /* legend glyphs = the map's cell size */
-    for (unsigned i = 0; i < sizeof leg / sizeof leg[0] && ty + 8 <= y1; i++, ty += 9) {
+    g_u = 1;
+    for (unsigned i = 0; i < sizeof leg / sizeof leg[0] && ty + 7 <= y1; i++, ty += 8) {
         draw_glyph(hud_fill_rgb, leg[i].k, true, tx, ty, ls);
+        if (leg[i].k2 >= 0) draw_glyph(hud_fill_rgb, leg[i].k2, true, tx + ls + 1, ty, ls);
         if (i == sizeof leg / sizeof leg[0] - 1) hud_fill_rgb(tx, ty, tx + 2, ty + 2, C_EXIT);
-        hud_text(fb, w, h, tx + 12, ty, leg[i].t, GREY);
+        hud_text(fb, w, h, tx + 2 * ls + 5, ty, leg[i].t, GREY);
     }
 }
 
@@ -439,6 +513,12 @@ static void buf_fill(int x0, int y0, int x1, int y1, uint32_t rgb)
 bool ps_automap_draw(uint32_t *fb, int w, int h, int x, int y, int cs)
 {
     if (!g_cur) return false;
+    if (hud_hires()) {                                   /* the panel: sharp at the window's resolution */
+        static MapImg panel_img;
+        map_image(&panel_img);
+        map_image_show(&panel_img, HUD_SPACE_PANEL, (float)x, (float)y, (float)cs);
+        return true;
+    }
     g_bfb = fb; g_bw = w; g_bh = h;
     draw_map(buf_fill, x, y, cs);
     return true;
@@ -456,8 +536,14 @@ bool ps_automap_draw_slot(uint32_t *fb, int w, int h, int x, int y, int cs, int 
     DungeonMemory *cur = g_cur; int px = g_cur_px, py = g_cur_py, dir = g_cur_dir; bool in = g_in_dungeon;
     g_cur = d; g_cur_px = pos & 15; g_cur_py = pos >> 4; g_cur_dir = blk[RAM_DNG_DIR - RAM_SAVE_BLK] & 3;
     g_in_dungeon = true; g_flag_blk = blk;
-    g_bfb = fb; g_bw = w; g_bh = h;
-    draw_map(buf_fill, x, y, cs);
+    if (hud_hires()) {
+        static MapImg slot_img;
+        map_image(&slot_img);
+        map_image_show(&slot_img, HUD_SPACE_PANEL, (float)x, (float)y, (float)cs);
+    } else {
+        g_bfb = fb; g_bw = w; g_bh = h;
+        draw_map(buf_fill, x, y, cs);
+    }
     g_cur = cur; g_cur_px = px; g_cur_py = py; g_cur_dir = dir; g_in_dungeon = in; g_flag_blk = NULL;
     return true;
 }
