@@ -38,4 +38,5 @@ options; everything is our own implementation.
 
 ## Tools used during development (not part of the project)
 
-FLIPS (Alcaro) to apply BPS / IPS patches, Emulicious and MasterlatorSDL as debuggers.
+Emulicious and MasterlatorSDL as debuggers; FLIPS (Alcaro) to apply patches until our own
+`Tools/apply_patch.py` replaced it.
