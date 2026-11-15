@@ -289,13 +289,31 @@ static void cursor_move(int key)
     else if (key == HUD_KEY_RIGHT && col < COLS - 1) n++;
     s_cur = n;
 }
+/* MAP TELEPORT (gv_qol.c): in the zoomed view of an allowed screen B / Enter asks once more, the
+   second press teleports (the HUD closes); an arrow while asking = no (back to the map). */
+extern bool gv_tp_allowed(int idx);
+extern void gv_tp_request(int idx);
+extern bool gv_pw_cave(int idx);
+static bool s_tp_ask;
+bool gv_map_seen(int idx) { return idx >= 0 && idx < NSCR && s_seen[idx]; }
+/* the overview of visited screens (13 x 14 cells of CW x CH, transparent = not visited), for the side panel */
+const uint32_t *gv_map_overview(int *w, int *h, uint32_t *gen) { *w = MW; *h = MH; *gen = s_gen; return s_map; }
 static void map_key(int key)
 {
     if (s_cur < 0) { int h = hero_screen(); s_cur = h >= 0 ? h : 180; }      /* L14 = the password start */
-    if (key == HUD_KEY_SELECT) s_zoom = !s_zoom;
+    if (s_tp_ask) {
+        s_tp_ask = false;
+        if (key == HUD_KEY_SELECT && gv_tp_allowed(s_cur)) { gv_tp_request(s_cur); hud_key(HUD_KEY_CLOSE); }
+        else s_zoom = false;
+        return;
+    }
+    if (key == HUD_KEY_SELECT) {
+        if (s_zoom && gv_tp_allowed(s_cur)) s_tp_ask = true;
+        else s_zoom = !s_zoom;
+    }
     else cursor_move(key);
 }
-void gv_map_hud_closed(void) { s_cur = -1; s_zoom = false; }
+void gv_map_hud_closed(void) { s_cur = -1; s_zoom = false; s_tp_ask = false; }
 
 static void frame_rect(float x, float y, float w, float h, float lw, uint32_t col, uint32_t *fb, int fw, int fh)
 {
@@ -368,7 +386,12 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
 
     /* bottom line: cursor / hero screen and what B / Enter does */
     int ly = y1 - 9;
-    if (s_zoom) hud_text(fb, w, h, x0 + 4, ly, "ARROWS NEXT SCREEN   B/ENTER MAP", GREY);
+    if (s_zoom && s_tp_ask) {
+        snprintf(t, sizeof t, "TELEPORT TO %s? B/ENTER=YES", cn);
+        hud_text(fb, w, h, x0 + 4, ly, t, YEL);
+    }
+    else if (s_zoom) hud_text(fb, w, h, x0 + 4, ly, gv_tp_allowed(s_cur) ? "ARROWS NEXT  B/ENTER TELEPORT"
+                                                                     : "ARROWS NEXT SCREEN   B/ENTER MAP", GREY);
     else {
         int x = x0 + 4;
         snprintf(t, sizeof t, "CURSOR %s", cn); hud_text(fb, w, h, x, ly, t, CYAN); x += 6 * ((int)strlen(t) + 2);
@@ -396,6 +419,12 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
             }
     }
     float cw = CW * s, ch = CH * s;
+    for (int i = 0; i < NSCR; i++)                               /* visited password caves: a magenta corner */
+        if (s_seen[i] && gv_pw_cave(i)) {
+            float px = dx + (i % COLS) * cw, py = dy + (i / COLS) * ch, m = cw * 0.3f;
+            if (hud_hires()) hud_rect(HUD_SPACE_GAME, px + cw - m - 0.5f, py + 0.5f, m, m, 0xFFFF40FFu);
+            else hud_fill(fb, w, h, (int)(px + cw - m), (int)py + 1, (int)(px + cw) - 1, (int)(py + m), 0xFFFF40FFu, false);
+        }
     static unsigned blink; blink++;
     if (hero >= 0 && (blink / 18) % 2 == 0)                      /* the hero's screen, blinking */
         frame_rect(dx + (hero % COLS) * cw + 0.75f, dy + (hero / COLS) * ch + 0.75f, cw - 1.5f, ch - 1.5f, 0.75f, YEL, fb, w, h);
