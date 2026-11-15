@@ -285,13 +285,16 @@ void gv_cave_frame(void)
     if (!rom_ok()) return;
     {   /* the screen whose cave the hero is in: a cave room (mode $11) or a dungeon */
         int m = sms_read8(0xC802), scr = sms_read8(0xC80D);
-        if (scr < 182 && !s_entered[scr] && (m == 0x11 || m == 8 || (m == 7 && sms_read8(0xCAD7)))) {
+        if (scr < 182 && !s_entered[scr] && (m == 0x11 || m == 8 || m == 0x0A || (m == 7 && sms_read8(0xCAD7)))) {
             s_entered[scr] = 1; s_dirty = true;
             if (cave_log()) fprintf(stderr, "[cave] entered the cave of screen %c%d (mode %02X)\n", 'A' + scr % 13, scr / 13 + 1, m);
         }
     }
-    int mode = sms_read8(0xC802), id = sms_read8(0xCAD7);       /* modes 8 / 7 are set only by $1D96 / $1DD3 */
-    bool td = mode == 8 && (id & 1), sv = mode == 7 && !(id & 1);
+    /* modes 8 / 7 are set only by $1D96 / $1DD3 (entry); mode $0A = the boss fight: set when the row /
+       column after the next one is the $FFFF end ($18A0 top-down, $145D side-view) */
+    int mode = sms_read8(0xC802), id = sms_read8(0xCAD7);
+    bool boss = mode == 0x0A;
+    bool td = (mode == 8 || boss) && (id & 1), sv = (mode == 7 || boss) && !(id & 1);
     if (!(td || sv) || id >= NCAVE) return;
     if (!select_cave(id)) return;
     s_in = true;
@@ -303,6 +306,8 @@ void gv_cave_frame(void)
     int k = (cada - (0x8000 + (start & 0x3FFF))) / 2;
     if (k < 2 || k > s_n + 2) { s_hx = s_hy = -1; return; }
     int y = sms_read8(0xC101), x = sms_read8(0xC102);
+    if (boss && steady)                     /* the end is reached: the rest (the boss room, partly never shown) */
+        for (int s = k - (s_side ? 17 : 15); s < s_n; s++) mark_seen(id, s);
     static int trace = -1; if (trace < 0) trace = getenv("GV_CAVE_TRACE") != NULL;      /* test: positions */
     if (trace) fprintf(stderr, "[cavetrace] id %d k %d x %d y %d r8 %d r9 %d c100 %02X\n", id, k, x, y, g_vdp.reg[8], g_vdp.reg[9], sms_read8(0xC100));
     if (!s_side) {
