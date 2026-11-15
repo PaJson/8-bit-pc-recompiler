@@ -109,6 +109,7 @@ static int s_walk_i = 0;                       /* walk speed: 0 = x1 (original),
 static int s_reveal_i = 0, s_secrets_i = 1;    /* dungeon map: explored / whole floor; secrets hidden / shown */
 static int s_panel_i = 0;                      /* widescreen side panel (party, meseta, map) off / on */
 static int s_hover_i = 0;                      /* hovercraft also drives on land: off / on */
+static int s_diag_i = 0;                       /* DIAGONAL WALKING: off / on */
 static int s_flyall_i = 0, s_flyfree_i = 0;    /* FLY page: visited places / all; the spell's rules / free */
 static const char *const k_flylist_names[] = { "VISITED", "ALL" };
 static const char *const k_flycost_names[] = { "SPELL (8 MP)", "FREE" };
@@ -172,6 +173,7 @@ static void load_config(void)
         else if (!strcmp(key, "map_secrets")) s_secrets_i = v != 0;
         else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
         else if (!strcmp(key, "hovercraft_land")) s_hover_i = v != 0;
+        else if (!strcmp(key, "diagonal_walking")) s_diag_i = v != 0;
         else if (!strcmp(key, "fly_list_all")) s_flyall_i = v != 0;
         else if (!strcmp(key, "fly_free")) s_flyfree_i = v != 0;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
@@ -208,6 +210,7 @@ static void save_config(void)
     fprintf(f, "item_names         = %d      ; HUD ITEMS page: 0 = the game's item names, 1 = ps_item_names.txt\n", g_ps_item_custom_names);
     fprintf(f, "side_panel         = %d      ; widescreen window with a side panel: party, meseta, map (like SEGA AGES)\n", s_panel_i);
     fprintf(f, "hovercraft_land    = %d      ; 1 = the hovercraft also drives on land like the Land Rover (board it anywhere)\n", s_hover_i);
+    fprintf(f, "diagonal_walking   = %d      ; 1 = two directions held walk a staircase of whole cells (original: up / down first)\n", s_diag_i);
     fprintf(f, "fly_list_all       = %d      ; FLY page: 0 = towns and dungeons visited in this save, 1 = every place (also script-only ones)\n", s_flyall_i);
     fprintf(f, "fly_free           = %d      ; FLY page: 0 = the Fly spell's rules (8 MP, on a map), 1 = free, also from inside a dungeon\n", s_flyfree_i);
     fprintf(f, "music_volume       = %-6d ; music volume in percent (0..100)\n", s_bgm_i);
@@ -391,6 +394,49 @@ static bool game_call(uint16_t fn)
     call_by_address(fn);
     return g_z80.a == 0;
 }
+/* ---- DIAGONAL WALKING (option, default off) ----
+ * A map step starts (Rev A $715A) by taking the pad's direction bits; the step code then moves up /
+ * down if that bit is set and the way is free (LABEL_74E4: A = 2 up, 4 down, 6 left, 8 right, NZ =
+ * blocked), else left / right: with two directions held the original walks up / down until blocked.
+ * With the option every other step goes sideways instead, if that way is free (the game's own test),
+ * so holding a diagonal walks a staircase of whole cells; steps, encounters, the party's followers
+ * and the map drawing stay the game's own. ps_diag_face gives the leader's facing read (LABEL_5AFC)
+ * the same direction. Hooks: Tools/ps_find_hooks.py group "diagonal" (all 10 PS builds). */
+static uint16_t s_pass_fn;                      /* LABEL_74E4 */
+static uint8_t s_diag_mask = 0x0F;
+static int s_diag_turn;
+static void diag_init(void)
+{
+    long a = find_rom("c5 e5 4f 3a e9 c2 b7 20 .. 3a 0e c3 b7 20");
+    s_pass_fn = a > 0 ? (uint16_t)a : 0;
+}
+int ps_diag_step(void)
+{
+    uint8_t held = sms_read8(0xC204) & 0x0F, v = held & 3, h = held & 0x0C;
+    s_diag_mask = 0x0F;
+    if (!s_diag_i || !s_pass_fn || !v || !h) { s_diag_turn = 0; return 0; }
+    s_diag_turn ^= 1;
+    if (s_diag_turn) {                                       /* sideways this step, if the way is free */
+        Z80State keep = g_z80;
+        g_z80.a = (h & 4) ? 6 : 8;
+        bool free_way = game_call(s_pass_fn);                 /* A = 0: passable */
+        uint64_t cyc = g_z80.cyc; g_z80 = keep; g_z80.cyc = cyc;
+        if (free_way) s_diag_mask = 0x0C;
+        else s_diag_turn = 0;                                /* blocked: up / down now, sideways next */
+    }
+    g_z80.a = (uint8_t)(sms_read8(0xC204) & (s_diag_mask | 0xF0));
+    {   static int log = -1; if (log < 0) log = getenv("PS_DIAG_LOG") != NULL;   /* test */
+        if (log) fprintf(stderr, "[diag] held %X -> %X\n", held, g_z80.a & 0x0F); }
+    return 1;                                                /* -> `and $0F ; or $80` */
+}
+int ps_diag_face(void)
+{
+    uint8_t held = sms_read8(0xC204);
+    if (s_diag_mask == 0x0F || !(held & 3) || !(held & 0x0C)) return 0;
+    g_z80.a = (uint8_t)(sms_read8(0xC204) & (s_diag_mask | 0xF0));
+    return 1;
+}
+
 int ps_hover_board(void)
 {
     if (!s_hover_i || !s_attr_fn || !sms_read8(s_it_addr)) return 0;     /* the game refuses anyway */
@@ -717,6 +763,7 @@ static const HudOption k_opts[] = {
     { "MAP REVEAL",        k_reveal_names, 2,    &s_reveal_i, on_view_changed },
     { "MAP SECRETS",       k_secrets_names, 2,   &s_secrets_i, on_view_changed },
     { "HOVERCRAFT ON LAND", k_onoff,     2,      &s_hover_i, NULL },
+    { "DIAGONAL WALKING",   k_onoff,     2,      &s_diag_i,  NULL },
     { "FLY LIST",          k_flylist_names, 2,   &s_flyall_i, NULL },
     { "FLY COST",          k_flycost_names, 2,   &s_flyfree_i, NULL },
 };
@@ -829,6 +876,7 @@ void ps_on_post_reset(void)
     ps_automap_init();
     ps_worldmap_init();
     hover_init();
+    diag_init();
     vehicle_init();
     battle_init();
     ps_items_init();

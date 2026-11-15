@@ -49,7 +49,8 @@ static const double k_ff_vals[] = { 0.5, 1, 2, 4 };
 static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
 static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i, s_free_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
-static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i;
+static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_8way_i, s_reach_i;
+static const char *const k_reach[] = { "ORIGINAL", "+4 PIXELS", "+8 PIXELS" };
 static const char *const k_mult[] = { "X0", "X1 (ORIGINAL)", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10" };
 static const char *const k_dina[] = { "150 GOLD (ORIGINAL)", "2600 GOLD (ALIANGER)" };
 static const char *const k_tp[]   = { "OFF (ORIGINAL)", "VISITED SCREENS", "PASSWORD CAVES" };
@@ -96,6 +97,8 @@ static void load_config(void)
         else if (!strcmp(key, "dina_2600")) s_dina_i = v != 0;
         else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
         else if (!strcmp(key, "teleport")) s_tp_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
+        else if (!strcmp(key, "eight_way_walking")) s_8way_i = v != 0;
+        else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "overworld_music")) s_music_i = v < 0 ? 0 : v > 5 ? 5 : (int)v;
         else if (!strcmp(key, "fast_forward") && v > 0) {
             s_ff_i = 0; for (int i = 1; i < 4; i++) if (fabs(k_ff_vals[i] - v) < fabs(k_ff_vals[s_ff_i] - v)) s_ff_i = i;
@@ -118,6 +121,8 @@ static void save_config(void)
     fprintf(f, "side_panel     = %d     ; widescreen window with a side panel: the surrounding screens, gold, power (F2)\n", s_panel_i);
     fprintf(f, "dina_2600      = %d     ; 1 = Dina pays 2600 gold instead of 150 (amount from Alianger's hack)\n", s_dina_i);
     fprintf(f, "teleport       = %d     ; MAP tab teleport: 0 off, 1 to visited screens, 2 to visited password caves\n", s_tp_i);
+    fprintf(f, "eight_way_walking = %d  ; 1 = diagonal input walks diagonally on the overworld (original: left / right only)\n", s_8way_i);
+    fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
     fprintf(f, "overworld_music = %d    ; 0 = the game's choice (by sword + shield), 1..5 = that theme once unlocked\n", s_music_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
     safe_fclose(f, s_ini);
@@ -147,6 +152,8 @@ static HudOption k_opts[] = {          /* not const: an option whose IPS file is
     { "FREE CRYSTALS",  k_cheat,    2, &s_free_i,   on_free },
     { "DINA'S PAYOUT",  k_dina,     2, &s_dina_i,   NULL },
     { "MAP TELEPORT",   k_tp,       3, &s_tp_i,     NULL },
+    { "8-WAY WALKING",  k_onoff,    2, &s_8way_i,   NULL },
+    { "SWORD REACH",    k_reach,    3, &s_reach_i,  NULL },
 };
 static const HudOption k_mult_opts[] = {
     { "DAMAGE DEALT",    k_mult, 11, &s_dealt_i, NULL },
@@ -334,6 +341,60 @@ int gv_frame_top(void)
     }
     uint64_t cyc = g_z80.cyc; g_z80 = keep; g_z80.cyc = cyc;
     return 0;                                                /* the frame goes on as usual */
+}
+
+/* ==== 8-WAY WALKING and SWORD REACH ====
+ * Overworld walking (mode 6): $0DCA turns the pad into 9 directions $C801 (0 DL, 1 L, 2 UL, 3 D, 4 none,
+ * 5 U, 6 DR, 7 R, 8 UR); $3D40 dispatches the hero (IX = $C100) through table $3D6B, where the original
+ * maps every diagonal to left / right. The hero's facing (ix+$10): left $01, right $07, up $85, down $83
+ * (bit 7 = vertical); 1 px per frame; a turn is only taken when the hero is on an 8-px line across the
+ * new direction (else the handler keeps the old direction), walls are tested when a new 16-px cell is
+ * entered ($2D06). gv_walk_dir (hook on $3D40 `ld a,($C801)`) turns a diagonal into one of the game's
+ * own straight moves per frame: it keeps the current axis until the hero is on an 8-px line, then
+ * takes the other axis (a fine staircase = diagonal); an axis that did not move the hero last time is
+ * skipped (walls), so the hero slides along them. All the game's own rules (walls, caves, the screen
+ * edge scroll) stay in force because the game's handlers do the moving. */
+static uint8_t s_walk_last_y, s_walk_last_x; static int s_walk_axis = -1;   /* 0 horizontal, 1 vertical */
+static bool s_walk_blocked[2];
+int gv_walk_dir(void)
+{
+    if (!s_8way_i || sms_read8(0xC802) != 6) { s_walk_axis = -1; return 0; }
+    int d = sms_read8(0xC801);
+    if (d != 0 && d != 2 && d != 6 && d != 8) { s_walk_axis = -1; return 0; }
+    uint8_t y = sms_read8(0xC101), x = sms_read8(0xC102), f = sms_read8(0xC110);
+    if (s_walk_axis >= 0) s_walk_blocked[s_walk_axis] = (y == s_walk_last_y && x == s_walk_last_x);
+    int cur = (f & 0x80) ? 1 : 0, axis;
+    bool aligned = cur ? (y & 7) == 0 : (x & 7) == 0;          /* on a line where the game lets it turn */
+    if (!aligned) axis = cur;
+    else if (s_walk_axis < 0) axis = 0;
+    else axis = s_walk_blocked[!cur] ? cur : !cur;              /* alternate, unless the other way is shut */
+    if (s_walk_blocked[0] && s_walk_blocked[1]) { s_walk_blocked[0] = s_walk_blocked[1] = false; }
+    s_walk_axis = axis; s_walk_last_y = y; s_walk_last_x = x;
+    int h = d <= 2 ? 1 : 7, v = (d == 2 || d == 8) ? 5 : 3;
+    g_z80.a = (uint8_t)(axis ? v : h);
+    return 1;                                                   /* -> $3D43 */
+}
+/* $3509: an enemy tests its box against the sword objects $C120 / $C140 (type $84 while they hit; box
+   +$16..+$19 = low / high of both axes, $3538). SWORD REACH widens the box of an active sword whenever
+   the sword's own code has (re)written it (never our own widened box again). */
+int gv_sword_reach(void)
+{
+    if (!s_reach_i) return 0;
+    static uint8_t wrote[2][4];
+    for (int k = 0; k < 2; k++) {
+        uint16_t o = (uint16_t)(0xC120 + 0x20 * k);
+        if (sms_read8(o) != 0x84) continue;
+        uint8_t b[4]; for (int i = 0; i < 4; i++) b[i] = sms_read8((uint16_t)(o + 0x16 + i));
+        if (!memcmp(b, wrote[k], 4)) continue;                 /* still the box we widened */
+        int n = 4 * s_reach_i;
+        int lo0 = b[0] - n, hi0 = b[1] + n, lo1 = b[2] - n, hi1 = b[3] + n;
+        b[0] = (uint8_t)(lo0 < 0 ? 0 : lo0); b[1] = (uint8_t)(hi0 > 255 ? 255 : hi0);
+        b[2] = (uint8_t)(lo1 < 0 ? 0 : lo1); b[3] = (uint8_t)(hi1 > 255 ? 255 : hi1);
+        for (int i = 0; i < 4; i++) sms_write8((uint16_t)(o + 0x16 + i), b[i]);
+        memcpy(wrote[k], b, 4);
+        if (qlog()) fprintf(stderr, "[gv] sword box %02X-%02X %02X-%02X\n", b[0], b[1], b[2], b[3]);
+    }
+    return 0;
 }
 
 /* [insn_hooks] gv_sword_swing at the three swing starts `ld a,4 ; ld ($C120),a`: observe only */

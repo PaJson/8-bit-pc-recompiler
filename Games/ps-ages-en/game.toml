@@ -37,6 +37,6 @@ bank  = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 12, 12]
 count = [20, 5, 18, 8, 18, 5, 19, 3, 64, 20, 22, 5, 11, 12, 182, 5, 18]
 
 [insn_hooks]   # QoL hooks (Tools/ps_find_hooks.py; each returns 0 = original code unless enabled)
-addr   = [0x7166, 0x7173, 0x5AA4, 0x5B3F, 0x5B70, 0x5B7B, 0x1773, 0x02E5, 0x02ED, 0x02F5, 0x1268, 0x15C2, 0x0B0F, 0x0F43, 0x0052, 0x7535, 0x753E, 0x22F5, 0x0B35, 0x0F48, 0x100F, 0x1092, 0x2D8B]
-func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y", "ps_exp_add", "ps_snd_update", "ps_snd_init", "ps_snd_mute", "ps_damage", "ps_damage", "ps_items_walk_mark", "ps_items_walk_mark", "ps_items_vwait", "ps_hover_pass", "ps_hover_pass", "ps_hover_board", "ps_fly_go", "ps_fly_dungeon_go", "ps_battle_begin", "ps_battle_cmd", "ps_battle_select"]
-resume = [0x7173, 0x717D, 0x5AA6, 0x5B43, 0x5B7A, 0x5B86, 0x1779, 0x02EA, 0x02F2, 0x02FA, 0x126B, 0x15C5, 0x0B11, 0x0F45, 0x0055, 0x7537, 0x7540, 0x2307, 0x0B3A, 0x0F4F, 0x1012, 0x10B7, 0x2D8E]
+addr   = [0x7166, 0x7173, 0x5AA4, 0x5B3F, 0x5B70, 0x5B7B, 0x1773, 0x02E5, 0x02ED, 0x02F5, 0x1268, 0x15C2, 0x0B0F, 0x0F43, 0x0052, 0x7535, 0x753E, 0x22F5, 0x715E, 0x5B0E, 0x0B35, 0x0F48, 0x100F, 0x1092, 0x2D8B]
+func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y", "ps_exp_add", "ps_snd_update", "ps_snd_init", "ps_snd_mute", "ps_damage", "ps_damage", "ps_items_walk_mark", "ps_items_walk_mark", "ps_items_vwait", "ps_hover_pass", "ps_hover_pass", "ps_hover_board", "ps_diag_step", "ps_diag_face", "ps_fly_go", "ps_fly_dungeon_go", "ps_battle_begin", "ps_battle_cmd", "ps_battle_select"]
+resume = [0x7173, 0x717D, 0x5AA6, 0x5B43, 0x5B7A, 0x5B86, 0x1779, 0x02EA, 0x02F2, 0x02FA, 0x126B, 0x15C5, 0x0B11, 0x0F45, 0x0055, 0x7537, 0x7540, 0x2307, 0x7161, 0x5B11, 0x0B3A, 0x0F4F, 0x1012, 0x10B7, 0x2D8E]
