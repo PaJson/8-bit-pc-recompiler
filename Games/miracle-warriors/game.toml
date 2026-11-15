@@ -16,6 +16,10 @@ rom           = "../../ROMs/Miracle Warriors - Seal of The Dark Lord (USA, Europ
 # vblank_count  = 0x____
 # player_object = 0x____
 
+[hooks]
+on_post_reset = "mw_on_post_reset"   # Common/MiracleWarriors/mw_qol.c: options (HUD, mw_qol.ini)
+on_frame_post = "mw_on_frame_post"   # mw_qol.c: music / sound effects volume
+
 [mapper]
 kind = "sega"   # frame regs $FFFC-$FFFF; reset banks 0/1/2; first 1KB fixed
 
