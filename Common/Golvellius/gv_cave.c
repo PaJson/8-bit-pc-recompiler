@@ -3,8 +3,9 @@
  *
  * Found in the ROM (CLAUDE.md "Golvellius caves / dungeons"):
  *   entering a dungeon ($1D11): $CAD7 = its id 0..8 (0 = the New Game start area); odd ids = top-down
- *              (mode $C802 = 8, hero object $C100 & $7F = 3), even = side-view (mode 7, $C100 & $7F = 2;
- *              mode 7 is also the overworld, where $C100 & $7F = 1).
+ *              (mode $C802 = 8), even = side-view (mode 7; also the New Game start area, id 0). Modes 8 / 7
+ *              are stored only by $1D96 / $1DD3. (The hero object type $C100 is not usable: it changes
+ *              while the hero is hit.)
  *   layout   : asset $10D3[id] = $50 + id (bank 5), 2 bytes per step, $FFFF = end. Top-down: a step is a
  *              row (bottom = entrance first), bits 15..6 = 10 cells left to right; side-view: a step is a
  *              column (left first), bits 15..7 = 9 cells top to bottom. 1 = wall; the low bits are a
@@ -283,14 +284,14 @@ void gv_cave_frame(void)
     s_in = false;
     if (!rom_ok()) return;
     {   /* the screen whose cave the hero is in: a cave room (mode $11) or a dungeon */
-        int m = sms_read8(0xC802), scr = sms_read8(0xC80D), kind = sms_read8(0xC100) & 0x7F;
-        if (scr < 182 && !s_entered[scr] && (m == 0x11 || (m == 8 && kind == 3) || (m == 7 && kind == 2 && sms_read8(0xCAD7)))) {
+        int m = sms_read8(0xC802), scr = sms_read8(0xC80D);
+        if (scr < 182 && !s_entered[scr] && (m == 0x11 || m == 8 || (m == 7 && sms_read8(0xCAD7)))) {
             s_entered[scr] = 1; s_dirty = true;
             if (cave_log()) fprintf(stderr, "[cave] entered the cave of screen %c%d (mode %02X)\n", 'A' + scr % 13, scr / 13 + 1, m);
         }
     }
-    int mode = sms_read8(0xC802), kind = sms_read8(0xC100) & 0x7F, id = sms_read8(0xCAD7);
-    bool td = mode == 8 && kind == 3 && (id & 1), sv = mode == 7 && kind == 2 && !(id & 1);
+    int mode = sms_read8(0xC802), id = sms_read8(0xCAD7);       /* modes 8 / 7 are set only by $1D96 / $1DD3 */
+    bool td = mode == 8 && (id & 1), sv = mode == 7 && !(id & 1);
     if (!(td || sv) || id >= NCAVE) return;
     if (!select_cave(id)) return;
     s_in = true;
@@ -303,7 +304,7 @@ void gv_cave_frame(void)
     if (k < 2 || k > s_n + 2) { s_hx = s_hy = -1; return; }
     int y = sms_read8(0xC101), x = sms_read8(0xC102);
     static int trace = -1; if (trace < 0) trace = getenv("GV_CAVE_TRACE") != NULL;      /* test: positions */
-    if (trace) fprintf(stderr, "[cavetrace] id %d k %d x %d y %d r8 %d r9 %d\n", id, k, x, y, g_vdp.reg[8], g_vdp.reg[9]);
+    if (trace) fprintf(stderr, "[cavetrace] id %d k %d x %d y %d r8 %d r9 %d c100 %02X\n", id, k, x, y, g_vdp.reg[8], g_vdp.reg[9], sms_read8(0xC100));
     if (!s_side) {
         int v = g_vdp.reg[9];
         if (steady) for (int l = 0; l < 192; l += 8) mark_seen(id, td_row(v + l, k));
