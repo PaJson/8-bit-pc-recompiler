@@ -359,9 +359,11 @@ static void draw_zoom(uint32_t *fb, int w, int h, float bx, float by, float bw, 
             }
 }
 
+extern bool gv_cave_hud(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1);
 static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
 {
     const uint32_t CYAN = 0xFF60D0FF, GREY = 0xFFA0A0B0, YEL = 0xFFFFE040;
+    if (gv_cave_hud(fb, w, h, x0, y0, x1, y1)) return;           /* inside a dungeon: its map (gv_cave.c) */
     {   static int dumped; const char *dp = getenv("GV_MAP_DUMP");     /* test: the map image as PPM */
         if (dp && !dumped) { dumped = 1; FILE *f = fopen(dp, "wb");
             if (f) { fprintf(f, "P6\n%d %d\n255\n", MW, MH);

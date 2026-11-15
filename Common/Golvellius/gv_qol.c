@@ -50,6 +50,8 @@ static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAUL
 static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i, s_free_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
 static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_8way_i, s_reach_i;
+extern int gv_cave_reveal;                         /* gv_cave.c: DUNGEON MAP option */
+static const char *const k_dmap[] = { "EXPLORED PART", "WHOLE DUNGEON" };
 static const char *const k_reach[] = { "ORIGINAL", "+4 PIXELS", "+8 PIXELS" };
 static const char *const k_mult[] = { "X0", "X1 (ORIGINAL)", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10" };
 static const char *const k_dina[] = { "150 GOLD (ORIGINAL)", "2600 GOLD (ALIANGER)" };
@@ -96,6 +98,7 @@ static void load_config(void)
         else if (!strcmp(key, "gold_multiplier")) s_gold_i = v < 0 ? 0 : v > 10 ? 10 : (int)v;
         else if (!strcmp(key, "dina_2600")) s_dina_i = v != 0;
         else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
+        else if (!strcmp(key, "dungeon_map_whole")) gv_cave_reveal = v != 0;
         else if (!strcmp(key, "teleport")) s_tp_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "eight_way_walking")) s_8way_i = v != 0;
         else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
@@ -119,7 +122,8 @@ static void save_config(void)
     fprintf(f, "damage_received = %-4d ; damage you take x0..x10 (1 = original; healing is not changed)\n", s_recv_i);
     fprintf(f, "gold_multiplier = %-4d ; gold dropped by enemies x0..x10 (1 = original; GOLD MAX still caps it)\n", s_gold_i);
     fprintf(f, "side_panel     = %d     ; widescreen window with a side panel: the surrounding screens, gold, power (F2)\n", s_panel_i);
-    fprintf(f, "dina_2600      = %d     ; 1 = Dina pays 2600 gold instead of 150 (amount from Alianger's hack)\n", s_dina_i);
+    fprintf(f, "dungeon_map_whole = %d  ; dungeon map (side panel / MAP tab): 0 = the parts you have seen, 1 = the whole dungeon\n", gv_cave_reveal);
+    fprintf(f, "dina_2600      = %d    ; 1 = Dina pays 2600 gold instead of 150 (amount from Alianger's hack)\n", s_dina_i);
     fprintf(f, "teleport       = %d     ; MAP tab teleport: 0 off, 1 to visited screens, 2 to visited password caves\n", s_tp_i);
     fprintf(f, "eight_way_walking = %d  ; 1 = diagonal input walks diagonally on the overworld (original: left / right only)\n", s_8way_i);
     fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
@@ -139,7 +143,10 @@ static void save_config(void);
 static void on_panel_toggled(bool on) { s_panel_i = on; save_config(); }   /* F2 */
 extern void gv_map_save(void);
 extern void gv_map_hud_closed(void);
-static void on_close(void) { save_config(); gv_map_save(); gv_map_hud_closed(); }
+extern void gv_cave_save(void);
+extern void gv_cave_frame(void);
+extern void gv_cave_test(uint64_t frame);
+static void on_close(void) { save_config(); gv_map_save(); gv_cave_save(); gv_map_hud_closed(); }
 static int open_page(void) { return hud_page_index("MAP"); }
 static void on_ff(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
 static HudOption k_opts[] = {          /* not const: an option whose IPS file is missing gets k_missing */
@@ -147,6 +154,7 @@ static HudOption k_opts[] = {          /* not const: an option whose IPS file is
     { "SWORD HIT FIX",  k_onoff,    2, &s_hitfix_i, NULL },
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
     { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },
+    { "DUNGEON MAP",    k_dmap,     2, &gv_cave_reveal, NULL },
     { "REMEMBER PASSWORD", k_onoff, 2, &s_pw_i,     NULL },
     { "CAVE WALL TWEAKS", k_alianger, 2, &s_cave_i, on_cave },
     { "FREE CRYSTALS",  k_cheat,    2, &s_free_i,   on_free },
@@ -501,6 +509,8 @@ void gv_on_frame_post(uint64_t frame)
 {
     if (frame % 30 == 0) music_names();              /* THEME n (LOCKED) follows the equipment */
     tp_place_tick();
+    gv_cave_frame();
+    gv_cave_test(frame);
     gv_panel_test(frame);
     {   static long tf = -2; static int ts;              /* test: GV_TP_TEST=<frame>:<screen> = a teleport request */
         if (tf == -2) { const char *e = getenv("GV_TP_TEST"); tf = -1; if (e) sscanf(e, "%ld:%d", &tf, &ts); }
@@ -554,6 +564,7 @@ void gv_on_post_reset(void)
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
     hud_set_on_close(on_close);
     gv_map_init();
+    { static bool once; if (!once) { once = true; atexit(gv_cave_save); } }
     {   static bool pages;
         if (!pages) { pages = true;
             hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));

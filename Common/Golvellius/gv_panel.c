@@ -225,8 +225,10 @@ static void box(uint32_t *b, int w, int h, int x0, int y0, int x1, int y1)
 }
 static int bcd(uint8_t v) { return (v >> 4) * 10 + (v & 15); }
 
+extern bool gv_cave_panel(uint32_t *b, int w, int h);
 void gv_panel_draw(uint32_t *b, int w, int h)
 {
+    if (gv_cave_panel(b, w, h)) return;             /* inside a dungeon: its map fills the panel (gv_cave.c) */
     for (int i = 0; i < w * h; i++) b[i] = BG;
     if (!s_rom) s_rom = glue_rom_image(&s_rom_n);
     int hero = hero_screen();
