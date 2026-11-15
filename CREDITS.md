@@ -21,9 +21,6 @@ builds, also straight from the zip (`"<archive.zip>::<patch file>"`).
 | Golvellius SRAM hack, 6-enemies addendum | LemFliggity | https://www.romhacking.net/hacks/4933/ | Reference only (= Ichigobankai's hack with the original 6 enemies per screen instead of 4). |
 | Golvellius overworld map | SMS Power! Sega notebook | http://www.smspower.org/seganotebook/golvlius/golvmap.html | Screen naming (A-M, 1-14) for the MAP tab. |
 | Phantasy Star Retranslation (PSRP), 2.6.1 | Maxim, Paul Jensen, Z80 Gaiden and the SMS Power! team, with the translators of each language (named in each release's readme) | https://github.com/maxim-zhao/psrp , https://www.smspower.org/Translations/PhantasyStar-SMS-EN (also `-FR`, `-DE`, `-ES`, `-CA`, `-PT-BR`) | The retranslation builds recompile the retranslated ROM you make yourself from the official release zip with `Tools/apply_patch.py`. Its notes on bugs in the original game are a reference for future fixes. |
-| Phantasy Star - Brunette Alis 2.0 | vivify93 | https://www.romhacking.net/hacks/5029/ | Not used yet (kept for a possible hair-colour option). |
-| Phantasy Star CSI 1.2 (character sprites improved) | Vikfield (graphics), Red Soul (production) | https://www.romhacking.net/hacks/5248/ | Not used yet. |
-| Phantasy Star Makeover 1.0 (buildings, NPCs; includes CSI 1.2) | Vikfield | https://www.romhacking.net/hacks/6273/ | Not used yet. |
 | Phantasy Star disassembly (`ps1disasm`) | its authors (see `Disasm/`) | - | Names of RAM variables, routines and tables used throughout our Phantasy Star code. |
 | Phantasy Star town maps | pscave.com | https://www.pscave.com/ps1/towns/ | Only to name the towns on our runtime-rendered maps (nothing copied). |
 
