@@ -104,6 +104,20 @@ static void names_init(void)
    whose cave the hero has been in (gv_info.c: CAVE INFO = entered caves). "GVC1" = without them. ---- */
 static uint8_t s_entered[182];
 bool gv_cave_entered(int scr) { return scr >= 0 && scr < 182 && s_entered[scr]; }
+/* "Despa's Cave", "Fosbus' Cave" (the game's hints say "DESPA CAVE", "CRAWKY'S CAVE"; user's choice);
+   0 = "START AREA" (a description, not a name: capitals like the other labels) */
+const char *gv_boss_name(int id);
+const char *gv_cave_title(int id)
+{
+    static char out[NCAVE][24];
+    if (id < 0 || id >= NCAVE) return "";
+    const char *b = gv_boss_name(id);
+    if (id == 0) return b;
+    size_t k = 0;
+    for (; b[k] && k < 14; k++) out[id][k] = (char)(k && b[k] >= 'A' && b[k] <= 'Z' ? b[k] + 32 : b[k]);
+    snprintf(out[id] + k, sizeof out[id] - k, "%s Cave", k && (b[k - 1] == 'S' || b[k - 1] == 's') ? "'" : "'s");
+    return out[id];
+}
 const char *gv_boss_name(int id)                    /* the game's names, upper case */
 {
     static bool init; if (!init && rom_ok()) { names_init(); init = true; }
@@ -423,7 +437,7 @@ bool gv_cave_panel(uint32_t *b, int w, int h)
     for (int i = 0; i < w * h; i++) b[i] = 0xFF0A1024u;
     char t[48];
     box(b, w, h, 8, 8, w - 8, 40);
-    hud_text_scaled(b, w, h, 16, 16, s_names[s_id], 0xFF60D0FFu, 2);
+    hud_text_scaled(b, w, h, 16, 16, gv_cave_title(s_id), 0xFF60D0FFu, 2);
     snprintf(t, sizeof t, "%d%%", explored());
     hud_text(b, w, h, w - 16 - 6 * (int)strlen(t), 20, t, 0xFF8C96AAu);
     int y0 = 48, y1 = h - 8;
@@ -461,7 +475,7 @@ bool gv_cave_hud(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
     if (!s_in || s_id < 0 || !s_n) return false;
     update_pic();
     char t[64];
-    snprintf(t, sizeof t, "DUNGEON %d: %s", s_id, s_names[s_id]);
+    snprintf(t, sizeof t, "DUNGEON %d: %s", s_id, gv_cave_title(s_id));
     if (s_id == 0) snprintf(t, sizeof t, "%s", s_names[0]);
     hud_text(fb, w, h, x0 + 4, y0, t, 0xFF60D0FFu);
     snprintf(t, sizeof t, "%d%% EXPLORED", explored());

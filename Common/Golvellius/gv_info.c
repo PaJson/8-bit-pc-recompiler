@@ -98,7 +98,7 @@ bool gv_cave_label(int scr, char *out, size_t n, int *done)
     if (!rom() || scr < 0 || scr >= NSCR) return false;
     int cid = cave_id(scr);
     if (cid == 0) { snprintf(out, n, "START HOUSE"); return true; }
-    if (cid < 0x10) { snprintf(out, n, "DUNGEON: %s", gv_boss_name(cid)); return true; }
+    if (cid < 0x10) { extern const char *gv_cave_title(int id); snprintf(out, n, "DUNGEON: %s", gv_cave_title(cid)); return true; }
     int c = content(cid);
     if (cid < 0x50) {
         switch (c) {
