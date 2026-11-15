@@ -48,3 +48,6 @@ Images/
 # launcher: local settings and build output
 launcher.ini
 Launcher/build/
+
+# editor: VS Code workspace settings (CMake Tools writes absolute paths)
+.vscode/
