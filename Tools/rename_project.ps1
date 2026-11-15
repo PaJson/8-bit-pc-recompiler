@@ -90,24 +90,16 @@ if ($old) {
 
 # ---------- 3b. repair and reconfigure every build folder ----------
 if ($old) {
-    $oldF = $old.Replace('\', '/'); $newF = $new.Replace('\', '/')
+    # the same repair runs by itself before every game / launcher build (build_game.ps1, Launcher\build.ps1),
+    # so this step is only needed for the folders built by hand (recompiler, diagnostic builds) or to do all now
+    $repair = Join-Path $new 'Recomp\smsggrecomp\tools\repair_moved_build.ps1'
     $done = @()
     foreach ($c in $caches) {
         $bdir = $c.DirectoryName
-        $text = [IO.File]::ReadAllText($c.FullName)
-        $fixed = $text
-        foreach ($pair in @(@($oldF, $newF), @($old, $new))) {
-            $fixed = [regex]::Replace($fixed, [regex]::Escape($pair[0]), $pair[1].Replace('$', '$$'), 'IgnoreCase')
-        }
-        if ($fixed -eq $text) { continue }
-        [IO.File]::WriteAllText($c.FullName, $fixed)
-        foreach ($f in @('CMakeFiles', 'build.ninja', 'rules.ninja', '.ninja_log', '.ninja_deps', 'cmake_install.cmake')) {
-            $p = Join-Path $bdir $f
-            if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
-        }
-        $srcDir = (Select-String -LiteralPath $c.FullName -Pattern '^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$' | Select-Object -First 1).Matches[0].Groups[1].Value
+        $line = Select-String -LiteralPath $c.FullName -Pattern '^CMAKE_CACHEFILE_DIR:INTERNAL=(.*)$' | Select-Object -First 1
+        if (-not $line -or $line.Matches[0].Groups[1].Value.Replace('/', '\').TrimEnd('\') -ieq $bdir) { continue }
         Write-Host "configure  $($bdir.Substring($new.Length + 1))"
-        & $cmake -S $srcDir -B $bdir *> (Join-Path $bdir 'reconfigure_log.txt')
+        & $repair -Build $bdir -Configure -Cmake $cmake | Out-Null
         if ($LASTEXITCODE -ne 0) { Write-Host "   FAILED: see $bdir\reconfigure_log.txt" -ForegroundColor Red; continue }
         $done += $bdir
     }

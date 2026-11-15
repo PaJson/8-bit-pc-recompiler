@@ -2,6 +2,8 @@
 $ErrorActionPreference = 'Stop'
 $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
 Set-Location $PSScriptRoot
+# the project folder was moved / renamed since the last build: repair build/ (keeps its settings)
+& (Join-Path $PSScriptRoot '..\Recomp\smsggrecomp\tools\repair_moved_build.ps1') -Build (Join-Path $PSScriptRoot 'build')
 & cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe `
         -DCMAKE_MAKE_PROGRAM=C:/msys64/mingw64/bin/ninja.exe -DCMAKE_PREFIX_PATH=C:/msys64/mingw64 | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
