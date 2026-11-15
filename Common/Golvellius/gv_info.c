@@ -27,7 +27,6 @@ extern uint8_t *glue_rom_image(size_t *size);
 extern const char *gv_boss_name(int id);            /* gv_cave.c: the game's names, upper case */
 extern bool gv_cave_entered(int scr);
 int gv_cave_info_all;                               /* option CAVE INFO: 0 entered caves, 1 all (spoiler) */
-bool gv_cave_known(int scr) { return gv_cave_info_all || gv_cave_entered(scr); }
 
 #define COLS 13
 #define NSCR 182
@@ -64,6 +63,15 @@ const char *gv_area_name(int scr)
 }
 
 static int cave_id(int scr) { return s_rom[0x15947 + s_rom[0x15890 + scr] * 7 + 3]; }
+extern bool gv_map_seen(int idx);
+/* L14 (cave id 0) has no entrance: its "cave" is the start house of the scripted scenes ($1F75: the old
+   man's gift after the New Game start area, the "thou died, another chance" text), never walked into,
+   so it counts as known once the screen was seen */
+bool gv_cave_known(int scr)
+{
+    if (gv_cave_info_all || gv_cave_entered(scr)) return true;
+    return scr >= 0 && scr < NSCR && rom() && cave_id(scr) == 0 && gv_map_seen(scr);
+}
 static int content(int cid) { return cid < 0x10 ? -1 : cid < 0x50 ? b7(0x8CDA + (cid >> 4)) : b7(0x8C8F + cid); }
 /* bought / taken flag of offer cave cid ($B0+), -1 if it has none (herbs) */
 static int bought(int cid)
