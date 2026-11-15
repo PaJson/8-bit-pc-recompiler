@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "hud.h"
+#include "safe_file.h"
 #include "sms_runtime.h"
 #include "video/sms_vdp.h"
 
@@ -136,7 +137,7 @@ void gv_map_save(void)
     if (!s_dirty || getenv("SMS_NO_SAVE")) return;
     char p[1100]; map_path(p, sizeof p);
     if (!p[0]) return;
-    FILE *f = fopen(p, "wb"); if (!f) return;
+    FILE *f = safe_fopen_w(p, "wb"); if (!f) return;   /* "<file>.tmp", swapped in when complete */
     static uint8_t buf[FW * FH * 2];
     fwrite("GVM3", 1, 4, f);
     fwrite(s_seen, 1, NSCR, f);
@@ -149,8 +150,7 @@ void gv_map_save(void)
         uint32_t n = (uint32_t)pack(s_full[i], FW * FH, buf);
         fwrite(&n, 4, 1, f); fwrite(buf, 1, n, f);
     }
-    fclose(f);
-    s_dirty = false;
+    if (safe_fclose(f, p)) s_dirty = false;            /* failed: old file kept, written again next time */
 }
 static void map_load(void)
 {

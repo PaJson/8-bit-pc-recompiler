@@ -25,6 +25,7 @@
 #include <math.h>
 #include "hud.h"
 #include "sms_runtime.h"
+#include "safe_file.h"
 
 extern uint8_t *glue_rom_image(size_t *size);
 
@@ -69,13 +70,13 @@ static void load_config(void)
 }
 static void save_config(void)
 {
-    FILE *f = fopen(s_ini, "w"); if (!f) return;
+    FILE *f = safe_fopen_w(s_ini, "w"); if (!f) return;   /* "<ini>.tmp", swapped in when complete */
     fprintf(f, "; Golvellius options (also in game: F1 / gamepad Start). 0 = original game.\n");
     fprintf(f, "map_fixes      = %d     ; 1 = screen C5 gets its own room, screen H5 the right cave graphic (SMS Power bug fix)\n", s_mapfix_i);
     fprintf(f, "sword_hit_fix  = %d     ; 1 = every sword swing can hit (original: every other swing only stuns)\n", s_hitfix_i);
     fprintf(f, "remember_password = %d  ; 1 = the last password shown is saved and pre-filled on the password screen\n", s_pw_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
-    fclose(f);
+    safe_fclose(f, s_ini);
 }
 
 static void on_map_fix(void) { apply_map_fix(); }
@@ -131,6 +132,8 @@ static void pw_load(void)
     char p[1100]; pw_path(p, sizeof p);
     FILE *f = fopen(p, "rb"); s_pw_have = false;
     if (f) { s_pw_have = fread(s_pw, 1, 32, f) == 32; fclose(f); }
+    for (int i = 0; i < 32 && s_pw_have; i++)               /* symbols are 0..31 (5 bits): else damaged */
+        if (s_pw[i] > 31) { s_pw_have = false; fprintf(stderr, "[gv] %s: not a valid password (ignored)\n", p); }
 }
 static bool pw_log(void) { static int on = -1; if (on < 0) on = getenv("GV_LOG") != NULL; return on; }
 int gv_pw_made(void)
@@ -140,8 +143,8 @@ int gv_pw_made(void)
     if (pw_log()) { fprintf(stderr, "[gv] password made:"); for (int i = 0; i < 32; i++) fprintf(stderr, " %02X", s_pw[i]); fprintf(stderr, "\n"); }
     if (!s_pw_i || getenv("SMS_NO_SAVE")) return 0;
     char p[1100]; pw_path(p, sizeof p);
-    FILE *f = fopen(p, "wb");
-    if (f) { fwrite(s_pw, 1, 32, f); fclose(f); }
+    FILE *f = safe_fopen_w(p, "wb");                        /* "<file>.tmp", swapped in when complete */
+    if (f) { fwrite(s_pw, 1, 32, f); safe_fclose(f, p); }
     return 0;
 }
 int gv_pw_entry(void)

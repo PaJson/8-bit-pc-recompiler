@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "hud.h"
+#include "safe_file.h"
 
 extern uint8_t        sms_read8(uint16_t addr);
 extern uint8_t       *glue_rom_image(size_t *size);
@@ -585,7 +586,7 @@ static void build_path(void)
 static void save_file(void)
 {
     if (!g_path[0]) return;
-    FILE *f = fopen(g_path, "wb");
+    FILE *f = safe_fopen_w(g_path, "wb");             /* "<file>.tmp", swapped in when complete */
     if (!f) { fprintf(stderr, "[automap] cannot write %s\n", g_path); return; }
     fwrite("PSAM\3", 1, 5, f);                           /* v2: key = floor number; v3: + visited maps */
     for (int s = 1; s < N_SLOTS; s++) {
@@ -603,7 +604,7 @@ static void save_file(void)
             fwrite(q, 1, 4, f);
         }
     }
-    fclose(f);
+    if (!safe_fclose(f, g_path)) fprintf(stderr, "[automap] cannot write %s (old file kept)\n", g_path);
 }
 
 static void load_file(void)

@@ -32,6 +32,7 @@
 #include <string.h>
 #include <math.h>
 #include "hud.h"
+#include "safe_file.h"
 
 extern uint8_t  sms_read8(uint16_t addr);
 extern void     sms_write8(uint16_t addr, uint8_t val);
@@ -192,7 +193,7 @@ static void load_config(void)
 
 static void save_config(void)
 {
-    FILE *f = fopen(s_ini_path, "w");
+    FILE *f = safe_fopen_w(s_ini_path, "w");      /* "<ini>.tmp", swapped in when complete */
     if (!f) { fprintf(stderr, "[ps_qol] cannot write %s\n", s_ini_path); return; }
     fprintf(f, "; Phantasy Star QoL options (also editable in game: F1 / gamepad Back). Original game = 1.0 / 100.\n");
     fprintf(f, "exp_multiplier     = %-6u ; battle EXP reward multiplier (0..100, 0 = none)\n", exp_mult());
@@ -214,7 +215,7 @@ static void save_config(void)
         if (m >= 0) fprintf(f, "sound_chip         = %-6s ; fm, psg or psg_western (a sound bank from another PS ROM in the ROM folder is used when needed)\n", ps_sound_mode_key(m)); }
     fprintf(f, "sfx_volume         = %-6d ; sound effects volume in percent (0..100)\n", s_sfx_i);
     fprintf(f, "fast_forward       = %-6g ; speed while TAB / pad RT is held (LT = x0.5): 0.5, 1, 2 or 4 (default 4)\n", k_ff_vals[s_ff_i]);
-    fclose(f);
+    if (!safe_fclose(f, s_ini_path)) fprintf(stderr, "[ps_qol] cannot write %s (old file kept)\n", s_ini_path);
 }
 
 /* ---- overworld encounter table: scaled from a saved copy of the original ---- */
