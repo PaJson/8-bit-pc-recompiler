@@ -620,6 +620,7 @@ static void buttons_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int
         { "HOVERCRAFT",  "RB",          "V" },
         { "AUTO ATTACK", "RB, LB OFF",  "V, C OFF" },   /* in battle */
         { "FULLSCREEN",  "-",           "F11, ALT+ENTER" },
+        { "PAUSE (SMS)", st ? "-" : "START", "ENTER" },          /* the console's Pause button (NMI) */
         { "QUIT",        "-",           "ESC" },
         { "HUD TABS",    "LB, RB",      "Q, E" },
         { "HUD CONFIRM", "B",           "ENTER/SPACE/X" },
