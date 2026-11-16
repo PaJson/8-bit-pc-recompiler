@@ -31,7 +31,7 @@ header checksum with `python -I Tools/sms_checksum.py <rom>`.
 |---|---|---|
 | 1 | ROM grows to 512 KB (banks 16-31 new, `$FF`), header size code `$1` = 512 KB, checksum over the whole ROM, ID block at bank 16 `$8000` ("GOLVELLIUS PLUS", format 1) | done |
 | 2 | Research: menus / window and text routines, Pause loop, free RAM, bank selects, save state (`RESEARCH.md`) | done (a few details left, listed there) |
-| 3 | Title menus: START / OPTIONS; START -> original NEW GAME / CONTINUE; CONTINUE -> PASSWORD / SAVE | |
+| 3 | Title menus: START / OPTIONS; START -> original NEW GAME / CONTINUE; CONTINUE -> PASSWORD / SAVE; OPTIONS / SAVE = full-screen pages (placeholders); in our menus button 1 = select, button 2 = back | done |
 | 4 | Save slots (AUTO + 5) in battery RAM, SAVE screen (load / delete), AUTO at Winkle | |
 | 5 | Save from Pause (status screen + button 1); Game Over asks to save after the password | |
 | 6 | OPTIONS (stored in battery RAM, RESET TO DEFAULTS): text / map / sword hit fixes, cave down speed 2 / 3 / 4, multipliers | |
