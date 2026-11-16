@@ -23,6 +23,9 @@
 ;   LAST GAME CONTINUE with the start screen and position replaced (AUTO: in front of Winkle's
 ;   cave, where the game puts the hero when he leaves it). Play time: our own counter (the game
 ;   has none), one tick per frame the game waits ($07C3) while a game runs (mode 5-$12).
+; Step 5: saving into SLOT 1-5: on the overworld's Pause (status) screen button 1 opens SAVE GAME
+;   (the hero's screen and position; a used slot asks OVERWRITE?), and after Game Over's password the
+;   game asks SAVE THIS GAME? (NO first; such a save continues at L14 like LAST GAME CONTINUE).
 ;
 ; Memory: banks 0 and 1 are always in slots 0/1 ($0000-$7FFF; the game never remaps them),
 ; slot 2 ($8000-$BFFF) is switched by the game (register $FFFF) and also shows the battery RAM
@@ -70,7 +73,7 @@ SLOT 2 $8000 $4000
 .ENDSMS
 
 ; Text: the fonts have the letters at their ASCII codes, '@' ($40) = space, '. ' ! , ?' at
-; $5B-$5F, '/' at $6E; our digits sit at $B0-$B9 of the title font (unpacked by UnpackDigits).
+; $5B-$5F, '/' at $6E; our digits sit at $B0-$B9 of the title font (unpacked by UnpackFont).
 .ASCIITABLE
 MAP " " = $40
 MAP "0" TO "9" = $B0
@@ -100,6 +103,18 @@ MAP "/" = $6E
 .DEFINE NtAttr      $C0AF        ; high byte for NtChar (1 = title font in the high tile set)
 .DEFINE Tmp         $C0B0        ; 16 bytes scratch (battery RAM header)
 .DEFINE SlotBuf     $CB18        ; 64 bytes: one slot record
+.DEFINE NtBaseHi    $C0C0        ; high byte of the name table NtAt writes to ($30 page, $38 the game's)
+.DEFINE NtDigit0    $C0C1        ; tile of digit 0 ($B0 page font, $DF the game's low-set font)
+.DEFINE SvScreen    $C0C2        ; SaveMenu: what a save records as start screen, y, x, $C84C
+.DEFINE SvY         $C0C3
+.DEFINE SvX         $C0C4
+.DEFINE SvFlag      $C0C5
+.DEFINE HelpText    $C0C6        ; 2: the text DrawHelp puts on row 22
+.DEFINE NtColBias   $C0C8        ; added to every NtAt column (mod 32): 0 on our pages, the game's scroll on its screens
+.DEFINE NtTileOfs   $C0C9        ; added to every NtChar tile: 0, or $C0 (= -$40) for the Pause screen's font at tile 0
+.DEFINE UpLo        $C0CA        ; 2: UnpackFont keeps the plane bytes UpLo .. UpLo+UpCnt-1 (8 per tile) of the font
+.DEFINE UpCnt       $C0CC        ; 2
+.DEFINE UpDst       $C0CE        ; 2: ... and writes them to VRAM from UpDst
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -115,6 +130,8 @@ MAP "/" = $6E
 .DEFINE ScreenOn    $0D20
 .DEFINE VdpReg2     $C051        ; the game's copy of VDP register 2 (name table address), written by $0114 only
 .DEFINE LoadAsset   $0E0B        ; A = asset code -> maps its bank in slot 2, HL = data
+.DEFINE UnpackTiles $038F        ; HL data -> VRAM DE
+.DEFINE SoundStop   $7774        ; all sound channels off
 .DEFINE FadeOut     $1C89        ; palette to black (9 steps, frames keep running)
 .DEFINE FadeIn      $1C73        ; palette from $C9C0 (the title palette while on the title)
 .DEFINE MakePassword $8336       ; bank 7: make the password and draw it at HL (Winkle: $3D0C)
@@ -160,6 +177,14 @@ MAP "/" = $6E
 .SECTION "hook_start_position" OVERWRITE
     jp Stub_StartPos
     .DB 0, 0, 0, 0, 0, 0, 0
+.ENDS
+.ORGA $2942                      ; Pause wait loop: was call $07C3
+.SECTION "hook_pause_wait" OVERWRITE
+    call Stub_PauseWait
+.ENDS
+.ORGA $2156                      ; Game Over, a button was pressed: was call $7774 (then back to the title)
+.SECTION "hook_game_over" OVERWRITE
+    jp Stub_GameOver
 .ENDS
 .BANK 7 SLOT 2
 .ORGA $9138                      ; Winkle (text command $FA): was call $8336 (make + draw the password)
@@ -294,6 +319,31 @@ Stub_StartPos:                   ; from $1391: the hero's start position (and th
 @set:
     ld ($C101),hl                ; $C101 = y, $C102 = x
     jp $139B
+Stub_Unpause72:                  ; asset $72 (bank 7 $82C2: VRAM $1800 -> name table, $1F00 -> sprite rows), back to bank 16
+    ld a,$72
+    call $2996                   ; the game's `call $0E0B ; jp (hl)`
+    ld a,16
+    ld ($FFFF),a
+    ret
+Stub_PauseWait:                  ; from $2942: the wait (paused: no play time), button 1 on the status screen = SAVE GAME
+    xor a
+    ld ($C005),a
+    call $07C7
+    ld a,($C802)
+    cp 6                         ; only the overworld has the status screen
+    ret nz
+    call ReadPad
+    ld a,(PadNew)
+    and $10
+    ret z
+    pop hl                       ; (back into the pause loop later by jp $291F)
+    ld a,16
+    ld ($FFFF),a
+    jp PauseSave
+Stub_GameOver:                   ; from $2156
+    ld a,16
+    ld ($FFFF),a
+    jp GameOverAsk
 Stub_Winkle:                     ; from bank 7 $9138: the password, then the AUTO save
     ld a,7                       ; (bank 7 is in slot 2 already: says so for the recompiler)
     ld ($FFFF),a
@@ -444,9 +494,22 @@ Menu2:
 PageOpen:                        ; fade out, display off, digits, an empty page (draw, then PageShow)
     call FadeOut
     call ScreenOff
-    call UnpackDigits
+    ld hl,($DF-$40)*8            ; the font's digits $DF-$E8 -> title tiles 256+$B0..$B9 ($3600)
+    ld (UpLo),hl
+    ld hl,80
+    ld (UpCnt),hl
+    ld hl,$3600
+    ld (UpDst),hl
+    call UnpackFont
     ld a,1
     ld (NtAttr),a
+    ld a,$30
+    ld (NtBaseHi),a
+    ld a,$B0
+    ld (NtDigit0),a
+    xor a
+    ld (NtColBias),a
+    ld (NtTileOfs),a
     ld hl,$3000
     di
     call SetVramAddr
@@ -518,7 +581,7 @@ ShowPage:
     jp PageClose
 
 ; --- writing into a name table (works with the display on: one character at a time) ---
-NtAt:                            ; B = row, C = column of the page's name table ($3000)
+NtAt:                            ; B = row, C = column of the name table NtBaseHi
     push hl
     ld l,b
     ld h,0
@@ -528,17 +591,24 @@ NtAt:                            ; B = row, C = column of the page's name table 
     add hl,hl
     add hl,hl
     add hl,hl                    ; row * 64
-    ld a,c
+    ld a,(NtColBias)
+    add a,c
+    and 31
     add a,a
     add a,l
     ld l,a
-    ld a,h
-    adc a,$30
+    ld a,(NtBaseHi)
+    adc a,h
     ld h,a
     ld (NtAddr),hl
     pop hl
     ret
-NtChar:                          ; A = tile, high byte NtAttr, at NtAddr (advances)
+NtChar:                          ; A = character: tile A + NtTileOfs (NtTile: A = the tile itself)
+    push hl
+    ld hl,NtTileOfs
+    add a,(hl)
+    pop hl
+NtTile:                          ; A = tile, high byte NtAttr, at NtAddr (advances; column 31 -> 0 of the same row)
     push hl
     push af
     ld hl,(NtAddr)
@@ -552,14 +622,31 @@ NtChar:                          ; A = tile, high byte NtAttr, at NtAddr (advanc
     ei
     inc hl
     inc hl
+    ld a,l
+    and $3F
+    jr nz,@row
+    ld a,l                       ; past column 31 (NtColBias moved the text right): wrap within the row
+    sub $40
+    ld l,a
+    jr nc,@row
+    dec h
+@row:
     ld (NtAddr),hl
     pop hl
     ret
-NtPrint:                         ; HL -> text, 0
+NtPrint:                         ; HL -> text, 0 (digits $B0-$B9 go through NtDigit: either font)
     ld a,(hl)
     inc hl
     or a
     ret z
+    cp $B0
+    jr c,@chr
+    cp $BA
+    jr nc,@chr
+    sub $B0
+    call NtDigit
+    jr NtPrint
+@chr:
     call NtChar
     jr NtPrint
 NtSpaces:                        ; B spaces
@@ -568,8 +655,11 @@ NtSpaces:                        ; B spaces
     djnz NtSpaces
     ret
 NtDigit:                         ; A = 0-9
-    add a,$B0
-    jp NtChar
+    push hl
+    ld hl,NtDigit0
+    add a,(hl)
+    pop hl
+    jp NtTile
 NtBcd:                           ; HL -> B bytes of BCD, leading zeros left out; returns Z when the value is 0 (then "0" is printed)
     ld e,0                       ; E = digits printed
 @byte:
@@ -618,7 +708,9 @@ NtBcd2:                          ; A = BCD byte, both digits
 ; 4 bit-planes, each a list of runs: n < $80 = n bytes, n >= $80 = the next byte n & $7F times,
 ; 0 = end; its first tile is $40, the digits are tiles $DF-$E8) -> VRAM $3600 (tiles 256+$B0..$B9).
 ; Only those 80 bytes per plane are written; nothing else of the font is unpacked. ---
-UnpackDigits:
+; the font (asset $C0 = bank 12 entry 0, 4 RLE planes, every 4th byte) walked byte by byte; only the
+; window UpLo / UpCnt (plane bytes, 8 per tile) is written, to VRAM UpDst (tiles in their plane order)
+UnpackFont:
     ld hl,$8000                  ; the asset pointer of entry 0
     call Stub_ReadB12
     ld e,a
@@ -658,37 +750,42 @@ UnpackDigits:
     call Stub_ReadB12
     inc hl
     ret
-@put:                            ; A = byte DE of plane C; keep bytes ($DF-$40)*8 .. +79
+@put:                            ; A = byte DE of plane C (B, C, HL kept; DE advances)
     push hl
+    push bc
     push af
-    ld hl,-(($DF-$40)*8)
-    add hl,de                    ; carry = DE >= first digit byte
-    inc de
-    jr nc,@skip
-    ld a,h
+    push de
+    ex de,hl
+    ld de,(UpLo)
     or a
-    jr nz,@skip
-    ld a,l
-    cp 80
+    sbc hl,de                    ; HL = byte - UpLo
+    jr c,@skip
+    ld de,(UpCnt)
+    or a
+    sbc hl,de
     jr nc,@skip
+    add hl,de
     add hl,hl
     add hl,hl
     ld a,l
     or c
-    ld l,a
-    ld a,h
-    add a,$36
-    ld h,a                       ; $3600 + 4 * byte + plane
+    ld l,a                       ; 4 * (byte - UpLo) + plane
+    ld de,(UpDst)
+    add hl,de
     di
     call SetVramAddr
+    pop de
     pop af
     out ($BE),a
     ei
-    pop hl
-    ret
+    jr @done
 @skip:
+    pop de
     pop af
+@done:
+    pop bc
     pop hl
+    inc de
     ret
 
 ; --- play time (every frame wait): only while a game runs (modes 5-$12; not the title, not Game Over) ---
@@ -828,13 +925,12 @@ ReadSlot:                        ; A = slot -> SlotBuf; carry set = empty or dam
     or a                         ; carry clear
     ret
 
-SaveSlot:                        ; A = slot, B = hero y, C = x: the current game -> battery RAM
+SaveSlot:                        ; A = slot, B = hero y, C = x, D = start screen, SvFlag = its $C84C: the game -> battery RAM
     push af
     ld hl,SlotBuf
     ld (hl),$A5
     inc hl
-    ld a,($C80D)
-    ld (hl),a
+    ld (hl),d
     inc hl
     ld (hl),b
     inc hl
@@ -845,7 +941,7 @@ SaveSlot:                        ; A = slot, B = hero y, C = x: the current game
     ld bc,4
     ldir
     ex de,hl
-    ld a,($C84C)
+    ld a,(SvFlag)
     ld (hl),a
     inc hl
     ld a,($C817)
@@ -901,6 +997,10 @@ AutoSave:
     add a,a
     add a,8
     ld b,a                       ; y = 8 + 16 * row
+    ld a,($C84C)
+    ld (SvFlag),a
+    ld a,($C80D)
+    ld d,a
     xor a
     call SaveSlot
     ld hl,$3800 + 12*64 + 2*2    ; row 12, column 2 of the cave room's name table, low tile set
@@ -920,6 +1020,8 @@ SavePage:
     call NtAt
     ld hl,StrSaveTitle
     call NtPrint
+    ld hl,StrHelp
+    ld (HelpText),hl
     call DrawHelp
     ld a,5
 @slots:
@@ -994,14 +1096,14 @@ DrawCursors:                     ; the arrow at column 1 of the slot under the c
     jp p,@each
     ret
 
-DrawHelp:                        ; row 22: the buttons
+DrawHelp:                        ; row 22: HelpText
     ld bc,2+256*22
     call NtAt
     ld b,28
     call NtSpaces
     ld bc,5+256*22
     call NtAt
-    ld hl,StrHelp
+    ld hl,(HelpText)
     jp NtPrint
 
 DrawSlot:                        ; A = slot: its two rows
@@ -1258,6 +1360,204 @@ LoadSlot:                        ; SlotBuf (valid) -> the game's RAM, then LAST 
     call ScreenOn                ; (the palette is black; the game's start draws the screen)
     jp Exit_LoadGame
 
+; --- SAVE GAME (Pause / Game Over): on the game's own name table ($3800) with the game's font in
+; the low tile set (loaded by the caller); slots 1-5; SvScreen / SvY / SvX / SvFlag = what is saved.
+; Display off on entry, on when it returns. ---
+SaveMenu:                        ; (the caller set the name table / font: GameNt, PauseSave)
+    ld hl,$3800
+    di
+    call SetVramAddr
+    ld bc,32*24
+@clear:
+    ld a,(NtTileOfs)
+    add a,$40                    ; the space
+    out ($BE),a
+    xor a
+    out ($BE),a
+    dec bc
+    ld a,b
+    or c
+    jr nz,@clear
+    ei
+    call SramPrepare
+    ld bc,11+256*1
+    call NtAt
+    ld hl,StrSaveGame
+    call NtPrint
+    ld hl,StrHelpSave
+    ld (HelpText),hl
+    call DrawHelp
+    ld a,5
+@slots:
+    push af
+    call DrawSlot
+    pop af
+    dec a
+    jp p,@slots
+    ld a,(LastSlot)
+    or a
+    jr nz,@cur
+    inc a
+@cur:
+    ld (SaveCur),a
+    call DrawCursors
+    call ScreenOn
+@loop:
+    call WaitPaused
+    call ReadPad
+    ld a,(PadNew)
+    ld b,a
+    and $20
+    ret nz                       ; button 2: nothing saved
+    ld a,b
+    and $10
+    jr nz,@select
+    ld a,(SaveCur)
+    bit 0,b
+    jr z,@notup
+    dec a
+    jr nz,@move
+    ld a,5
+    jr @move
+@notup:
+    bit 1,b
+    jr z,@loop
+    inc a
+    cp 6
+    jr c,@move
+    ld a,1
+@move:
+    ld (SaveCur),a
+    call DrawCursors
+    jr @loop
+@select:
+    ld a,(SaveCur)
+    call ReadSlot
+    jr c,@save                   ; empty: save at once
+    xor a                        ; used: OVERWRITE? (NO first)
+    ld (SubSel),a
+    ld hl,StrOverwrite
+    call SubDraw
+@ask:
+    call SubKeys
+    jr z,@ask
+    jr c,@no
+    ld a,(SubSel)
+    or a
+    jr nz,@save
+@no:
+    call DrawHelp
+    jr @loop
+@save:
+    ld a,(SvY)
+    ld b,a
+    ld a,(SvX)
+    ld c,a
+    ld a,(SvScreen)
+    ld d,a
+    ld a,(SaveCur)
+    call SaveSlot
+    ld a,(SaveCur)
+    ld (LastSlot),a
+    call WriteLastSlot
+    ld a,(SaveCur)
+    call DrawSlot
+    ld hl,StrSaved
+    ld (HelpText),hl
+    call DrawHelp
+    ld b,60
+@show:
+    push bc
+    call WaitPaused
+    pop bc
+    djnz @show
+    ret
+
+GameNt:                          ; text on the game's own screen: name table $3800, its low-set font, and
+    ld a,$38                     ; columns that follow its horizontal scroll (reg 8 shadow $C057: $F8 or $08
+    ld (NtBaseHi),a              ; on the overworld), so column n is always at x = 8n (column 0 = blanked)
+    ld a,$DF
+    ld (NtDigit0),a
+    xor a
+    ld (NtAttr),a
+    ld (NtTileOfs),a
+    ld a,($C057)
+    neg
+    rrca
+    rrca
+    rrca
+    and 31
+    ld (NtColBias),a
+    ret
+
+WaitPaused:                      ; one frame without play time
+    xor a
+    ld ($C005),a
+    jp $07C7
+
+; the overworld's Pause screen, button 1 (from Stub_PauseWait)
+PauseSave:
+    call ScreenOff
+    call GameNt
+    ld a,$C0                     ; characters $40-$6F -> tiles $00-$2F, digits -> $30-$39: only inside the
+    ld (NtTileOfs),a             ; status screen's tiles ($0000-$07FF, reloaded below and on unpause). VRAM
+    ld a,$30                     ; $1800-$1F3F holds the overworld's name table + sprite rows (asset $71):
+    ld (NtDigit0),a              ; the whole font (to $1D1F at $0800) would overwrite them
+    ld hl,0
+    ld (UpLo),hl
+    ld hl,48*8
+    ld (UpCnt),hl
+    ld hl,$0000
+    ld (UpDst),hl
+    call UnpackFont
+    ld hl,($DF-$40)*8
+    ld (UpLo),hl
+    ld hl,80
+    ld (UpCnt),hl
+    ld hl,$0600
+    ld (UpDst),hl
+    call UnpackFont
+    ld a,($C80D)
+    ld (SvScreen),a
+    ld a,($C101)
+    ld (SvY),a
+    ld a,($C102)
+    ld (SvX),a
+    ld a,($C84C)
+    ld (SvFlag),a
+    call SaveMenu
+    call ScreenOff
+    call Stub_Unpause72          ; the overworld's name table back to $3800 (as on unpause), so that
+    jp $291F                     ; the status screen ($71 saves it again) is drawn and the pause loop waits
+
+; Game Over: the password was shown and a button pressed (from Stub_GameOver; the font is loaded)
+GameOverAsk:
+    call GameNt
+    xor a
+    ld (SubSel),a
+    ld hl,StrSaveAsk
+    call SubDraw
+@ask:
+    call SubKeys
+    jr z,@ask
+    jr c,@done
+    ld a,(SubSel)
+    or a
+    jr z,@done
+    call ScreenOff
+    ld a,$B4                     ; LAST GAME CONTINUE starts at L14 with the original position
+    ld (SvScreen),a
+    ld a,$98
+    ld (SvY),a
+    ld a,$88
+    ld (SvX),a
+    xor a
+    ld (SvFlag),a
+    call SaveMenu
+@done:
+    call SoundStop               ; the original $2156, then $2159: fade, back to the title
+    jp $2159
+
 ; --- texts ---
 StrStart:    .DB 12, 20
              .ASC "START"
@@ -1309,4 +1609,14 @@ StrConfirm:    .ASC "DELETE?      NO    YES"
                .DB 0, 14, 20
 StrAutoSaved:  .ASC "GAME SAVED TO AUTO."
                .DB 0
+StrSaveGame:   .ASC "SAVE GAME"
+               .DB 0
+StrHelpSave:   .ASC "1  SAVE        2  BACK"
+               .DB 0
+StrOverwrite:  .ASC "OVERWRITE?   NO    YES"
+               .DB 0, 14, 20
+StrSaved:      .ASC "     SAVED."
+               .DB 0
+StrSaveAsk:    .ASC "SAVE THIS GAME?  NO   YES"
+               .DB 0, 18, 23
 .ENDS

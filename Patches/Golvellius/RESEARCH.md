@@ -83,6 +83,14 @@ palette, `$038F`, `$0F65`, `$2996($71)`, `$0D20`); **wait loop `$2942-$294A`** (
 `$C005`, the next NMI sets it); then sound back (`$8006`), mode 6 redraws the overworld (`$2962-$2985`).
 Modes 7-9 (side view, top-down caves, ...) only freeze. Status screen tiles: low set `$00-$73`, its
 own word tiles (POWER, CRYSTAL, GOLD, ITEM, MAX) and digits `$36-$3F`; no general font.
+Asset `$71` (bank 7 `$8049`) sets scroll regs 8 / 9 to 0, writes `$D0` at sprite row `$3F00`, copies the
+sprite Y buffer RAM `$C980` (64 B) to VRAM `$1F00`, fills `$C980` with `$D0`, copies the overworld name
+table `$3800` (`$380` words) to VRAM `$1800`, then draws the status screen. Asset `$72` (`$82C2`, on
+unpause) puts scroll back (reg 8 = -`$C809`, reg 9 = `$C808`), `$1F00` -> `$C980`, `$1800` -> `$3800`;
+then asset `$B0` reloads the low tiles `$0000-$13BF` (status tiles are `$0000-$07FF`). So during the
+pause VRAM `$1800-$1F3F` must stay untouched (the whole font at `$0800` reaches `$1D1F`).
+VDP registers: the game writes them through `$0048` (B = value, C = register), shadow at `$C04F + reg`
+(reg 8 = `$C057`; the overworld scrolls by `$F8` or `$08`, the status screen 0).
 
 ## Game start / continue / progress RAM
 

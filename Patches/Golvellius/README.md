@@ -33,7 +33,7 @@ header checksum with `python -I Tools/sms_checksum.py <rom>`.
 | 2 | Research: menus / window and text routines, Pause loop, free RAM, bank selects, save state (`RESEARCH.md`) | done (a few details left, listed there) |
 | 3 | Title menus: START / OPTIONS; START -> original NEW GAME / CONTINUE; CONTINUE -> PASSWORD / SAVE; OPTIONS / SAVE = full-screen pages (placeholders); in our menus button 1 = select, button 2 = back | done |
 | 4 | Save slots (AUTO + 5) in battery RAM, SAVE screen (load / delete, slot info: screen, play time, gold, power, crystals), AUTO at Winkle (+ "GAME SAVED TO AUTO."), loads start where saved, play time | done |
-| 5 | Save from Pause (status screen + button 1); Game Over asks to save after the password | |
+| 5 | Save from Pause (status screen + button 1: SAVE GAME, slots 1-5, OVERWRITE? NO / YES, the status screen and the overworld come back unchanged); Game Over asks SAVE THIS GAME? (NO first) under the password, YES = the same menu (the save continues at L14 like LAST GAME CONTINUE) | done |
 | 6 | OPTIONS (stored in battery RAM, RESET TO DEFAULTS): text / map / sword hit fixes, cave down speed 2 / 3 / 4, multipliers | |
 
 ## Notes
