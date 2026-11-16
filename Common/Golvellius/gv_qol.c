@@ -66,10 +66,15 @@ static const char *k_music[6] = { s_music_names[0], s_music_names[1], s_music_na
 /* Alianger's cave wall tweaks (Improvement Hack v1.1, level data in bank 5): applied from the user's own
    IPS file at run time (gv_patch.c); takes effect at the next cave screen the game loads */
 static GvPatch s_cave = { "Golvellius v1.1 top down cave wall tweaks.ips", 0xAC5D5CDDu, 434 };
-/* Alianger's free crystals (a cheat, user decision: default off): the price bytes of the crystal caves in
-   the cave table bank 7 $8D87 (2 bytes per cave, `($CAD3-$B0)*2`, copied to $C16C/$C16D when a cave is
-   entered: so it applies from the next cave entered) and the crystal seller's text at $A486. All data. */
-static GvPatch s_free = { "Golvellius free crystals.ips", 0x0C3E537Bu, 288 };
+/* Alianger's free crystals (a cheat, user decision: default off; the price bytes of the crystal caves in
+   the cave table bank 7 $8D87, 2 bytes per cave, `($CAD3-$B0)*2`, copied to $C16C/$C16D when a cave is
+   entered: so it applies from the next cave entered, + the crystal seller's text), TEXT FIXES and NEW HINTS
+   (his combined text patch split in two, user decision 2026-11-16): gv_text.c */
+static int s_tfix_i, s_hint_i;
+extern void gv_text_init(void);
+extern bool gv_text_avail(int which);
+extern void gv_text_set(bool cry, bool fix, bool hint);
+extern void gv_text_frame(void);
 static const char *const k_alianger[] = { "OFF (ORIGINAL)", "ON (ALIANGER)" };
 static const char *const k_missing[]  = { "IPS FILE MISSING" };
 static const char *const k_cheat[]    = { "OFF (ORIGINAL)", "ON (CHEAT, ALIANGER)" };
@@ -98,6 +103,8 @@ static void load_config(void)
         else if (!strcmp(key, "remember_password")) s_pw_i = v != 0;
         else if (!strcmp(key, "cave_wall_tweaks")) s_cave_i = v != 0;
         else if (!strcmp(key, "free_crystals")) s_free_i = v != 0;
+        else if (!strcmp(key, "text_fixes")) s_tfix_i = v != 0;
+        else if (!strcmp(key, "new_hints")) s_hint_i = v != 0;
         else if (!strcmp(key, "damage_dealt")) s_dealt_i = v < 0 ? 0 : v > 10 ? 10 : (int)v;
         else if (!strcmp(key, "damage_received")) s_recv_i = v < 0 ? 0 : v > 10 ? 10 : (int)v;
         else if (!strcmp(key, "gold_multiplier")) s_gold_i = v < 0 ? 0 : v > 10 ? 10 : (int)v;
@@ -125,6 +132,8 @@ static void save_config(void)
     fprintf(f, "remember_password = %d  ; 1 = passwords are saved with their maps: slot 0 = autosave, 1-5 = LB/RB in Winkle's cave and on the password screen\n", s_pw_i);
     fprintf(f, "cave_wall_tweaks = %d   ; 1 = Alianger's top-down cave wall tweaks (needs his IPS file in ROMs/Patches)\n", s_cave_i);
     fprintf(f, "free_crystals  = %d     ; 1 = cheat: crystals cost nothing (Alianger's IPS file in ROMs/Patches)\n", s_free_i);
+    fprintf(f, "text_fixes     = %d     ; 1 = Alianger's typo / fact fixes of the cave texts (his combined text IPS in ROMs/Patches)\n", s_tfix_i);
+    fprintf(f, "new_hints      = %d     ; 1 = Alianger's rewritten hints of the cave texts (his combined text IPS in ROMs/Patches)\n", s_hint_i);
     fprintf(f, "cave_info_all  = %d     ; MAP tab / panel: 0 = area names of visited screens, caves you have been inside, 1 = everything (spoiler)\n", gv_cave_info_all);
     fprintf(f, "damage_dealt   = %-5d ; sword damage to enemies x0..x10 (1 = original)\n", s_dealt_i);
     fprintf(f, "damage_received = %-4d ; damage you take x0..x10 (1 = original; healing is not changed)\n", s_recv_i);
@@ -143,7 +152,7 @@ static void save_config(void)
 
 static void on_map_fix(void) { apply_map_fix(); }
 static void on_cave(void) { gv_patch_set(&s_cave, s_cave_i != 0); }
-static void on_free(void) { gv_patch_set(&s_free, s_free_i != 0); }
+static void on_free(void) { gv_text_set(s_free_i != 0, s_tfix_i != 0, s_hint_i != 0); }
 static void on_panel(void) { hud_set_panel_enabled(s_panel_i != 0); }
 extern void gv_map_init(void);
 extern void gv_panel_draw(uint32_t *b, int w, int h);
@@ -168,6 +177,8 @@ static HudOption k_opts[] = {          /* not const: an option whose IPS file is
     { "PASSWORD SAVE SLOTS", k_onoff, 2, &s_pw_i,   NULL },
     { "CAVE WALL TWEAKS", k_alianger, 2, &s_cave_i, on_cave },
     { "FREE CRYSTALS",  k_cheat,    2, &s_free_i,   on_free },
+    { "TEXT FIXES",     k_alianger, 2, &s_tfix_i,   on_free },
+    { "NEW HINTS",      k_alianger, 2, &s_hint_i,   on_free },
     { "DINA'S PAYOUT",  k_dina,     2, &s_dina_i,   NULL },
     { "MAP TELEPORT",   k_tp,       3, &s_tp_i,     NULL },
     { "SWORD REACH",    k_reach,    3, &s_reach_i,  NULL },
@@ -510,7 +521,8 @@ int gv_pw_made(void)
 }
 int gv_pw_entry(void)
 {
-    if (!s_pw_i || !gv_slots_pw_fill(s_pw)) return 0;       /* original: clear the buffer */
+    if (!s_pw_i) return 0;                                  /* original: clear the buffer */
+    if (!(getenv("GV_PASSWORD") && s_pw_have) && !gv_slots_pw_fill(s_pw)) return 0;   /* test env first */
     for (int i = 0; i < 32; i++) sms_write8((uint16_t)(0xC170 + i), s_pw[i]);
     s_pw_draw = true;
     if (pw_log()) fprintf(stderr, "[gv] password screen: pre-filled with the saved password\n");
@@ -542,6 +554,7 @@ void gv_on_frame_post(uint64_t frame)
     if (frame % 30 == 0) music_names();              /* THEME n (LOCKED) follows the equipment */
     tp_place_tick();
     { extern void gv_slots_frame(uint64_t); gv_slots_frame(frame); }
+    gv_text_frame();
     gv_cave_frame();
     gv_cave_test(frame);
     sound_frame();
@@ -606,16 +619,17 @@ void gv_on_post_reset(void)
         if (t && strlen(t) >= 64) { for (int i = 0; i < 32; i++) { unsigned v; sscanf(t + 2 * i, "%2x", &v); s_pw[i] = (uint8_t)v; } s_pw_have = true; } }
     apply_map_fix();
     {   static bool patches_done;                     /* once: they remember the original bytes */
-        if (!patches_done) { patches_done = true; gv_patch_init(&s_cave); gv_patch_init(&s_free); } }
-    {   GvPatch *const pp[] = { &s_cave, &s_free }; int *const pv[] = { &s_cave_i, &s_free_i };
-        for (int k = 0; k < 2; k++) {
-            if (!pp[k]->avail) {                      /* file missing: the option stays off */
+        if (!patches_done) { patches_done = true; gv_patch_init(&s_cave); gv_text_init(); } }
+    {   int *const pv[] = { &s_cave_i, &s_free_i, &s_tfix_i, &s_hint_i };
+        const bool avail[] = { s_cave.avail, gv_text_avail(0), gv_text_avail(1), gv_text_avail(2) };
+        for (int k = 0; k < 4; k++)
+            if (!avail[k]) {                          /* file missing: the option stays off */
                 *pv[k] = 0;
                 for (unsigned i = 0; i < sizeof k_opts / sizeof k_opts[0]; i++)
                     if (k_opts[i].value == pv[k]) { k_opts[i].choices = k_missing; k_opts[i].nchoices = 1; }
             }
-            gv_patch_set(pp[k], *pv[k] != 0);
-        } }
+        gv_patch_set(&s_cave, s_cave_i != 0);
+        gv_text_set(s_free_i != 0, s_tfix_i != 0, s_hint_i != 0); }
     hud_set_turbo_speed(k_ff_vals[s_ff_i]);
     hud_set_title("GOLVELLIUS - OPTIONS");
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));

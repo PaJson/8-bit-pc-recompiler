@@ -32,7 +32,8 @@ int gv_cave_info_all;                               /* option CAVE INFO: 0 enter
 #define NSCR 182
 static const uint8_t *s_rom; static size_t s_n;
 static bool rom(void) { if (!s_rom) s_rom = glue_rom_image(&s_n); return s_rom && s_n >= 0x40000; }
-static uint8_t b7(int a) { return s_rom[7 * 0x4000 + (a - 0x8000)]; }
+extern const uint8_t *gv_text_bank7(void);   /* gv_text.c: bank 7 with the texts of the current options */
+static uint8_t b7(int a) { const uint8_t *t = gv_text_bank7(); return t ? t[a - 0x8000] : s_rom[7 * 0x4000 + (a - 0x8000)]; }
 
 static int area_id(int scr)
 {
