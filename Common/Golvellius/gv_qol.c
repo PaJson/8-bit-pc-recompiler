@@ -52,7 +52,7 @@ static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAUL
 static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i, s_free_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
 static int s_bgm_i = 100, s_sfx_i = 100;            /* SOUND tab: music / effects volume, percent */
-static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_reach_i;
+static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_reach_i, s_down_i;
 extern int gv_cave_reveal;                         /* gv_cave.c: DUNGEON MAP option */
 extern int gv_cave_info_all;                       /* gv_info.c: CAVE INFO option */
 static const char *const k_cinfo[] = { "ENTERED CAVES", "ALL CAVES (SPOILER)" };
@@ -60,6 +60,7 @@ static const char *const k_dmap[] = { "EXPLORED PART", "WHOLE DUNGEON" };
 static const char *const k_reach[] = { "ORIGINAL", "+4 PIXELS", "+8 PIXELS" };
 static const char *const k_mult[] = { "X0", "X1 (ORIGINAL)", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10" };
 static const char *const k_dina[] = { "150 GOLD (ORIGINAL)", "2600 GOLD (ALIANGER)" };
+static const char *const k_downspd[] = { "X1 (ORIGINAL)", "X1.5 (ALIANGER)" };
 static const char *const k_tp[]   = { "OFF (ORIGINAL)", "VISITED SCREENS", "PASSWORD CAVES" };
 static char s_music_names[6][24] = { "AUTO (ORIGINAL)" };
 static const char *k_music[6] = { s_music_names[0], s_music_names[1], s_music_names[2], s_music_names[3], s_music_names[4], s_music_names[5] };
@@ -114,6 +115,7 @@ static void load_config(void)
         else if (!strcmp(key, "cave_info_all")) gv_cave_info_all = v != 0;
         else if (!strcmp(key, "teleport")) s_tp_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
+        else if (!strcmp(key, "cave_down_fast")) s_down_i = v != 0;
         else if (!strcmp(key, "overworld_music")) s_music_i = v < 0 ? 0 : v > 5 ? 5 : (int)v;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
@@ -143,6 +145,7 @@ static void save_config(void)
     fprintf(f, "dina_2600      = %d    ; 1 = Dina pays 2600 gold instead of 150 (amount from Alianger's hack)\n", s_dina_i);
     fprintf(f, "teleport       = %d     ; MAP tab teleport: 0 off, 1 to visited screens, 2 to visited password caves\n", s_tp_i);
     fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
+    fprintf(f, "cave_down_fast = %d     ; 1 = in top-down caves the hero moves down 1.5x as fast (speed 3 instead of 2, Alianger's idea)\n", s_down_i);
     fprintf(f, "overworld_music = %d    ; 0 = the game's choice (by sword + shield), 1..5 = that theme once unlocked\n", s_music_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
     fprintf(f, "sfx_volume     = %-5d ; sound effects volume in percent (0..100)\n", s_sfx_i);
@@ -182,6 +185,7 @@ static HudOption k_opts[] = {          /* not const: an option whose IPS file is
     { "DINA'S PAYOUT",  k_dina,     2, &s_dina_i,   NULL },
     { "MAP TELEPORT",   k_tp,       3, &s_tp_i,     NULL },
     { "SWORD REACH",    k_reach,    3, &s_reach_i,  NULL },
+    { "CAVE DOWN SPEED", k_downspd, 2, &s_down_i,   NULL },
 };
 static const HudOption k_mult_opts[] = {
     { "DAMAGE DEALT",    k_mult, 11, &s_dealt_i, NULL },
@@ -432,6 +436,24 @@ int gv_frame_top(void)
     }
     uint64_t cyc = g_z80.cyc; g_z80 = keep; g_z80.cyc = cyc;
     return 0;                                                /* the frame goes on as usual */
+}
+
+/* ==== CAVE DOWN SPEED (Alianger's "faster downward speed in top-down view caves", our own code) ====
+ * The top-down cave hero ($45E0.., object $C100) moves with `$4641 ld hl,$466B ; add hl,de ; ld a,(hl) ;
+ * $4646 call $2F34`: E = the pad direction $C801 (0 DL, 1 L, 2 UL, 3 D, 5 U, 6 DR, 7 R, 8 UR; 4 = none is
+ * handled before), $466B = the game's direction per input, $2F34 = velocity (ix+6..9) = the direction's
+ * unit vector ($2F93) times the speed byte (ix+4) & $3F. The hero is created with speed 2 ($45CF).
+ * Hook $4646 (observe): speed 3 for the three downward inputs, 2 for the others (his patch does the same
+ * with a flag bit in the table: down = 1.5x; the boss arena, mode $0A, uses another handler there too). */
+static bool s_down_set;
+int gv_cave_down(void)
+{
+    if (s_down_i) {
+        uint8_t d = sms_read8(0xC801);
+        sms_write8(0xC104, (uint8_t)((d == 0 || d == 3 || d == 6) ? 3 : 2));
+        s_down_set = true;
+    } else if (s_down_set) { sms_write8(0xC104, 2); s_down_set = false; }   /* switched off: the original speed */
+    return 0;
 }
 
 /* ==== SWORD REACH ==== */

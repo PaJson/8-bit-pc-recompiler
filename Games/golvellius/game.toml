@@ -22,14 +22,15 @@ on_frame_post = "gv_on_frame_post"   # gv_qol.c: test hooks
 
 # QoL hooks (gv_qol.c; each returns 0 = original code): sword hit spots (`ld a,4 ; ld ($C120),a`), password made / password screen
 [insn_hooks]
-addr   = [0x3F45, 0x43AC, 0x4678, 0x8553, 0x85F6, 0x8620, 0x33EE, 0x37D8, 0x35EA, 0x914C, 0x19FE, 0x0435, 0x3509, 0x12C8, 0x8EA4]
-func   = ["gv_sword_swing", "gv_sword_swing", "gv_sword_swing", "gv_pw_made", "gv_pw_entry", "gv_pw_loop", "gv_dmg_dealt", "gv_dmg_recv", "gv_gold_drop", "gv_dina", "gv_ow_music", "gv_frame_top", "gv_sword_reach", "gv_new_game", "gv_text_start"]
-resume = [0x3F47, 0x43AE, 0x467A, 0x8553, 0x8603, 0x8623, 0x33EF, 0x37D9, 0x3604, 0x914F, 0x19FF, 0x0435, 0x3509, 0x12C8, 0x8EA4]
-bank   = [-1, -1, -1, 7, 7, 7, -1, -1, -1, 7, -1, -1, -1, -1, 7]   # password made / password screen: buffer clear, input loop head (bank 7)
+addr   = [0x3F45, 0x43AC, 0x4678, 0x8553, 0x85F6, 0x8620, 0x33EE, 0x37D8, 0x35EA, 0x914C, 0x19FE, 0x0435, 0x3509, 0x12C8, 0x8EA4, 0x4646]
+func   = ["gv_sword_swing", "gv_sword_swing", "gv_sword_swing", "gv_pw_made", "gv_pw_entry", "gv_pw_loop", "gv_dmg_dealt", "gv_dmg_recv", "gv_gold_drop", "gv_dina", "gv_ow_music", "gv_frame_top", "gv_sword_reach", "gv_new_game", "gv_text_start", "gv_cave_down"]
+resume = [0x3F47, 0x43AE, 0x467A, 0x8553, 0x8603, 0x8623, 0x33EF, 0x37D9, 0x3604, 0x914F, 0x19FF, 0x0435, 0x3509, 0x12C8, 0x8EA4, 0x4646]
+bank   = [-1, -1, -1, 7, 7, 7, -1, -1, -1, 7, -1, -1, -1, -1, 7, -1]   # password made / password screen: buffer clear, input loop head (bank 7)
 # 2026-11-15: $33EE damage dealt (`ld e,a`), $37D8 damage received (`ld a,(hl)` of table $3697), $35EA gold drop (add -> $3604 cap),
 # bank 7 $914C Dina (`ld bc,$0015`), $19FE overworld song (`ld a,(hl)` of table $1A15), $0435 main loop head (teleport, music switch),
 # $3509 enemy-vs-sword box test (sword reach), $12C8 the new-game routine (save slots: the autosave starts empty),
-# bank 7 $8EA4 a cave text starts (gv_text.c: text layout A, or B for the crystal seller)
+# bank 7 $8EA4 a cave text starts (gv_text.c: text layout A, or B for the crystal seller),
+# $4646 top-down cave hero `call $2F34` (velocity from direction x speed: CAVE DOWN SPEED)
 
 [mapper]
 kind = "sega"   # frame regs $FFFC-$FFFF; reset banks 0/1/2; first 1KB fixed
