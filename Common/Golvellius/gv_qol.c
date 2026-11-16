@@ -23,6 +23,11 @@
  *    screen), SOUND tab OVERWORLD MUSIC (auto or a theme unlocked by sword + shield, $19FE; switched
  *    live at $0435), SIDE PANEL (gv_panel.c: surroundings, gold, power, world map; F2; pad Back stays
  *    the console's Pause).
+ *  TEXT FIXES (own, user decision 2026-11-16): the 5 certain typos of the English ROM, each the same
+ *    length, found by their original bytes (no file needed): Winkle's "PASSWARD" (text $03), three
+ *    times "GOLD" for "FIND" ($24 "DIDST THOU GOLD THE RING", $2B "GO GOLD MORE!", $2F "HELP THEE
+ *    GOLD MANY UNUSUAL OBJECTS"), credits "DESGINED BY" (bank 15). Cave texts use $00 for a space, the
+ *    credits '@'. Tools/gv_make_ips.py writes the same fixes (+ MAP FIXES) as an IPS for other emulators.
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -33,7 +38,6 @@
 #include "hud.h"
 #include "sms_runtime.h"
 #include "safe_file.h"
-#include "gv_patch.h"
 #include "audio/sn76489.h"
 #include "audio/ym2413.h"
 #include "video/sms_vdp.h"
@@ -49,7 +53,7 @@ static const struct { uint32_t off; uint8_t orig, fixed; } k_map_fix[2] = {
 static const char *const k_onoff[] = { "OFF (ORIGINAL)", "ON" };
 static const double k_ff_vals[] = { 0.5, 1, 2, 4 };
 static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
-static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i, s_free_i;
+static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_tfix_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
 static int s_bgm_i = 100, s_sfx_i = 100;            /* SOUND tab: music / effects volume, percent */
 static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_reach_i, s_down_i;
@@ -64,21 +68,46 @@ static const char *const k_downspd[] = { "X1 (ORIGINAL)", "X1.5 (ALIANGER)" };
 static const char *const k_tp[]   = { "OFF (ORIGINAL)", "VISITED SCREENS", "PASSWORD CAVES" };
 static char s_music_names[6][24] = { "AUTO (ORIGINAL)" };
 static const char *k_music[6] = { s_music_names[0], s_music_names[1], s_music_names[2], s_music_names[3], s_music_names[4], s_music_names[5] };
-/* Alianger's cave wall tweaks (Improvement Hack v1.1, level data in bank 5): applied from the user's own
-   IPS file at run time (gv_patch.c); takes effect at the next cave screen the game loads */
-static GvPatch s_cave = { "Golvellius v1.1 top down cave wall tweaks.ips", 0xAC5D5CDDu, 434 };
-/* Alianger's free crystals (a cheat, user decision: default off; the price bytes of the crystal caves in
-   the cave table bank 7 $8D87, 2 bytes per cave, `($CAD3-$B0)*2`, copied to $C16C/$C16D when a cave is
-   entered: so it applies from the next cave entered, + the crystal seller's text), TEXT FIXES and NEW HINTS
-   (his combined text patch split in two, user decision 2026-11-16): gv_text.c */
-static int s_tfix_i, s_hint_i;
-extern void gv_text_init(void);
-extern bool gv_text_avail(int which);
-extern void gv_text_set(bool cry, bool fix, bool hint);
-extern void gv_text_frame(void);
-static const char *const k_alianger[] = { "OFF (ORIGINAL)", "ON (ALIANGER)" };
-static const char *const k_missing[]  = { "IPS FILE MISSING" };
-static const char *const k_cheat[]    = { "OFF (ORIGINAL)", "ON (CHEAT, ALIANGER)" };
+/* TEXT FIXES: see the header; same table in Tools/gv_make_ips.py */
+static const struct { uint32_t lo, hi; uint8_t space; const char *from, *to; } k_typo[] = {
+    { 0x1C000, 0x20000, 0x00, "PASSWARD",       "PASSWORD" },        /* text $03, Winkle */
+    { 0x1C000, 0x20000, 0x00, "THOU GOLD THE",  "THOU FIND THE" },   /* $24 */
+    { 0x1C000, 0x20000, 0x00, "GO GOLD MORE",   "GO FIND MORE" },    /* $2B, sword seller */
+    { 0x1C000, 0x20000, 0x00, "HELP THEE GOLD", "HELP THEE FIND" },  /* $2F, rock ring seller */
+    { 0x3C000, 0x40000, 0x40, "DESGINED",       "DESIGNED" },        /* credits */
+};
+#define NTYPO (int)(sizeof k_typo / sizeof k_typo[0])
+static long s_typo_at[NTYPO];
+static bool s_typo_ok;
+static const char *const k_notfound[] = { "NOT FOUND IN THIS ROM" };
+static void enc(const char *t, uint8_t space, uint8_t *out) { for (size_t i = 0; t[i]; i++) out[i] = t[i] == ' ' ? space : (uint8_t)t[i]; }
+static long find_unique(const uint8_t *rom, uint32_t lo, uint32_t hi, const uint8_t *p, size_t n)
+{
+    long at = -1;
+    for (uint32_t o = lo; o + n <= hi; o++)
+        if (!memcmp(rom + o, p, n)) { if (at >= 0) return -2; at = (long)o; }
+    return at;
+}
+/* every typo must be found exactly once; searched once, in the untouched image of the first start (the
+   fixed words may exist elsewhere: "PASSWORD" is also on the password screen) */
+static void typo_init(void)
+{
+    static bool done; if (done) return; done = true;
+    size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
+    s_typo_ok = rom && n >= 0x40000;
+    for (int i = 0; i < NTYPO && s_typo_ok; i++) {
+        uint8_t a[32]; size_t len = strlen(k_typo[i].from);
+        enc(k_typo[i].from, k_typo[i].space, a);
+        s_typo_at[i] = find_unique(rom, k_typo[i].lo, k_typo[i].hi, a, len);
+        if (s_typo_at[i] < 0) { s_typo_ok = false; fprintf(stderr, "[gv_qol] text fix \"%s\" not found once: TEXT FIXES disabled\n", k_typo[i].from); }
+    }
+}
+static void apply_typos(void)
+{
+    size_t n = 0; uint8_t *rom = glue_rom_image(&n);
+    if (!s_typo_ok || !rom) return;
+    for (int i = 0; i < NTYPO; i++) enc(s_tfix_i ? k_typo[i].to : k_typo[i].from, k_typo[i].space, rom + s_typo_at[i]);
+}
 static bool s_rom_ok;
 static const char *s_ini = "gv_qol.ini";
 
@@ -102,10 +131,7 @@ static void load_config(void)
         if (!strcmp(key, "map_fixes")) s_mapfix_i = v != 0;
         else if (!strcmp(key, "sword_hit_fix")) s_hitfix_i = v != 0;
         else if (!strcmp(key, "remember_password")) s_pw_i = v != 0;
-        else if (!strcmp(key, "cave_wall_tweaks")) s_cave_i = v != 0;
-        else if (!strcmp(key, "free_crystals")) s_free_i = v != 0;
         else if (!strcmp(key, "text_fixes")) s_tfix_i = v != 0;
-        else if (!strcmp(key, "new_hints")) s_hint_i = v != 0;
         else if (!strcmp(key, "damage_dealt")) s_dealt_i = v < 0 ? 0 : v > 10 ? 10 : (int)v;
         else if (!strcmp(key, "damage_received")) s_recv_i = v < 0 ? 0 : v > 10 ? 10 : (int)v;
         else if (!strcmp(key, "gold_multiplier")) s_gold_i = v < 0 ? 0 : v > 10 ? 10 : (int)v;
@@ -132,10 +158,7 @@ static void save_config(void)
     fprintf(f, "map_fixes      = %d     ; 1 = screen C5 gets its own room, screen H5 the right cave graphic (SMS Power bug fix)\n", s_mapfix_i);
     fprintf(f, "sword_hit_fix  = %d     ; 1 = every sword swing can hit (original: every other swing only stuns)\n", s_hitfix_i);
     fprintf(f, "remember_password = %d  ; 1 = passwords are saved with their maps: slot 0 = autosave, 1-5 = LB/RB in Winkle's cave and on the password screen\n", s_pw_i);
-    fprintf(f, "cave_wall_tweaks = %d   ; 1 = Alianger's top-down cave wall tweaks (needs his IPS file in ROMs/Patches)\n", s_cave_i);
-    fprintf(f, "free_crystals  = %d     ; 1 = cheat: crystals cost nothing (Alianger's IPS file in ROMs/Patches)\n", s_free_i);
-    fprintf(f, "text_fixes     = %d     ; 1 = Alianger's typo / fact fixes of the cave texts (his combined text IPS in ROMs/Patches)\n", s_tfix_i);
-    fprintf(f, "new_hints      = %d     ; 1 = Alianger's rewritten hints of the cave texts (his combined text IPS in ROMs/Patches)\n", s_hint_i);
+    fprintf(f, "text_fixes     = %d     ; 1 = the 5 typos fixed: PASSWARD, 3 x GOLD for FIND, DESGINED (credits)\n", s_tfix_i);
     fprintf(f, "cave_info_all  = %d     ; MAP tab / panel: 0 = area names of visited screens, caves you have been inside, 1 = everything (spoiler)\n", gv_cave_info_all);
     fprintf(f, "damage_dealt   = %-5d ; sword damage to enemies x0..x10 (1 = original)\n", s_dealt_i);
     fprintf(f, "damage_received = %-4d ; damage you take x0..x10 (1 = original; healing is not changed)\n", s_recv_i);
@@ -154,8 +177,7 @@ static void save_config(void)
 }
 
 static void on_map_fix(void) { apply_map_fix(); }
-static void on_cave(void) { gv_patch_set(&s_cave, s_cave_i != 0); }
-static void on_free(void) { gv_text_set(s_free_i != 0, s_tfix_i != 0, s_hint_i != 0); }
+static void on_typo(void) { apply_typos(); }
 static void on_panel(void) { hud_set_panel_enabled(s_panel_i != 0); }
 extern void gv_map_init(void);
 extern void gv_panel_draw(uint32_t *b, int w, int h);
@@ -170,7 +192,7 @@ extern void gv_cave_test(uint64_t frame);
 static void on_close(void) { save_config(); gv_map_save(); gv_cave_save(); gv_map_hud_closed(); }
 static int open_page(void) { return hud_page_index("MAP"); }
 static void on_ff(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
-static HudOption k_opts[] = {          /* not const: an option whose IPS file is missing gets k_missing */
+static HudOption k_opts[] = {          /* not const: TEXT FIXES gets k_notfound on another ROM */
     { "MAP FIXES",      k_onoff,    2, &s_mapfix_i, on_map_fix },
     { "SWORD HIT FIX",  k_onoff,    2, &s_hitfix_i, NULL },
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
@@ -178,10 +200,7 @@ static HudOption k_opts[] = {          /* not const: an option whose IPS file is
     { "DUNGEON MAP",    k_dmap,     2, &gv_cave_reveal, NULL },
     { "CAVE INFO",      k_cinfo,    2, &gv_cave_info_all, NULL },
     { "PASSWORD SAVE SLOTS", k_onoff, 2, &s_pw_i,   NULL },
-    { "CAVE WALL TWEAKS", k_alianger, 2, &s_cave_i, on_cave },
-    { "FREE CRYSTALS",  k_cheat,    2, &s_free_i,   on_free },
-    { "TEXT FIXES",     k_alianger, 2, &s_tfix_i,   on_free },
-    { "NEW HINTS",      k_alianger, 2, &s_hint_i,   on_free },
+    { "TEXT FIXES",     k_onoff,    2, &s_tfix_i,   on_typo },
     { "DINA'S PAYOUT",  k_dina,     2, &s_dina_i,   NULL },
     { "MAP TELEPORT",   k_tp,       3, &s_tp_i,     NULL },
     { "SWORD REACH",    k_reach,    3, &s_reach_i,  NULL },
@@ -576,7 +595,6 @@ void gv_on_frame_post(uint64_t frame)
     if (frame % 30 == 0) music_names();              /* THEME n (LOCKED) follows the equipment */
     tp_place_tick();
     { extern void gv_slots_frame(uint64_t); gv_slots_frame(frame); }
-    gv_text_frame();
     gv_cave_frame();
     gv_cave_test(frame);
     sound_frame();
@@ -640,18 +658,13 @@ void gv_on_post_reset(void)
     {   const char *t = getenv("GV_PASSWORD");            /* test: 64 hex digits = a password to pre-fill */
         if (t && strlen(t) >= 64) { for (int i = 0; i < 32; i++) { unsigned v; sscanf(t + 2 * i, "%2x", &v); s_pw[i] = (uint8_t)v; } s_pw_have = true; } }
     apply_map_fix();
-    {   static bool patches_done;                     /* once: they remember the original bytes */
-        if (!patches_done) { patches_done = true; gv_patch_init(&s_cave); gv_text_init(); } }
-    {   int *const pv[] = { &s_cave_i, &s_free_i, &s_tfix_i, &s_hint_i };
-        const bool avail[] = { s_cave.avail, gv_text_avail(0), gv_text_avail(1), gv_text_avail(2) };
-        for (int k = 0; k < 4; k++)
-            if (!avail[k]) {                          /* file missing: the option stays off */
-                *pv[k] = 0;
-                for (unsigned i = 0; i < sizeof k_opts / sizeof k_opts[0]; i++)
-                    if (k_opts[i].value == pv[k]) { k_opts[i].choices = k_missing; k_opts[i].nchoices = 1; }
-            }
-        gv_patch_set(&s_cave, s_cave_i != 0);
-        gv_text_set(s_free_i != 0, s_tfix_i != 0, s_hint_i != 0); }
+    typo_init();
+    if (!s_typo_ok) {
+        s_tfix_i = 0;
+        for (unsigned i = 0; i < sizeof k_opts / sizeof k_opts[0]; i++)
+            if (k_opts[i].value == &s_tfix_i) { k_opts[i].choices = k_notfound; k_opts[i].nchoices = 1; }
+    }
+    apply_typos();
     hud_set_turbo_speed(k_ff_vals[s_ff_i]);
     hud_set_title("GOLVELLIUS - OPTIONS");
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
