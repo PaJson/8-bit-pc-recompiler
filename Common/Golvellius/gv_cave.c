@@ -166,6 +166,16 @@ static void cave_load_file(void)
     fclose(f);
 }
 
+/* save slots (gv_slots.c): forget everything; load = read the .gvcave file again (it was just replaced),
+   else start empty (New Game) and write the empty state at the next save */
+void gv_cave_reset(bool load)
+{
+    memset(s_seen, 0, sizeof s_seen); memset(s_has_snap, 0, sizeof s_has_snap); memset(s_entered, 0, sizeof s_entered);
+    s_id = -1; s_n = 0; s_gen++;
+    s_loaded = false; s_dirty = !load;
+    if (load) cave_load_file(); else s_loaded = true;
+}
+
 /* ---- one dungeon: layout -> metatiles -> tiles -> picture ---- */
 static uint16_t step_bits(int s)                    /* border bits added (before = bit 15, after = 14 - ni) */
 {

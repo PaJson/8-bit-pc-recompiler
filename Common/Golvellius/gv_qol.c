@@ -52,7 +52,7 @@ static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAUL
 static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_cave_i, s_free_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
 static int s_bgm_i = 100, s_sfx_i = 100;            /* SOUND tab: music / effects volume, percent */
-static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_8way_i, s_reach_i;
+static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_reach_i;
 extern int gv_cave_reveal;                         /* gv_cave.c: DUNGEON MAP option */
 extern int gv_cave_info_all;                       /* gv_info.c: CAVE INFO option */
 static const char *const k_cinfo[] = { "ENTERED CAVES", "ALL CAVES (SPOILER)" };
@@ -106,7 +106,6 @@ static void load_config(void)
         else if (!strcmp(key, "dungeon_map_whole")) gv_cave_reveal = v != 0;
         else if (!strcmp(key, "cave_info_all")) gv_cave_info_all = v != 0;
         else if (!strcmp(key, "teleport")) s_tp_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
-        else if (!strcmp(key, "eight_way_walking")) s_8way_i = v != 0;
         else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "overworld_music")) s_music_i = v < 0 ? 0 : v > 5 ? 5 : (int)v;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
@@ -123,7 +122,7 @@ static void save_config(void)
     fprintf(f, "; Golvellius options (also in game: F1 / gamepad Start). 0 = original game.\n");
     fprintf(f, "map_fixes      = %d     ; 1 = screen C5 gets its own room, screen H5 the right cave graphic (SMS Power bug fix)\n", s_mapfix_i);
     fprintf(f, "sword_hit_fix  = %d     ; 1 = every sword swing can hit (original: every other swing only stuns)\n", s_hitfix_i);
-    fprintf(f, "remember_password = %d  ; 1 = the last password shown is saved and pre-filled on the password screen\n", s_pw_i);
+    fprintf(f, "remember_password = %d  ; 1 = passwords are saved with their maps: slot 0 = autosave, 1-5 = LB/RB in Winkle's cave and on the password screen\n", s_pw_i);
     fprintf(f, "cave_wall_tweaks = %d   ; 1 = Alianger's top-down cave wall tweaks (needs his IPS file in ROMs/Patches)\n", s_cave_i);
     fprintf(f, "free_crystals  = %d     ; 1 = cheat: crystals cost nothing (Alianger's IPS file in ROMs/Patches)\n", s_free_i);
     fprintf(f, "cave_info_all  = %d     ; MAP tab / panel: 0 = area names of visited screens, caves you have been inside, 1 = everything (spoiler)\n", gv_cave_info_all);
@@ -134,7 +133,6 @@ static void save_config(void)
     fprintf(f, "dungeon_map_whole = %d  ; dungeon map (side panel / MAP tab): 0 = the parts you have seen, 1 = the whole dungeon\n", gv_cave_reveal);
     fprintf(f, "dina_2600      = %d    ; 1 = Dina pays 2600 gold instead of 150 (amount from Alianger's hack)\n", s_dina_i);
     fprintf(f, "teleport       = %d     ; MAP tab teleport: 0 off, 1 to visited screens, 2 to visited password caves\n", s_tp_i);
-    fprintf(f, "eight_way_walking = %d  ; 1 = diagonal input walks diagonally on the overworld (original: left / right only)\n", s_8way_i);
     fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
     fprintf(f, "overworld_music = %d    ; 0 = the game's choice (by sword + shield), 1..5 = that theme once unlocked\n", s_music_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
@@ -167,12 +165,11 @@ static HudOption k_opts[] = {          /* not const: an option whose IPS file is
     { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },
     { "DUNGEON MAP",    k_dmap,     2, &gv_cave_reveal, NULL },
     { "CAVE INFO",      k_cinfo,    2, &gv_cave_info_all, NULL },
-    { "REMEMBER PASSWORD", k_onoff, 2, &s_pw_i,     NULL },
+    { "PASSWORD SAVE SLOTS", k_onoff, 2, &s_pw_i,   NULL },
     { "CAVE WALL TWEAKS", k_alianger, 2, &s_cave_i, on_cave },
     { "FREE CRYSTALS",  k_cheat,    2, &s_free_i,   on_free },
     { "DINA'S PAYOUT",  k_dina,     2, &s_dina_i,   NULL },
     { "MAP TELEPORT",   k_tp,       3, &s_tp_i,     NULL },
-    { "8-WAY WALKING",  k_onoff,    2, &s_8way_i,   NULL },
     { "SWORD REACH",    k_reach,    3, &s_reach_i,  NULL },
 };
 static const HudOption k_mult_opts[] = {
@@ -426,37 +423,7 @@ int gv_frame_top(void)
     return 0;                                                /* the frame goes on as usual */
 }
 
-/* ==== 8-WAY WALKING and SWORD REACH ====
- * Overworld walking (mode 6): $0DCA turns the pad into 9 directions $C801 (0 DL, 1 L, 2 UL, 3 D, 4 none,
- * 5 U, 6 DR, 7 R, 8 UR); $3D40 dispatches the hero (IX = $C100) through table $3D6B, where the original
- * maps every diagonal to left / right. The hero's facing (ix+$10): left $01, right $07, up $85, down $83
- * (bit 7 = vertical); 1 px per frame; a turn is only taken when the hero is on an 8-px line across the
- * new direction (else the handler keeps the old direction), walls are tested when a new 16-px cell is
- * entered ($2D06). gv_walk_dir (hook on $3D40 `ld a,($C801)`) turns a diagonal into one of the game's
- * own straight moves per frame: it keeps the current axis until the hero is on an 8-px line, then
- * takes the other axis (a fine staircase = diagonal); an axis that did not move the hero last time is
- * skipped (walls), so the hero slides along them. All the game's own rules (walls, caves, the screen
- * edge scroll) stay in force because the game's handlers do the moving. */
-static uint8_t s_walk_last_y, s_walk_last_x; static int s_walk_axis = -1;   /* 0 horizontal, 1 vertical */
-static bool s_walk_blocked[2];
-int gv_walk_dir(void)
-{
-    if (!s_8way_i || sms_read8(0xC802) != 6) { s_walk_axis = -1; return 0; }
-    int d = sms_read8(0xC801);
-    if (d != 0 && d != 2 && d != 6 && d != 8) { s_walk_axis = -1; return 0; }
-    uint8_t y = sms_read8(0xC101), x = sms_read8(0xC102), f = sms_read8(0xC110);
-    if (s_walk_axis >= 0) s_walk_blocked[s_walk_axis] = (y == s_walk_last_y && x == s_walk_last_x);
-    int cur = (f & 0x80) ? 1 : 0, axis;
-    bool aligned = cur ? (y & 7) == 0 : (x & 7) == 0;          /* on a line where the game lets it turn */
-    if (!aligned) axis = cur;
-    else if (s_walk_axis < 0) axis = 0;
-    else axis = s_walk_blocked[!cur] ? cur : !cur;              /* alternate, unless the other way is shut */
-    if (s_walk_blocked[0] && s_walk_blocked[1]) { s_walk_blocked[0] = s_walk_blocked[1] = false; }
-    s_walk_axis = axis; s_walk_last_y = y; s_walk_last_x = x;
-    int h = d <= 2 ? 1 : 7, v = (d == 2 || d == 8) ? 5 : 3;
-    g_z80.a = (uint8_t)(axis ? v : h);
-    return 1;                                                   /* -> $3D43 */
-}
+/* ==== SWORD REACH ==== */
 /* $3509: an enemy tests its box against the sword objects $C120 / $C140 (type $84 while they hit; box
    +$16..+$19 = low / high of both axes, $3538). SWORD REACH widens the box of an active sword whenever
    the sword's own code has (re)written it (never our own widened box again). */
@@ -505,6 +472,9 @@ int gv_sword_swing(void)
  * passwords work as before. Same idea as Ichigobankai's SRAM hack, which also saves the password
  * (+ the screen $C80D and $C100..$C11F to resume at the password house: not done here yet). */
 extern const char *glue_save_path(void);
+extern void gv_slots_pw_made(void);
+extern bool gv_slots_pw_fill(uint8_t pw[32]);
+extern void gv_slots_pw_loop(void);
 static uint8_t s_pw[32]; static bool s_pw_have, s_pw_draw;
 static void pw_path(char *out, size_t n)
 {
@@ -522,6 +492,9 @@ static void pw_load(void)
     for (int i = 0; i < 32 && s_pw_have; i++)               /* symbols are 0..31 (5 bits): else damaged */
         if (s_pw[i] > 31) { s_pw_have = false; fprintf(stderr, "[gv] %s: not a valid password (ignored)\n", p); }
 }
+void gv_pw_reload(void) { pw_load(); }
+void gv_pw_redraw(void) { s_pw_draw = true; }
+bool gv_slots_enabled(void) { return s_pw_i != 0; }
 static bool pw_log(void) { static int on = -1; if (on < 0) on = getenv("GV_LOG") != NULL; return on; }
 int gv_pw_made(void)
 {
@@ -532,11 +505,12 @@ int gv_pw_made(void)
     char p[1100]; pw_path(p, sizeof p);
     FILE *f = safe_fopen_w(p, "wb");                        /* "<file>.tmp", swapped in when complete */
     if (f) { fwrite(s_pw, 1, 32, f); safe_fclose(f, p); }
+    gv_slots_pw_made();
     return 0;
 }
 int gv_pw_entry(void)
 {
-    if (!s_pw_i || !s_pw_have) return 0;                    /* original: clear the buffer */
+    if (!s_pw_i || !gv_slots_pw_fill(s_pw)) return 0;       /* original: clear the buffer */
     for (int i = 0; i < 32; i++) sms_write8((uint16_t)(0xC170 + i), s_pw[i]);
     s_pw_draw = true;
     if (pw_log()) fprintf(stderr, "[gv] password screen: pre-filled with the saved password\n");
@@ -548,6 +522,7 @@ int gv_pw_entry(void)
    buffer at cursor position $C16F, as after typing one), cursor back to position 0 */
 int gv_pw_loop(void)
 {
+    if (s_pw_i) gv_slots_pw_loop();
     if (!s_pw_draw) return 0;
     s_pw_draw = false;
     Z80State keep = g_z80;
@@ -566,6 +541,7 @@ void gv_on_frame_post(uint64_t frame)
 {
     if (frame % 30 == 0) music_names();              /* THEME n (LOCKED) follows the equipment */
     tp_place_tick();
+    { extern void gv_slots_frame(uint64_t); gv_slots_frame(frame); }
     gv_cave_frame();
     gv_cave_test(frame);
     sound_frame();
@@ -645,7 +621,8 @@ void gv_on_post_reset(void)
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
     hud_set_on_close(on_close);
     gv_map_init();
-    { static bool once; if (!once) { once = true; atexit(gv_cave_save); } }
+    { static bool once; if (!once) { once = true; atexit(gv_cave_save);
+        extern void gv_slots_init(void); extern void gv_slots_exit(void); gv_slots_init(); atexit(gv_slots_exit); } }
     {   static bool pages;
         if (!pages) { pages = true;
             hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));

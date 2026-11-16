@@ -199,6 +199,18 @@ static void map_load(void)
     s_gen++;
 }
 
+/* save slots (gv_slots.c): forget every screen; load = read the .gvmap file again (it was just
+   replaced), else start empty (New Game) and write the empty map at the next save */
+void gv_map_reset(bool load)
+{
+    memset(s_seen, 0, sizeof s_seen); memset(s_has_full, 0, sizeof s_has_full);
+    for (int i = 0; i < MW * MH; i++) s_map[i] = 0xFF000000u;
+    s_still = 0; s_last_idx = -1; s_cur = -1; s_zoom = false;
+    s_loaded = false; s_dirty = !load;
+    s_gen++;
+    if (load) map_load(); else s_loaded = true;
+}
+
 /* the background layer of the playfield (x 8..247, y 0..191), as the VDP draws it (mode 4: scroll
    registers 8 / 9 and their locks: reg0 bit 6 = top 2 rows not scrolled horizontally, bit 7 = the
    right 8 columns not scrolled vertically) */
@@ -452,10 +464,14 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
     frame_rect(dx + (s_cur % COLS) * cw - 0.5f, dy + (s_cur / COLS) * ch - 0.5f, cw + 1, ch + 1, 0.75f, CYAN, fb, w, h);
 }
 
+/* the engine has one overlay callback: the capture (reads the clean frame) first, then the save-slot
+   line of gv_slots.c (drawn onto the shown copy) */
+extern void gv_slots_overlay(uint32_t *fb, int w, int h);
+static void overlay(uint32_t *fb, int w, int h) { capture(fb, w, h); gv_slots_overlay(fb, w, h); }
 void gv_map_init(void)
 {
     static bool pages;
     map_load();
-    hud_set_overlay(capture);
+    hud_set_overlay(overlay);
     if (!pages) { hud_add_page_ex("MAP", map_draw, map_key, true); pages = true; atexit(gv_map_save); }
 }
