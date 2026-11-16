@@ -9,9 +9,12 @@
 ;   START -> the original NEW GAME / CONTINUE; CONTINUE -> PASSWORD / SAVE (ours);
 ;   PASSWORD -> the original LAST GAME CONTINUE / PASSWORD CONTINUE. OPTIONS and SAVE open
 ;   full-screen pages (placeholders until steps 4 and 6). Button 1 = select, button 2 = back, also
-;   in the two original menus, now submenus (originally both buttons selected). Leaving a page or
-;   going back to the title: fade out, music off, the title is drawn again (its unpacking runs with
-;   the frame interrupt off, which would freeze a playing song), title music from the start.
+;   in the two original menus, now submenus (originally both buttons selected).
+;   Nothing of the title is ever reloaded (the title's unpacking runs with the frame interrupt off,
+;   which would freeze the music): the menus only replace the two text rows under the picture
+;   (saved to RAM and written back when going back to the title), and a page is a second name
+;   table at $3000 in tiles the title does not use (the font's kana), shown by switching VDP
+;   register 2; its digits are unpacked from the game's font into unused tiles.
 ;
 ; Memory: banks 0 and 1 are always in slots 0/1 ($0000-$7FFF; the game never remaps them),
 ; slot 2 ($8000-$BFFF) is switched by the game (register $FFFF) and also shows the battery RAM
@@ -20,6 +23,11 @@
 ; ($7E99-$7FEF, the ROM's only free space): code in slot 2 must never switch slot 2 itself.
 ; Every bank switch uses a constant (ld a,N / ld ($FFFF),a) and every jump has a fixed target,
 ; so the PC recompiler can follow all of it statically.
+;
+; Title VRAM (RESEARCH.md): low tiles $00-$F7 = the picture; high tiles 256+$01..$3D = picture +
+; copyright lines, 256+$40..$62 = the font's letters / cursor (our menu texts), 256+$63..$BF unused
+; (the font's kana); name table $3800. Pages: name table $3000-$35FF (256+$80..$AF), digits
+; 256+$B0..$B9 ($3600-$373F).
 
 .MEMORYMAP
 DEFAULTSLOT 2
@@ -47,25 +55,22 @@ SLOT 2 $8000 $4000
     CHECKSUMSIZE 512*1024
 .ENDSMS
 
-; Text: the game's fonts have letters at their ASCII codes, '@' ($40) = space, digits at $DF-$E8
-; (font asset $C0 only, i.e. our full-screen pages; the title font has no digits)
+; Text: the title font (high tile set) has the letters at their ASCII codes, '@' ($40) = space,
+; '. ' ! , ?' at $5B-$5F; our digits sit at $B0-$B9 (unpacked by Stub_Digits).
 .ASCIITABLE
 MAP " " = $40
-MAP "0" TO "9" = $DF
+MAP "0" TO "9" = $B0
 MAP "." = $5B
 MAP "'" = $5C
 MAP "!" = $5D
 MAP "," = $5E
 MAP "?" = $5F
-MAP "-" = $CD
 .ENDA
 
 ; ---------------------------------------------------------------------------------------------
-; RAM ($C0A1-$C0FF is never used by the game: RESEARCH.md)
-.DEFINE GvRet       $C0A1        ; title re-entry: 0 normal, 1 top menu (OPTIONS), 2 continue menu (SAVE), 3 title wait
-.DEFINE GvPage      $C0A2        ; the open page's GvRet value, copied to GvRet only when the page closes (the Reset
-                                 ; button restarts at $0405 without clearing RAM: no stale GvRet)
+; RAM ($C0A1-$C0FF is never used by the game; $D178-$DAE9 not while the title runs: RESEARCH.md)
 .DEFINE MenuSel     $C100        ; menu selection (the game's own title menus use it too; the cursor routine reads it)
+.DEFINE TitleRows   $D200        ; 256 bytes: name table rows 20-23 of the title (the copyright lines)
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -73,32 +78,23 @@ MAP "-" = $CD
 .DEFINE PadNew      $C807        ; bit 0-3 up/down/left/right, 4 button 1, 5 button 2
 .DEFINE FillVram    $01CF        ; HL address, BC count, A value
 .DEFINE SetVramAddr $01B9        ; VRAM write address HL
-.DEFINE DrawString  $02FC        ; HL -> column, row, text, 0 (high tile byte = $C047)
-.DEFINE DrawStrings $030F        ; HL -> 0-ended list of string pointers
+.DEFINE VdpDelay    $0208        ; a short delay between VRAM accesses while the display is on
+.DEFINE DrawString  $02FC        ; HL -> column, row, text, 0 (name table $3800, high tile byte = $C047)
 .DEFINE TileHigh    $C047
 .DEFINE MenuCursor  $2899        ; A = tile at column 10, row 20 + 2 * (MenuSel); needs carry clear
-.DEFINE ScreenOff   $0D1A
+.DEFINE ScreenOff   $0D1A        ; (display off / on requests, each waits a frame)
 .DEFINE ScreenOn    $0D20
+.DEFINE VdpReg2     $C051        ; the game's copy of VDP register 2 (name table address), written by $0114 only
 .DEFINE LoadAsset   $0E0B        ; A = asset code -> maps its bank in slot 2, HL = data
-.DEFINE UnpackTiles $038F        ; HL data -> VRAM DE
-.DEFINE TitleSetup  $2749        ; draws the title screen (then $27A4: music, $27AE: wait for a button)
 .DEFINE FadeOut     $1C89        ; palette to black (9 steps, frames keep running)
 .DEFINE FadeIn      $1C73        ; palette from $C9C0 (the title palette while on the title)
-.DEFINE SoundStop   $7774        ; all sound channels off
-.DEFINE PlaySound   $77A6        ; A = sound / song (bank 2 in slot 2); 1 = title music
 
 ; ---------------------------------------------------------------------------------------------
 ; Hooks into the game's code (bank 0)
 .BANK 0 SLOT 0
-.ORGA $27A4                      ; title: was ld a,2 / ld ($FFFF),a (then music, wait)
-.SECTION "hook_title_setup" OVERWRITE
-    jp Stub_TitleSetup
-    nop
-    nop
-.ENDS
 .ORGA $27F8                      ; title: a button was pressed; was ld hl,$3D00 (NEW GAME / CONTINUE)
 .SECTION "hook_title_button" OVERWRITE
-    jp Stub_TopMenu
+    jp Stub_TitleButton
 .ENDS
 .ORGA $284B                      ; CONTINUE chosen; was ld hl,$28C2 (LAST GAME / PASSWORD CONTINUE)
 .SECTION "hook_continue" OVERWRITE
@@ -120,30 +116,14 @@ MAP "-" = $CD
 .BANK 1 SLOT 1
 .ORGA $7E99
 .SECTION "gvplus_stubs" FORCE
-Stub_TopMenu:                    ; from $27F8
+Stub_TitleButton:                ; from $27F8
     ld a,16
     ld ($FFFF),a
-    jp TopMenu
+    jp TitleButton
 Stub_ContMenu:                   ; from $284B
     ld a,16
     ld ($FFFF),a
     jp ContMenu
-Stub_TitleSetup:                 ; from $27A4: the title screen is drawn
-    ld a,(GvRet)
-    cp 3
-    jr nz,@notitle
-    xor a                        ; back from our top menu: the normal title (music, wait for a button)
-    ld (GvRet),a
-@notitle:
-    or a
-    ld a,2
-    ld ($FFFF),a
-    jp z,$27A9                   ; normal start: the original code (music, wait for a button)
-    ld a,1                       ; back from a page: title music, then straight into our menu
-    call PlaySound
-    ld a,16
-    ld ($FFFF),a
-    jp TitleReturn
 Stub_NewGameKeys:                ; button 1 = the original select, button 2 = back to START / OPTIONS
     ld a,b
     and $10
@@ -164,6 +144,10 @@ Stub_LastGameKeys:               ; button 1 = the original select, button 2 = ba
     ld a,16
     ld ($FFFF),a
     jp ContMenu
+Exit_TitleWait:                  ; -> the title's wait for a button (music keeps playing, the intro demo after a while)
+    ld a,2
+    ld ($FFFF),a
+    jp $27AE
 Exit_NewGameMenu:                ; -> the original NEW GAME / CONTINUE menu
     ld a,2
     ld ($FFFF),a
@@ -173,13 +157,78 @@ Exit_Password:                   ; -> the original LAST GAME / PASSWORD CONTINUE
     ld ($FFFF),a
     ld hl,$28C2
     jp $284E
-FontToLow:                       ; font asset $C0 -> VRAM $0800 (tiles $40+), back to bank 16
+
+; The digit tiles of the game's font (asset $C0, packed as 4 bit-planes of runs: n < $80 = n
+; bytes, n >= $80 = the next byte n & $7F times, 0 = end of the plane; its first tile is $40, the
+; digits are tiles $DF-$E8) -> VRAM $3600 (tiles 256+$B0..$B9). Only those 80 bytes per plane are
+; written; nothing else of the font is unpacked. Back to bank 16 at the end.
+Stub_Digits:
     ld a,$C0
-    call LoadAsset
-    ld de,$0800
-    call UnpackTiles
+    call LoadAsset               ; bank 12 in slot 2, HL = the packed font
+    ld c,0                       ; plane
+@plane:
+    ld de,0                      ; byte number in this plane (8 per tile)
+@next:
+    ld a,(hl)
+    inc hl
+    or a
+    jr z,@endplane
+    jp m,@run
+    ld b,a
+@lit:
+    ld a,(hl)
+    inc hl
+    call @put
+    djnz @lit
+    jr @next
+@run:
+    and $7F
+    ld b,a
+    ld a,(hl)
+    inc hl
+@rep:
+    call @put
+    djnz @rep
+    jr @next
+@endplane:
+    inc c
+    ld a,c
+    cp 4
+    jr nz,@plane
     ld a,16
     ld ($FFFF),a
+    ret
+@put:                            ; A = byte DE of plane C; keep bytes ($DF-$40)*8 .. +79
+    push hl
+    push af
+    ld hl,-(($DF-$40)*8)
+    add hl,de                    ; carry = DE >= first digit byte
+    inc de
+    jr nc,@skip
+    ld a,h
+    or a
+    jr nz,@skip
+    ld a,l
+    cp 80
+    jr nc,@skip
+    add hl,hl
+    add hl,hl
+    ld a,l
+    or c
+    ld l,a
+    ld a,h
+    add a,$36
+    ld h,a                       ; $3600 + 4 * byte + plane
+    di
+    call SetVramAddr
+    pop af
+    out ($BE),a
+    ei
+    pop hl
+    ret
+@skip:
+    pop af
+    pop hl
     ret
 .ENDS
 
@@ -197,6 +246,22 @@ GvPlusId:
 .SECTION "gvplus_title" FREE
 
 ; --- title menus (rows 20 / 22 under the title picture, cursor at column 10, like the game's) ---
+TitleButton:                     ; from the title: keep its two text rows for going back
+    ld hl,$3D00
+    di
+    ld a,l
+    out ($BF),a
+    ld a,h
+    out ($BF),a                  ; VRAM read address (bit 6 clear)
+    ld hl,TitleRows
+    ld b,0
+@copy:
+    call VdpDelay
+    in a,($BE)
+    ld (hl),a
+    inc hl
+    djnz @copy
+    ei
 TopMenu:
     xor a
     ld (MenuSel),a
@@ -216,15 +281,24 @@ TopMenuSel:                      ; MenuSel already set
     jp Exit_NewGameMenu
 @options:
     ld hl,PageOptions
-    ld b,1
-    jp ShowPage
-@back:
-    call FadeOut                 ; redraw the title (the copyright lines) and wait for a button
-    call SoundStop
-    ld a,3
-    ld (GvRet),a
-    ld sp,$DFF0
-    jp TitleSetup
+    call ShowPage
+    ld a,1
+    ld (MenuSel),a
+    jr TopMenuSel
+@back:                           ; the title's text rows back, then its wait for a button
+    ld hl,$3D00
+    di
+    call SetVramAddr
+    ld hl,TitleRows
+    ld b,0
+@put:
+    call VdpDelay
+    ld a,(hl)
+    out ($BE),a
+    inc hl
+    djnz @put
+    ei
+    jp Exit_TitleWait
 
 ContMenu:
     xor a
@@ -245,23 +319,13 @@ ContMenuSel:
     jp Exit_Password
 @save:
     ld hl,PageSave
-    ld b,2
-    jp ShowPage
+    call ShowPage
+    ld a,1
+    ld (MenuSel),a
+    jr ContMenuSel
 @back:
     call ClearMenuRows
     jp Exit_NewGameMenu
-
-TitleReturn:                     ; the title was redrawn after a page: back into the menu we came from
-    ld a,(GvRet)
-    ld b,a
-    xor a
-    ld (GvRet),a
-    ld a,1
-    ld (MenuSel),a               ; the cursor on the entry that opened the page
-    ld a,b
-    cp 2
-    jp z,ContMenuSel
-    jp TopMenuSel
 
 ; rows 20-23 of the name table = the menu area (as the game's $27F8 does it)
 ClearMenuRows:
@@ -303,21 +367,45 @@ Menu2:
     ld a,2
     ret
 
-; --- full-screen pages: HL = 0-ended list of strings, B = GvRet (which menu to return to) ---
+; --- full-screen pages: HL = 0-ended list of strings (column, row, text, 0); returns on button 2 ---
 ShowPage:
-    ld a,b
-    ld (GvPage),a
     push hl
     call FadeOut
     call ScreenOff
-    call FontToLow
-    call ClearScreen
-    xor a
-    ld (TileHigh),a              ; low tile set = font asset $C0
+    call Stub_Digits
+    ld hl,$3000                  ; the page's name table: all spaces (high set)
+    di
+    call SetVramAddr
+    ld bc,32*24
+@clear:
+    ld a,$40
+    out ($BE),a
+    ld a,1
+    out ($BE),a
+    dec bc
+    ld a,b
+    or c
+    jr nz,@clear
+    ei
     pop hl
-    call DrawStrings
+@string:
+    ld e,(hl)
+    inc hl
+    ld d,(hl)
+    inc hl
+    ld a,d
+    or e
+    jr z,@shown
+    push hl
+    ex de,hl
+    call PageString
+    pop hl
+    jr @string
+@shown:
+    ld a,$FD                     ; name table at $3000
+    call SetNameTable
     call ScreenOn
-    call FadeIn                  ; the title palette ($C9C0) suits the font too
+    call FadeIn                  ; the title palette ($C9C0)
 @wait:
     call WaitFrame
     call ReadPad
@@ -325,26 +413,54 @@ ShowPage:
     and $20                      ; button 2 = back
     jr z,@wait
     call FadeOut
-    call SoundStop
-    ld a,(GvPage)
-    ld (GvRet),a
-    ld sp,$DFF0
-    jp TitleSetup                ; -> Stub_TitleSetup -> TitleReturn
+    call ScreenOff
+    ld a,$FF                     ; the title's name table ($3800) again
+    call SetNameTable
+    call ScreenOn
+    jp FadeIn
 
-ClearScreen:                     ; name table rows 0-23 = space ($40, low set)
-    ld hl,$3800
+SetNameTable:                    ; A = VDP register 2
+    ld (VdpReg2),a
+    di
+    out ($BF),a
+    ld a,$82
+    out ($BF),a
+    ei
+    ret
+
+PageString:                      ; HL -> column, row, text, 0 into the page's name table (display off)
+    ld a,(hl)
+    inc hl
+    add a,a
+    ld e,a
+    ld d,0                       ; DE = column * 2
+    ld a,(hl)
+    inc hl
+    push hl
+    ld l,a
+    ld h,0
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl                    ; row * 64
+    add hl,de
+    ld de,$3000
+    add hl,de
     di
     call SetVramAddr
-    ld bc,32*24
-@loop:
-    ld a,$40
+    pop hl
+@char:
+    ld a,(hl)
+    inc hl
+    or a
+    jr z,@end
     out ($BE),a
-    xor a
+    ld a,1                       ; high tile set, palette 0
     out ($BE),a
-    dec bc
-    ld a,b
-    or c
-    jr nz,@loop
+    jr @char
+@end:
     ei
     ret
 
@@ -366,36 +482,36 @@ PageOptions: .DW @t1, @t2, @t3, 0
 @t1: .DB 12, 3
      .ASC "OPTIONS"
      .DB 0
-@t2: .DB 6, 10
+@t2: .DB 7, 10
      .ASC "NOTHING HERE YET."
      .DB 0
-@t3: .DB 7, 20
-     .ASC "BUTTON 2 - BACK"
+@t3: .DB 8, 20
+     .ASC "BUTTON 2  BACK"
      .DB 0
 
 PageSave:    .DW @t1, @t2, @t3, @t4, @t5, @t6, @t7, @t8, 0
 @t1: .DB 14, 3
      .ASC "SAVE"
      .DB 0
-@t2: .DB 10, 7
+@t2: .DB 12, 7
      .ASC "AUTO"
      .DB 0
-@t3: .DB 10, 9
+@t3: .DB 12, 9
      .ASC "SLOT 1"
      .DB 0
-@t4: .DB 10, 11
+@t4: .DB 12, 11
      .ASC "SLOT 2"
      .DB 0
-@t5: .DB 10, 13
+@t5: .DB 12, 13
      .ASC "SLOT 3"
      .DB 0
-@t6: .DB 10, 15
+@t6: .DB 12, 15
      .ASC "SLOT 4"
      .DB 0
-@t7: .DB 10, 17
+@t7: .DB 12, 17
      .ASC "SLOT 5"
      .DB 0
-@t8: .DB 7, 20
-     .ASC "BUTTON 2 - BACK"
+@t8: .DB 8, 20
+     .ASC "BUTTON 2  BACK"
      .DB 0
 .ENDS
