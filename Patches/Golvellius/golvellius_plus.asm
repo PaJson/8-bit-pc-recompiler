@@ -152,6 +152,16 @@ Exit_NewGameMenu:                ; -> the original NEW GAME / CONTINUE menu
     ld a,2
     ld ($FFFF),a
     jp $2806
+Exit_BackToContinue:             ; back from PASSWORD / SAVE: the original menu with the cursor on CONTINUE
+    ld a,2                       ; (its own start $2806 picks NEW GAME when no game is in RAM)
+    ld ($FFFF),a
+    ld hl,$28AC                  ; "NEW GAME" / "CONTINUE", as $2806-$280F
+    call DrawString
+    ld hl,$28B7
+    call DrawString
+    ld a,1
+    ld (MenuSel),a
+    jp $281D                     ; the menu loop
 Exit_Password:                   ; -> the original LAST GAME / PASSWORD CONTINUE menu
     ld a,2
     ld ($FFFF),a
@@ -325,7 +335,7 @@ ContMenuSel:
     jr ContMenuSel
 @back:
     call ClearMenuRows
-    jp Exit_NewGameMenu
+    jp Exit_BackToContinue
 
 ; rows 20-23 of the name table = the menu area (as the game's $27F8 does it)
 ClearMenuRows:
