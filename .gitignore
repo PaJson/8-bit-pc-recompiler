@@ -54,3 +54,8 @@ Launcher/build/
 
 # editor: VS Code workspace settings (CMake Tools writes absolute paths)
 .vscode/
+
+# our ROM patches: build output (background = the user ROM, patched ROM, patches)
+Patches/*/build/
+# WLA-DX build output (External/wla-dx = git submodule)
+External/build/

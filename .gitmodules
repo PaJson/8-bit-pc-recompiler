@@ -1,0 +1,3 @@
+[submodule "External/wla-dx"]
+	path = External/wla-dx
+	url = https://github.com/PaJson/wla-dx.git

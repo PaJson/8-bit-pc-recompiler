@@ -37,6 +37,13 @@ options; everything is our own implementation.
 | emu2413 | Mitsutaka Okazaki, MIT (`runner/audio/LICENSE.emu2413`) | YM2413 FM sound. |
 | stb_image | Sean Barrett, public domain / MIT | Loading the cover and logo images. |
 
+## Tools for our ROM patches
+
+| Tool | Author / licence | Used for |
+|---|---|---|
+| WLA DX (git submodule `External/wla-dx`, the user's fork of https://github.com/vhelin/wla-dx) | Ville Helin and contributors, GPL-2.0-or-later | Assembles our own ROM patch "Golvellius Plus" (`Patches/Golvellius`, `Tools/gv_build_patch.py`). Only run as a tool; our sources and the patches it writes are ours. |
+| SMS ROM header checksum rule | SMS Power! "ROM header" page; smssum (Bastien Nocera, after Daniel Hall's MSChecksumFixer, GPL-3; the user's fork https://github.com/PaJson/smssum) | `Tools/sms_checksum.py` is our own code; smssum was used to cross-check its result. |
+
 ## Tools used during development (not part of the project)
 
 Emulicious and MasterlatorSDL as debuggers; FLIPS (Alcaro) to apply patches until our own
