@@ -8,8 +8,10 @@
 ; Step 3: title menus. After the title's "press a button": START / OPTIONS (ours);
 ;   START -> the original NEW GAME / CONTINUE; CONTINUE -> PASSWORD / SAVE (ours);
 ;   PASSWORD -> the original LAST GAME CONTINUE / PASSWORD CONTINUE. OPTIONS and SAVE open
-;   full-screen pages (placeholders until steps 4 and 6). In our menus button 1 = select,
-;   button 2 = back; the original menus keep their behaviour.
+;   full-screen pages (placeholders until steps 4 and 6). Button 1 = select, button 2 = back, also
+;   in the two original menus, now submenus (originally both buttons selected). Leaving a page or
+;   going back to the title: fade out, music off, the title is drawn again (its unpacking runs with
+;   the frame interrupt off, which would freeze a playing song), title music from the start.
 ;
 ; Memory: banks 0 and 1 are always in slots 0/1 ($0000-$7FFF; the game never remaps them),
 ; slot 2 ($8000-$BFFF) is switched by the game (register $FFFF) and also shows the battery RAM
@@ -80,6 +82,10 @@ MAP "-" = $CD
 .DEFINE LoadAsset   $0E0B        ; A = asset code -> maps its bank in slot 2, HL = data
 .DEFINE UnpackTiles $038F        ; HL data -> VRAM DE
 .DEFINE TitleSetup  $2749        ; draws the title screen (then $27A4: music, $27AE: wait for a button)
+.DEFINE FadeOut     $1C89        ; palette to black (9 steps, frames keep running)
+.DEFINE FadeIn      $1C73        ; palette from $C9C0 (the title palette while on the title)
+.DEFINE SoundStop   $7774        ; all sound channels off
+.DEFINE PlaySound   $77A6        ; A = sound / song (bank 2 in slot 2); 1 = title music
 
 ; ---------------------------------------------------------------------------------------------
 ; Hooks into the game's code (bank 0)
@@ -98,6 +104,16 @@ MAP "-" = $CD
 .SECTION "hook_continue" OVERWRITE
     jp Stub_ContMenu
 .ENDS
+.ORGA $282B                      ; NEW GAME / CONTINUE buttons; was and $30 / jr nz,$2844 (B = new presses)
+.SECTION "hook_newgame_keys" OVERWRITE
+    jp Stub_NewGameKeys
+    nop
+.ENDS
+.ORGA $2871                      ; LAST GAME / PASSWORD CONTINUE buttons; was and $30 / jr nz,$288A
+.SECTION "hook_lastgame_keys" OVERWRITE
+    jp Stub_LastGameKeys
+    nop
+.ENDS
 
 ; ---------------------------------------------------------------------------------------------
 ; Bank 1 stubs (fixed slot): every switch of slot 2 between the game and our bank 16
@@ -114,23 +130,40 @@ Stub_ContMenu:                   ; from $284B
     jp ContMenu
 Stub_TitleSetup:                 ; from $27A4: the title screen is drawn
     ld a,(GvRet)
-    or a
-    jr nz,@ours
-    ld a,2                       ; normal start: the original code (music, wait for a button)
-    ld ($FFFF),a
-    jp $27A9
-@ours:
     cp 3
-    jr nz,@menu
-    xor a                        ; back from our top menu: wait for a button again, music keeps playing
+    jr nz,@notitle
+    xor a                        ; back from our top menu: the normal title (music, wait for a button)
     ld (GvRet),a
+@notitle:
+    or a
     ld a,2
     ld ($FFFF),a
-    jp $27AE
-@menu:
-    ld a,16                      ; back from a page: straight into our menu
+    jp z,$27A9                   ; normal start: the original code (music, wait for a button)
+    ld a,1                       ; back from a page: title music, then straight into our menu
+    call PlaySound
+    ld a,16
     ld ($FFFF),a
     jp TitleReturn
+Stub_NewGameKeys:                ; button 1 = the original select, button 2 = back to START / OPTIONS
+    ld a,b
+    and $10
+    jp nz,$2844
+    ld a,b
+    and $20
+    jp z,$282F
+    ld a,16
+    ld ($FFFF),a
+    jp TopMenu
+Stub_LastGameKeys:               ; button 1 = the original select, button 2 = back to PASSWORD / SAVE
+    ld a,b
+    and $10
+    jp nz,$288A
+    ld a,b
+    and $20
+    jp z,$2875
+    ld a,16
+    ld ($FFFF),a
+    jp ContMenu
 Exit_NewGameMenu:                ; -> the original NEW GAME / CONTINUE menu
     ld a,2
     ld ($FFFF),a
@@ -186,7 +219,9 @@ TopMenuSel:                      ; MenuSel already set
     ld b,1
     jp ShowPage
 @back:
-    ld a,3                       ; redraw the title (the copyright lines) and wait for a button
+    call FadeOut                 ; redraw the title (the copyright lines) and wait for a button
+    call SoundStop
+    ld a,3
     ld (GvRet),a
     ld sp,$DFF0
     jp TitleSetup
@@ -273,6 +308,7 @@ ShowPage:
     ld a,b
     ld (GvPage),a
     push hl
+    call FadeOut
     call ScreenOff
     call FontToLow
     call ClearScreen
@@ -281,12 +317,15 @@ ShowPage:
     pop hl
     call DrawStrings
     call ScreenOn
+    call FadeIn                  ; the title palette ($C9C0) suits the font too
 @wait:
     call WaitFrame
     call ReadPad
     ld a,(PadNew)
     and $20                      ; button 2 = back
     jr z,@wait
+    call FadeOut
+    call SoundStop
     ld a,(GvPage)
     ld (GvRet),a
     ld sp,$DFF0

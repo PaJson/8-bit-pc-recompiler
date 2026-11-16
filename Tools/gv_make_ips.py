@@ -13,8 +13,7 @@ Only DATA, no code: the code-based options (sword hit fix, cave down speed, Dina
 exist only in the recompiled build.
 
 --base <patch>: build on a ROM that another IPS / BPS patch has changed first (a file or
-"<zip>::<member>", e.g. Ichigobankai / LemFliggity's SRAM save hack, which already contains the map
-fixes): our records are made against that ROM, so the checksum record is right for the combination.
+"<zip>::<member>", e.g. another author's hack; one that already contains the map fixes is fine): our records are made against that ROM, so the checksum record is right for the combination.
 Apply the base patch first, then ours. Refused if a record of ours would change a byte the base
 patch changed (they would not combine).
 --rom <out.sms>: also write the patched ROM.
