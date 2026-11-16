@@ -590,6 +590,25 @@ int gv_pw_loop(void)
 }
 
 /* test: GV_TEST_GENPW=<frame> runs the game's password generator (bank 7 $83D6: state -> $C1B0.., jp $852B) */
+/* test (Golvellius Plus research): GV_RAM_USE=<file> ORs the RAM $C000-$DFFF of every frame together and
+   writes the 8 KB result at exit (merged with the file if it already exists): bytes that stay 0 over many
+   different runs are candidates for the ROM patch's own variables */
+static uint8_t s_ram_use[0x2000];
+static const char *s_ram_use_path;
+static void ram_use_write(void)
+{
+    FILE *f = fopen(s_ram_use_path, "rb");
+    if (f) { uint8_t old[0x2000]; if (fread(old, 1, sizeof old, f) == sizeof old) for (int i = 0; i < 0x2000; i++) s_ram_use[i] |= old[i]; fclose(f); }
+    f = fopen(s_ram_use_path, "wb");
+    if (f) { fwrite(s_ram_use, 1, sizeof s_ram_use, f); fclose(f); }
+}
+static void ram_use_frame(void)
+{
+    static int on = -1;
+    if (on < 0) { s_ram_use_path = getenv("GV_RAM_USE"); on = s_ram_use_path != NULL; if (on) atexit(ram_use_write); }
+    if (on) for (int i = 0; i < 0x2000; i++) s_ram_use[i] |= sms_read8((uint16_t)(0xC000 + i));
+}
+
 void gv_on_frame_post(uint64_t frame)
 {
     if (frame % 30 == 0) music_names();              /* THEME n (LOCKED) follows the equipment */
@@ -600,6 +619,7 @@ void gv_on_frame_post(uint64_t frame)
     sound_frame();
     { extern void gv_info_test(uint64_t); gv_info_test(frame); }
     gv_panel_test(frame);
+    ram_use_frame();
     {   /* test: GV_SPR_LOG=1 prints overworld frames whose end-of-frame sprite table has no sprite near
            the hero ($C101 / $C102) although the frame before had one (user: the hero vanishes for one
            frame when the top bar goes); the table's first 12 Y values show what changed */
