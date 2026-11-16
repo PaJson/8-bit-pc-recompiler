@@ -4,12 +4,14 @@ This project recompiles Sega Master System games into native PC programs and add
 quality-of-life features on top. It stands on other people's work. This file names everyone whose
 patches, research, code or ideas we use, and says what we use them for.
 
-**No ROMs and no patch files are part of this project.** You supply your own ROMs. No game option
-needs a patch file (every option is our own code). Only the translation builds are made from a patched
-ROM: download the patch from its official page and make the ROM with `Tools/apply_patch.py`, also
-straight from the author's zip (`"<archive.zip>::<patch file>"`). `ROMs/` is never committed.
-`Tools/gv_make_ips.py` writes our own Golvellius fixes (map fixes + 5 typos) as an IPS for other
-emulators / real hardware, made from your own ROM.
+**No ROMs and no third-party patch files are part of this project.** You supply your own ROMs. No
+game option needs a patch file (every option is our own code). The translation builds are made from
+a patched ROM: download the patch from its official page and make the ROM with `Tools/apply_patch.py`,
+also straight from the author's zip (`"<archive.zip>::<patch file>"`). `ROMs/` is never committed.
+Our own ROM patch "Golvellius Plus" is part of the project as source code only
+(`Patches/Golvellius/golvellius_plus.asm`); `Tools/gv_build_patch.py` builds the IPS / BPS files and
+the patched ROM from your own ROM (the built files are not committed). `Tools/gv_make_ips.py` writes
+our Golvellius fixes (map fixes + 5 typos) as an IPS for the original ROM, also from your own ROM.
 
 ## Game patches and hacks
 
