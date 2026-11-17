@@ -107,6 +107,7 @@ MAP "!" = $5D
 MAP "," = $5E
 MAP "?" = $5F
 MAP "/" = $6E
+MAP "*" = $BA                    ; our own tile (title pages only: StarTile)
 MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTile
 .ENDA
 
@@ -2794,12 +2795,9 @@ OptionsPage:
     ld hl,$2000+StarTile*32      ; our '*' (colour 15 = every plane, as the font)
     ld de,StarBits
     call GlyphUp
-    ld bc,9+256*23
-    call NtAt
-    ld a,StarTile
-    call NtTile
+    ld b,23
     ld hl,StrOptLegend
-    call NtPrint
+    call NtCentre
     xor a
     ld (OptCur),a
     ld bc,12+256*0
@@ -3039,7 +3037,7 @@ StrOptTitle: .ASC "OPTIONS"
              .DB 0
 StrOptHelp:  .ASC "1:CHANGE 2:BACK"
              .DB 0
-StrOptLegend: .ASC "  ORIGINAL GAME"
+StrOptLegend: .ASC "*:ORIGINAL GAME"
              .DB 0
 StarBits:    .DB $00, $10, $54, $38, $54, $10, $00, $00   ; our '*' (8 x 8)
 ColonBits:   .DB $00, $30, $30, $00, $30, $30, $00, $00   ; our ':' (2 x 2 dots in the font's 7 x 7 cell)
@@ -3180,7 +3178,11 @@ DrawHelp:                        ; row HelpRow: HelpText, centred (columns 1-30 
     call NtAt
     ld b,30
     call NtSpaces
+    ld a,(HelpRow)
+    ld b,a
     ld hl,(HelpText)
+NtCentre:                        ; B = row, HL -> text, 0: centred on the row
+    push hl
     ld c,32
 @len:
     ld a,(hl)
@@ -3191,10 +3193,8 @@ DrawHelp:                        ; row HelpRow: HelpText, centred (columns 1-30 
     jr @len
 @got:
     srl c                        ; (32 - length) / 2
-    ld a,(HelpRow)
-    ld b,a
     call NtAt
-    ld hl,(HelpText)
+    pop hl
     jp NtPrint
 
 DrawSlot:                        ; A = slot: its two rows
