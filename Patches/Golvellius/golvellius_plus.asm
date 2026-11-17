@@ -225,8 +225,8 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 .DEFINE HintCol     $C0FC        ; its first column
 .DEFINE HintN       $C0FD        ; its number of characters
 .DEFINE HintMask    $C0FE        ; $FF >> HintSh
-.DEFINE MT0         $3A          ; map tiles (Pause screen, low set): per colour k = 0..8: L, L + dot, R
-.DEFINE MT_CUR      MT0+27       ; the cursor: L, R
+.DEFINE MT0         $3A          ; map tiles (Pause screen, low set): per colour k = 0..8: L, L + cave / Winkle / dungeon mark, R (45 tiles, $3A-$66)
+.DEFINE MT_CUR      MT0+45       ; the cursor: L, R
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -2146,7 +2146,7 @@ ClearRow:                        ; B = row: columns 1-30 spaces
     ld b,30
     jp NtSpaces
 
-MapTiles:                        ; tiles MT0..: per colour (MapTileCols) L, L with a dot, R; then the cursor L, R
+MapTiles:                        ; tiles MT0..: per colour (MapTileCols) L, L with each mark, R; then the cursor L, R
     ld hl,MT0*32
     di
     call SetVramAddr
@@ -2159,7 +2159,11 @@ MapTiles:                        ; tiles MT0..: per colour (MapTileCols) L, L wi
     push de
     ld hl,ShapeL
     call @tile
-    ld hl,ShapeLDot
+    ld hl,ShapeLCave
+    call @tile
+    ld hl,ShapeLWinkle
+    call @tile
+    ld hl,ShapeLDungeon
     call @tile
     ld hl,ShapeR
     call @tile
@@ -2200,7 +2204,10 @@ MapTiles:                        ; tiles MT0..: per colour (MapTileCols) L, L wi
     ret
 MapTileCols: .DB 1, 2, 3, 4, 5, 6, 7, 8, 15, 0     ; area k = 0..7 -> colour k + 1; 8 = white (your screen)
 ShapeL:      .DB $FF,0, $FF,0, $FF,0, $FF,0, $FF,0, $FF,0, $FF,0, 0,0
-ShapeLDot:   .DB $FF,0, $FF,0, $F9,$06, $F9,$06, $F9,$06, $FF,0, $FF,0, 0,0
+; the marks (upper left corner, 3 x 3; told apart by brightness and shape, not by hue)
+ShapeLCave:  .DB $FF,0, $8F,$70, $8F,$70, $8F,$70, $FF,0, $FF,0, $FF,0, 0,0   ; white: a cave entered
+ShapeLWinkle: .DB $FF,0, $8F,0, $8F,0, $8F,0, $FF,0, $FF,0, $FF,0, 0,0        ; black: Winkle's (the save)
+ShapeLDungeon: .DB $FF,0, $8F,$70, $8F,$50, $8F,$70, $FF,0, $FF,0, $FF,0, 0,0 ; white, black centre: a dungeon
 ShapeR:      .DB $FC,0, $FC,0, $FC,0, $FC,0, $FC,0, $FC,0, $FC,0, 0,0
 ShapeCurL:   .DB 0,$FF, 0,$80, 0,$80, 0,$80, 0,$80, 0,$80, 0,$FF, 0,0
 ShapeCurR:   .DB 0,$FC, 0,$04, 0,$04, 0,$04, 0,$04, 0,$04, 0,$FC, 0,0
@@ -2251,7 +2258,8 @@ MapSquare:                       ; A = screen: its square on the grid (2 tiles a
     ld a,(MapS)
     call AreaOf
 @k:
-    ld e,a
+    ld e,a                       ; 5 tiles per colour: L, L + one of the 3 marks, R
+    add a,a
     add a,a
     add a,e
     add a,MT0
@@ -2262,12 +2270,46 @@ MapSquare:                       ; A = screen: its square on the grid (2 tiles a
     and (hl)
     ld a,e
     jr z,@l
-    inc a
+    push de
+    ld a,(MapS)
+    call MarkKind
+    pop de
+    add a,e
 @l:
     call NtTile
     ld a,e
-    add a,2
+    add a,4
     jp NtTile
+
+MarkKind:                        ; A = screen (its cave entered) -> 0 none, 1 a cave, 2 Winkle's (the save), 3 a dungeon
+    call CaveId
+    or a
+    ret z                        ; 0 = L14, the start: no entrance, no mark
+    cp $10
+    jr c,@dungeon
+    cp $50
+    jr nc,@cave
+    rrca                         ; Randar, Enny, Winkle, Dina: $8CDA[id >> 4], Winkle = 3
+    rrca
+    rrca
+    rrca
+    and 15
+    ld e,a
+    ld d,0
+    ld hl,$8CDA
+    add hl,de
+    ld a,7
+    call Stub_ReadB
+    cp 3
+    jr nz,@cave
+    ld a,2
+    ret
+@cave:
+    ld a,1
+    ret
+@dungeon:
+    ld a,3
+    ret
 
 MapCurInfo:                      ; rows 18-21: the cursor's screen
     ld b,18
@@ -5052,7 +5094,7 @@ StrNotSeen:    .ASC "NOT SEEN YET"
                .DB 0
 StrCaveQ:      .ASC "CAVE  ?"
                .DB 0
-StrStartHouse: .ASC "START HOUSE"
+StrStartHouse: .ASC "START"            ; (our name: L14 has no entrance, only the scripted old man's room)
                .DB 0
 StrDungeon:    .ASC "DUNGEON  "
                .DB 0
