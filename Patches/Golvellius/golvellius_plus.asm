@@ -107,6 +107,7 @@ MAP "!" = $5D
 MAP "," = $5E
 MAP "?" = $5F
 MAP "/" = $6E
+MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTile
 .ENDA
 
 ; ---------------------------------------------------------------------------------------------
@@ -162,6 +163,8 @@ MAP "/" = $6E
 .DEFINE StepLeft    $C0F6        ; OVERWORLD SPEED: extra steps left in this frame
 .DEFINE StepFlags   $C0F7        ; bit 0 = an extra step is running, bit 1 = 1.5X: this frame has one
 .DEFINE StarTile    $BA          ; OPTIONS page: our '*' (title tiles 256+$BA, VRAM $3740)
+.DEFINE ColonTile   $BB          ; ':' (character $BB): title pages 256+$BB ($3760), Pause pages $7B ($0F60),
+                                 ; the Game Over screen $BB ($1760, a kana of the game's font: not shown there)
 ; the map (Pause + button 2): in the free buffer after SlotBuf
 .DEFINE MapVis      $CB58        ; 23: the overworld screens seen in this game (bit n & 7 of byte n / 8)
 .DEFINE MapEnt      $CB6F        ; 23: the screens whose cave / dungeon the hero has been inside
@@ -701,6 +704,8 @@ PageOpen:                        ; fade out, display off, digits, an empty page 
     ld hl,$3600
     ld (UpDst),hl
     call UnpackFont
+    ld hl,$2000+ColonTile*32
+    call ColonUp
     ld a,1
     ld (NtAttr),a
     ld a,$30
@@ -2287,6 +2292,8 @@ PauseMap:                        ; from the Pause (status) screen, button 2
     ld hl,$0600
     ld (UpDst),hl
     call UnpackFont
+    ld hl,(ColonTile-$40)*32
+    call ColonUp
     call MapTiles
     ld hl,MapPal                 ; the game's: 16 colours -> $C060, uploaded at the next frame
     call $0490
@@ -2301,6 +2308,9 @@ PauseMap:                        ; from the Pause (status) screen, button 2
     call ScreenOn
 @loop:
     call WaitPaused
+    ld a,($C005)                 ; Pause: back to the game (as from the status screen)
+    inc a
+    jr z,@unpause
     ld hl,MapTick
     inc (hl)
     ld a,(hl)
@@ -2342,6 +2352,7 @@ PauseMap:                        ; from the Pause (status) screen, button 2
     and (hl)
     jr z,@loop
     call MapInfo
+    jr c,@unpause
     call ScreenOff
     ld a,16
     ld (MapTick),a
@@ -2350,8 +2361,11 @@ PauseMap:                        ; from the Pause (status) screen, button 2
     call ScreenOff
     call Stub_Unpause72          ; as after SAVE GAME: the overworld's name table back, then the status screen
     jp $291F
+@unpause:                        ; $C005 = $FF: the pause loop's own end ($2945 tests it, $294B unpauses:
+    jp $2945                     ; sound, asset $72 + $B0, the overworld palette, the screen redrawn)
 
-MapInfo:                         ; the cursor's screen page; arrows = the next seen screen that way, 2 = back
+MapInfo:                         ; the cursor's screen page; arrows = the next seen screen that way, 2 = back,
+                                 ; Pause = carry (back to the game)
     call ScreenOff
     call MapClearNt
     ld bc,2+256*2
@@ -2387,11 +2401,15 @@ MapInfo:                         ; the cursor's screen page; arrows = the next s
     call ScreenOn
 @loop:
     call WaitPaused
+    ld a,($C005)                 ; Pause: carry (back to the game)
+    inc a
+    scf
+    ret z
     call ReadPad
     ld a,(PadNew)
     ld b,a
     and $20
-    ret nz
+    ret nz                       ; (carry clear)
     ld a,b
     and $0F
     jr z,@loop
@@ -2446,6 +2464,8 @@ HintRead:                        ; HL -> characters, 0: their glyphs to DE.. (8 
     push hl
     cp $40
     jr z,@space
+    cp ColonTile
+    jr z,@colon
     cp $B0
     jr c,@letter
     add a,$8A-$B1                ; '1', '2' -> tiles $8A, $8B
@@ -2494,6 +2514,32 @@ HintRead:                        ; HL -> characters, 0: their glyphs to DE.. (8 
     djnz @zero
     pop hl
     jr HintRead
+@colon:
+    ld hl,ColonBits
+    ld bc,8
+    ldir
+    pop hl
+    jr HintRead
+
+ColonUp:                         ; HL = VRAM address: our ':'
+    ld de,ColonBits
+GlyphUp:                         ; HL = VRAM address, DE -> 8 lines: one tile in colour 15 (every plane, as the font)
+    di
+    call SetVramAddr
+    ld b,8
+@line:
+    ld a,(de)
+    out ($BE),a
+    call VdpDelay
+    out ($BE),a
+    call VdpDelay
+    out ($BE),a
+    call VdpDelay
+    out ($BE),a
+    inc de
+    djnz @line
+    ei
+    ret
 
 HintText:                        ; HL -> x, characters, 0 (glyphs from HintGP, which advances; tiles from HintTile)
     ld a,(hl)
@@ -2740,19 +2786,8 @@ OptSave:                         ; OptVals -> battery RAM (with our header when 
 OptionsPage:
     call PageOpen
     ld hl,$2000+StarTile*32      ; our '*' (colour 15 = every plane, as the font)
-    di
-    call SetVramAddr
-    ld hl,StarBits
-    ld b,8
-@star:
-    ld a,(hl)
-    out ($BE),a
-    out ($BE),a
-    out ($BE),a
-    out ($BE),a
-    inc hl
-    djnz @star
-    ei
+    ld de,StarBits
+    call GlyphUp
     ld bc,9+256*23
     call NtAt
     ld a,StarTile
@@ -2996,11 +3031,12 @@ StrOn:       .ASC "ON"
              .DB 0
 StrOptTitle: .ASC "OPTIONS"
              .DB 0
-StrOptHelp:  .ASC "1  CHANGE      2  BACK"
+StrOptHelp:  .ASC "1:CHANGE 2:BACK"
              .DB 0
 StrOptLegend: .ASC "  ORIGINAL GAME"
              .DB 0
 StarBits:    .DB $00, $10, $54, $38, $54, $10, $00, $00   ; our '*' (8 x 8)
+ColonBits:   .DB $00, $30, $30, $00, $30, $30, $00, $00   ; our ':' (2 x 2 dots in the font's 7 x 7 cell)
 
 ; Winkle made the password (we are in his cave room, bank 7 code below us): AUTO = this game,
 ; position = the cave's entrance cell (where the game puts the hero when he leaves), and a line
@@ -3131,16 +3167,26 @@ DrawCursors:                     ; the arrow at column 1 of the slot under the c
     jp p,@each
     ret
 
-DrawHelp:                        ; row HelpRow: HelpText
+DrawHelp:                        ; row HelpRow: HelpText, centred (columns 1-30 cleared)
     ld a,(HelpRow)
     ld b,a
-    ld c,2
+    ld c,1
     call NtAt
-    ld b,28
+    ld b,30
     call NtSpaces
+    ld hl,(HelpText)
+    ld c,32
+@len:
+    ld a,(hl)
+    inc hl
+    or a
+    jr z,@got
+    dec c
+    jr @len
+@got:
+    srl c                        ; (32 - length) / 2
     ld a,(HelpRow)
     ld b,a
-    ld c,5
     call NtAt
     ld hl,(HelpText)
     jp NtPrint
@@ -3972,6 +4018,8 @@ PauseSave:
     ld hl,$0600
     ld (UpDst),hl
     call UnpackFont
+    ld hl,(ColonTile-$40)*32
+    call ColonUp
     ld a,($C80D)
     ld (SvScreen),a
     ld a,($C101)
@@ -4008,6 +4056,8 @@ GameOverAsk:
     ld (SvX),a
     xor a
     ld (SvFlag),a
+    ld hl,ColonTile*32
+    call ColonUp
     call SaveMenu
 @done:
     call SoundStop               ; the original $2156, then $2159: fade, back to the title
@@ -4029,7 +4079,7 @@ StrSave:     .DB 12, 22
 
 StrSaveTitle:  .ASC "SAVE"
                .DB 0
-StrHelp:       .ASC "1  SELECT      2  BACK"
+StrHelp:       .ASC "1:SELECT 2:BACK"
                .DB 0
 StrAuto:       .ASC "AUTO"
                .DB 0
@@ -4055,23 +4105,23 @@ StrAutoSaved:  .ASC "GAME SAVED TO AUTO."
                .DB 0
 StrSaveGame:   .ASC "SAVE GAME"
                .DB 0
-StrHelpSave:   .ASC "1  SAVE        2  BACK"
+StrHelpSave:   .ASC "1:SAVE 2:BACK"
                .DB 0
 StrOverwrite:  .ASC "OVERWRITE?   NO    YES"
                .DB 0, 14, 20
 StrSaved:      .ASC "     SAVED."
                .DB 0
 StrHintL:      .DB 48                    ; x of the first character cell ("1" is drawn from x + 1): ink 49-94
-               .ASC "1 SAVE"
+               .ASC "1:SAVE"
                .DB 0
 StrHintR:      .DB 164                   ; ink 164-202
-               .ASC "2 MAP"
+               .ASC "2:MAP"
                .DB 0
 StrWorldMap:   .ASC "WORLD MAP"
                .DB 0
-StrMapHelp:    .ASC "1  OPEN        2  BACK"
+StrMapHelp:    .ASC "1:OPEN 2:BACK PAUSE:EXIT"
                .DB 0
-StrMapInfoHelp: .ASC "ARROWS  NEXT    2  BACK"
+StrMapInfoHelp: .ASC "ARROWS:NEXT 2:BACK PAUSE:EXIT"
                .DB 0
 StrGap2:       .ASC "  "
                .DB 0

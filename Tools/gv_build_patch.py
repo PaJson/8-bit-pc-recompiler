@@ -58,7 +58,7 @@ Title screen: button 1 shows START / OPTIONS. Button 1 = select, button 2 = back
   Once a game is saved, the cursor starts on CONTINUE, then on SAVE, then on the newest save.
 Save slots: AUTO + 5.
   - AUTO is written whenever Winkle tells you the password ("GAME SAVED TO AUTO.").
-  - Pause on the overworld (the status screen shows "1 SAVE  2 MAP" under its frame), then button 1:
+  - Pause on the overworld (the status screen shows "1:SAVE  2:MAP" under its frame), then button 1:
     SAVE GAME into slot 1-5.
   - Game Over asks "SAVE THIS GAME?" under the password (you continue at the start house).
   - SAVE page: button 1 on a slot = LOAD / DELETE. A loaded game starts where it was saved.
@@ -76,7 +76,8 @@ OPTIONS page (stored in the battery RAM; * marks the original game's value):
 THE MAP (Pause on the overworld, then button 2): every screen you have seen, in its area's colour
 (a dot = you have been inside its cave), your screen blinks. Button 1 on a square: what is there
 (the cave's person, item and price, BOUGHT, the advice text; only for caves you have entered).
-Arrows on that page jump to the next screen you have seen. The map is saved with each save slot.
+Arrows on that page jump to the next screen you have seen. Pause on the map = straight back to the
+game. The map is saved with each save slot.
 
 Passwords work as before (passwords from the original game too).
 """
