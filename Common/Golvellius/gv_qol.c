@@ -69,7 +69,7 @@ static const struct { uint32_t off; uint8_t orig, fixed; } k_map_fix[2] = {
 
 static const char *const k_onoff[] = { "OFF (ORIGINAL)", "ON" };
 static const double k_ff_vals[] = { 0.5, 1, 2, 4 };
-static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
+static const char *const k_ff_names[] = { "0.5X (SLOW)", "1X", "2X", "4X (DEFAULT)" };
 static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_tfix_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
 static int s_bgm_i = 100, s_sfx_i = 100;            /* SOUND tab: music / effects volume, percent */
@@ -80,7 +80,7 @@ extern int gv_cave_info_all;                       /* gv_info.c: CAVE INFO optio
 static const char *const k_cinfo[] = { "ENTERED CAVES", "ALL CAVES (SPOILER)" };
 static const char *const k_dmap[] = { "EXPLORED PART", "WHOLE DUNGEON" };
 static const char *const k_reach[] = { "ORIGINAL", "+4 PIXELS", "+8 PIXELS" };
-static const char *const k_mult[] = { "X0", "X1 (ORIGINAL)", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10" };
+static const char *const k_mult[] = { "0X", "1X (ORIGINAL)", "2X", "3X", "4X", "5X", "6X", "7X", "8X", "9X", "10X" };
 static const char *const k_dina[] = { "150 GOLD (ORIGINAL)", "2600 GOLD (ALIANGER)" };
 static const char *const k_downspd[] = { "X1 (ORIGINAL)", "X1.5 (ALIANGER)" };
 static const char *const k_tp[]   = { "OFF (ORIGINAL)", "VISITED SCREENS", "PASSWORD CAVES" };

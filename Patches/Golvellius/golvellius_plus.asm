@@ -187,6 +187,7 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 .DEFINE MapK        $CB93
 ; the Pause hint ("1 SAVE", "2 MAP" placed to the pixel)
 .DEFINE HintGlyphs  $CB94        ; 88: the glyphs of both texts (8 bytes per character)
+.DEFINE CentreCol   $CBEC        ; NtCentre: the column the last centred text started at (SubDraw's cursors)
 .DEFINE HINT_LINE   4            ; their top line inside row 22 (176 + 4 = line 180)
 .DEFINE HintTile    $C0F8        ; the next tile to write
 .DEFINE HintGP      $C0F9        ; 2: the glyphs of the text being drawn
@@ -2710,7 +2711,7 @@ HintPart:                        ; HL -> glyph: each line rotated right by HintS
 ; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
 OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1, 0     ; the original game
 OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11, 3  ; number of values
-OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2, 1     ; 0 OFF / ON, 1 a name from OptNames, 2 X0..X10
+OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2, 1     ; 0 OFF / ON, 1 a name from OptNames, 2 0X..10X
 OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0, SpeedNames
 
 OptSum:                          ; HL -> OPT_N bytes: A = their check byte
@@ -2957,16 +2958,15 @@ OptDrawRow:                      ; A = row (0..OPT_N-1): its label, value and '*
     dec b
     jp m,@onoff
     jr z,@speed
-    push af                      ; X0..X10
-    ld a,'X'
-    call NtChar
-    pop af
-    cp 10
-    jp c,NtDigit
+    cp 10                        ; 0X..10X
+    jr c,@one
     ld a,1
     call NtDigit
     xor a
-    jp NtDigit
+@one:
+    call NtDigit
+    ld a,'X'
+    jp NtChar
 @onoff:
     ld hl,StrOff
     or a
@@ -3193,6 +3193,8 @@ NtCentre:                        ; B = row, HL -> text, 0: centred on the row
     jr @len
 @got:
     srl c                        ; (32 - length) / 2
+    ld a,c
+    ld (CentreCol),a
     call NtAt
     pop hl
     jp NtPrint
@@ -3266,12 +3268,10 @@ DrawSlot:                        ; A = slot: its two rows
     ld hl,SlotBuf+7
     ld b,1
     call NtBcd
-    ld a,'H'
+    ld a,ColonTile               ; hours:minutes (our ':'; a quoted ':' would be ASCII $3A)
     call NtChar
     ld a,(SlotBuf+6)
     call NtBcd2
-    ld a,'M'
-    call NtChar
     pop bc
     inc b                        ; row 2
     ld c,3
@@ -3352,24 +3352,24 @@ SlotMenu:
     jp DrawHelp
 
 ; row 22 for a two-choice question: HL -> text, 0, column of choice 0, column of choice 1
-SubDraw:
+SubDraw:                         ; HL -> text, 0, the two cursor positions in the text: centred on HelpRow
     push hl
     ld a,(HelpRow)
     ld b,a
-    ld c,2
+    ld c,1
     call NtAt
-    ld b,28
+    ld b,30
     call NtSpaces
     pop hl
     ld a,(HelpRow)
     ld b,a
-    ld c,3
-    call NtAt
-    call NtPrint                 ; HL -> the two cursor columns now
+    call NtCentre                ; HL -> the two cursor positions now
     ld (Tmp+12),hl
 SubCursor:
     ld hl,(Tmp+12)
-    ld c,(hl)
+    ld a,(CentreCol)
+    add a,(hl)
+    ld c,a
     ld a,(HelpRow)
     ld b,a
     call NtAt
@@ -3382,7 +3382,9 @@ SubCursor:
     call NtChar
     ld hl,(Tmp+12)
     inc hl
-    ld c,(hl)
+    ld a,(CentreCol)
+    add a,(hl)
+    ld c,a
     ld a,(HelpRow)
     ld b,a
     call NtAt
@@ -4103,19 +4105,19 @@ StrCrys:       .ASC "CRYS "
                .DB 0
 StrOf7:        .ASC "/7"
                .DB 0
-StrLoadDelete: .ASC "     LOAD       DELETE"
-               .DB 0, 6, 17
-StrConfirm:    .ASC "DELETE?      NO    YES"
-               .DB 0, 14, 20
+StrLoadDelete: .ASC "  LOAD    DELETE"          ; then the cursor positions in the text
+               .DB 0, 0, 8
+StrConfirm:    .ASC "DELETE?    NO    YES"
+               .DB 0, 9, 15
 StrAutoSaved:  .ASC "GAME SAVED TO AUTO."
                .DB 0
 StrSaveGame:   .ASC "SAVE GAME"
                .DB 0
 StrHelpSave:   .ASC "1:SAVE 2:BACK"
                .DB 0
-StrOverwrite:  .ASC "OVERWRITE?   NO    YES"
-               .DB 0, 14, 20
-StrSaved:      .ASC "     SAVED."
+StrOverwrite:  .ASC "OVERWRITE?    NO    YES"
+               .DB 0, 12, 18
+StrSaved:      .ASC "SAVED."
                .DB 0
 StrHintL:      .DB 48                    ; x of the first character cell ("1" is drawn from x + 1): ink 49-94
                .ASC "1:SAVE"
@@ -4201,6 +4203,6 @@ StrLake:       .ASC "LAKE"
                .DB 0
 StrForest:     .ASC "FOREST"
                .DB 0
-StrSaveAsk:    .ASC "SAVE THIS GAME?  NO   YES"
-               .DB 0, 18, 23
+StrSaveAsk:    .ASC "SAVE THIS GAME?    NO    YES"
+               .DB 0, 17, 23
 .ENDS
