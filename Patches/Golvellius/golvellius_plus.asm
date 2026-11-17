@@ -32,8 +32,9 @@
 ;   the intro demo included, uses them; saved when the page is left. Every default = the original game.
 ;   What each does (hooks below): TEXT FIXES = the 5 typos of the English ROM (PASSWARD, 3 x GOLD for
 ;   FIND, DESGINED in the credits), MAP FIXES = the SMS Power bug fix (screen C5's own room, screen H4's
-;   cave graphic), SWORD HIT FIX = every swing can hit (stale hit marks cleared at each swing, as
-;   Alianger's fix), SWORD REACH = the sword's hit area 4 / 8 pixels wider on every side, CAVE DOWN
+;   cave graphic), SWORD HIT FIX = every swing can hit (an enemy's hit cooldown counts down only
+;   while the sword touches it, so what a swing leaves of it used to swallow the next swing's hit:
+;   now the first contact of each new swing starts with the cooldown at 0), SWORD REACH = the sword's hit area 4 / 8 pixels wider on every side, CAVE DOWN
 ;   SPEED = the hero walks down faster in top-down caves, KEEP GOLD = a continue does not halve the
 ;   gold, multipliers = gold dropped by enemies, sword damage, damage taken (healing unchanged).
 ;
@@ -142,6 +143,8 @@ MAP "/" = $6E
 .DEFINE OptLoaded   $C0DA        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
 .DEFINE OptCur      $C0DB        ; OPTIONS page: the row under the cursor (OPT_N = RESET TO DEFAULTS)
 .DEFINE ReachBox    $C0DC        ; 8: SWORD REACH: the box last widened, per sword object ($C120, $C140)
+.DEFINE SwingNo     $C0E4        ; SWORD HIT FIX: counts the swings (1..255)
+.DEFINE SwingSeen   $C0E5        ; 13: per enemy object ($C160 + 32 n): the swing that touched it last
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -237,6 +240,10 @@ MAP "/" = $6E
 .SECTION "hook_damage_dealt" OVERWRITE
     call Hook_Dealt
     nop
+.ENDS
+.ORGA $33D1                      ; the sword touches an enemy: was ld a,(ix+$1F) (its hit cooldown; damage only at 0)
+.SECTION "hook_sword_contact" OVERWRITE
+    call Hook_Contact
 .ENDS
 .ORGA $35EA                      ; gold drop E (BCD tens): was the 3-byte BCD add $35EA-$3603, then the cap
 .SECTION "hook_gold_drop" OVERWRITE
@@ -349,6 +356,9 @@ Hook_Reach:                      ; from $3509
 Hook_Swing:                      ; from $3F45, $43AC, $4678
     call Enter16
     jp SwingH
+Hook_Contact:                    ; from $33D1
+    call Enter16
+    jp ContactH
 Hook_Cave:                       ; from bank 1 $4646: the speed, then the original call in the game's bank
     call Enter16
     call CaveH
@@ -2132,27 +2142,56 @@ ReachH:                          ; $3509 SWORD REACH: widen the box of a hitting
     djnz @axis
     ret
 
-SwingH:                          ; $3F45 / $43AC / $4678 SWORD HIT FIX: every object's hit mark (+$1F) cleared
-    ld a,(OptSword)
+SwingH:                          ; $3F45 / $43AC / $4678 SWORD HIT FIX: a new swing (SwingNo + 1, never 0)
+    ld a,(SwingNo)
+    inc a
+    jr nz,@n
+    inc a
+@n:
+    ld (SwingNo),a
+    ld a,4                       ; the original: the swing starts (state 4)
+    ld ($C120),a
+    jp Leave16
+
+ContactH:                        ; $33D1 SWORD HIT FIX: the sword touches the enemy at IX; A = its hit cooldown
+    ld a,(OptSword)              ; (+$1F: damage only at 0, then 11; counted down only while touching)
     or a
-    jr z,@swing
+    jr z,@done
     push hl
     push de
-    push bc
-    ld hl,$C17F                  ; objects $C160 + 32 n, n = 0..12
-    ld de,32
-    ld b,13
-    xor a
-@clear:
-    ld (hl),a
+    push ix
+    pop hl
+    ld de,$10000-$C160
+    add hl,de                    ; HL = IX - $C160 (carry: IX >= $C160)
+    jr nc,@out
+    ld a,h
+    cp 2
+    jr nc,@out
+    ld a,l
+    rlca
+    rlca
+    rlca
+    and 7
+    bit 0,h
+    jr z,@slot
+    add a,8
+@slot:
+    cp 13
+    jr nc,@out                   ; not one of the 13 enemy objects
+    ld e,a
+    ld d,0
+    ld hl,SwingSeen
     add hl,de
-    djnz @clear
-    pop bc
+    ld a,(SwingNo)
+    cp (hl)
+    jr z,@out                    ; this swing touched it before: the original cooldown
+    ld (hl),a                    ; the first contact of a new swing: the cooldown starts at 0
+    ld (ix+$1F),0
+@out:
     pop de
     pop hl
-@swing:
-    ld a,4                       ; the original: sound / swing state 4
-    ld ($C120),a
+@done:
+    ld a,(ix+$1F)                ; the original instruction
     jp Leave16
 
 CaveH:                           ; bank 1 $4646 CAVE DOWN SPEED: the hero's speed (IX+4 = $C104) by direction
