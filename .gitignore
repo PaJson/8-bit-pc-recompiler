@@ -59,3 +59,6 @@ Launcher/build/
 Patches/*/build/
 # WLA-DX build output (External/wla-dx = git submodule)
 External/build/
+
+# the user's reference emulator (cega, GPL; a program, not part of the project)
+cega/

@@ -671,8 +671,8 @@ static void buttons_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int
         { "PAUSE (SMS)", st ? "-" : "START", "ENTER" },          /* the console's Pause button (NMI) */
         { "QUIT",        "-",           "ESC" },
         { "HUD TABS",    "LB, RB",      "Q, E" },
-        { "HUD CONFIRM", "B",           "ENTER/SPACE/X" },
-        { "HUD CLOSE",   st ? "A, START" : "A, BACK", "ESC, Z, F1" },
+        { "HUD CONFIRM", "A",           "ENTER/SPACE/Z" },
+        { "HUD CLOSE",   st ? "B, START" : "B, BACK", "ESC, X, F1" },
     };
     int n = (int)(sizeof rows / sizeof rows[0]), y = y0, cp = x0 + 4 + 6 * 12, ck = cp + 6 * 12;   /* 11 + 11 + 14 chars */
     for (int i = 0; i < n && y + 7 <= y1; i++, y += 8) {

@@ -18,7 +18,7 @@
 ; Step 4: save slots in the cartridge's battery RAM: AUTO (written whenever Winkle makes the
 ;   password; he then also shows "GAME SAVED TO AUTO.") + SLOT 1-5 (written from the Pause screen
 ;   in step 5). SAVE page: the slots (screen, play time, gold, power, crystals), button 1 = LOAD /
-;   DELETE (DELETE asks), the cursor starts on the slot loaded last. A load restores the progress
+;   DELETE (DELETE asks), the cursor starts on the newest save. A load restores the progress
 ;   the game itself keeps in RAM between a Game Over and LAST GAME CONTINUE, then runs the game's
 ;   LAST GAME CONTINUE with the start screen and position replaced (AUTO: in front of Winkle's
 ;   cave, where the game puts the hero when he leaves it). Play time: our own counter (the game
@@ -26,6 +26,8 @@
 ; Step 5: saving into SLOT 1-5: on the overworld's Pause (status) screen button 1 opens SAVE GAME
 ;   (the hero's screen and position; a used slot asks OVERWRITE?), and after Game Over's password the
 ;   game asks SAVE THIS GAME? (NO first; such a save continues at L14 like LAST GAME CONTINUE).
+;   The status screen says "1  SAVE GAME" under its frame (letters in tiles the unpause reloads).
+;   Once a slot is used, the title's cursors start on CONTINUE and on SAVE.
 ; Step 6: OPTIONS page (title -> OPTIONS): TEXT FIXES, MAP FIXES, SWORD HIT FIX, CAVE DOWN SPEED,
 ;   KEEP GOLD, GOLD DROPS / DAMAGE DEALT / DAMAGE RECEIVED x0-x10, RESET TO DEFAULTS. Kept in battery
 ;   RAM (not shown as a slot), loaded into RAM at the first frame wait after power-on, so everything,
@@ -57,7 +59,8 @@
 ;     (sum xor $5A); missing / damaged / out of range = the defaults
 ;   $8100 + 64 * n  slot n (0 = AUTO, 1-5): +0 $A5 = used, +1 screen, +2 hero y, +3 hero x,
 ;     +4 play time (frames, seconds, minutes BCD, hours BCD), +8 $C84C (screen tile-set flag),
-;     +9 $C817, +10 $C839-$C84B (19), +29 $C86E-$C878 (11), +40..+62 0, +63 checksum
+;     +9 $C817, +10 $C839-$C84B (19), +29 $C86E-$C878 (11), +40 save number (word: the highest
+;     = the newest save; 0 = saved before save numbers existed), +42..+62 0, +63 checksum
 
 .MEMORYMAP
 DEFAULTSLOT 2
@@ -145,6 +148,7 @@ MAP "/" = $6E
 .DEFINE ReachBox    $C0DC        ; 8: SWORD REACH: the box last widened, per sword object ($C120, $C140)
 .DEFINE SwingNo     $C0E4        ; SWORD HIT FIX: counts the swings (1..255)
 .DEFINE SwingSeen   $C0E5        ; 13: per enemy object ($C160 + 32 n): the swing that touched it last
+.DEFINE UpEnd       $C0F2        ; 2: UnpackFont: UpLo + UpCnt
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -207,6 +211,10 @@ MAP "/" = $6E
 .SECTION "hook_start_position" OVERWRITE
     call Hook_StartPos
     .DB 0, 0, 0, 0, 0, 0, 0       ; nop x 7 -> $139B
+.ENDS
+.ORGA $293F                      ; the overworld's status screen is drawn (display still off): was call $0D20
+.SECTION "hook_pause_hint" OVERWRITE
+    call Hook_PauseHint
 .ENDS
 .ORGA $2942                      ; Pause wait loop: was call $07C3
 .SECTION "hook_pause_wait" OVERWRITE
@@ -380,6 +388,9 @@ Stub_TitleButton:                ; from $27F8
 Stub_ContMenu:                   ; from $284B
     call Map16
     jp ContMenu
+Hook_PauseHint:                  ; from $293F (slot 2 may stay bank 16: the pause loop and its end map their own)
+    call Map16
+    jp PauseHintH
 Stub_GameOver:                   ; from $2156
     call Map16
     jp GameOverAsk
@@ -396,14 +407,11 @@ Stub_LastGameKeys:               ; button 1 = the original select, button 2 = ba
     bit 5,b
     jp z,$2875
     call Map16
-    jp ContMenu
+    jp ContMenuPw
 
 Exit_TitleWait:                  ; -> the title's wait for a button (music keeps playing, the intro demo after a while)
     call Map2
     jp $27AE
-Exit_NewGameMenu:                ; -> the original NEW GAME / CONTINUE menu
-    call Map2
-    jp $2806
 Exit_BackToContinue:             ; -> its menu loop (BackToContinue drew the menu with the cursor on CONTINUE)
     call Map2
     jp $281D
@@ -513,8 +521,21 @@ TopMenuSel:                      ; MenuSel already set
     ld a,(MenuSel)
     or a
     jr nz,@options
-    call ClearMenuRows           ; START
-    jp Exit_NewGameMenu
+    call ClearMenuRows           ; START: the original NEW GAME / CONTINUE ($2806-$280F draw it)
+    ld hl,$28AC
+    call DrawString
+    ld hl,$28B7
+    call DrawString
+    call FindNewest              ; a save slot -> the cursor on CONTINUE
+    ld a,1
+    jr nc,@cur
+    ld a,($C817)                 ; else the game's own rule: CONTINUE when a game is still in RAM
+    or a
+    jr z,@cur
+    ld a,1
+@cur:
+    ld (MenuSel),a
+    jp Exit_BackToContinue
 @options:
     call OptionsPage
     ld a,1
@@ -535,8 +556,15 @@ TopMenuSel:                      ; MenuSel already set
     ei
     jp Exit_TitleWait
 
-ContMenu:
+ContMenu:                        ; the cursor on SAVE when a slot is used, else on PASSWORD
+    call FindNewest
+    ld a,0
+    jr c,ContMenuSet
+    inc a
+    jr ContMenuSet
+ContMenuPw:                      ; back from the LAST GAME / PASSWORD CONTINUE menu: on PASSWORD
     xor a
+ContMenuSet:
     ld (MenuSel),a
 ContMenuSel:
     call ClearMenuRows
@@ -795,7 +823,11 @@ NtBcd2:                          ; A = BCD byte, both digits
 ; Only those 80 bytes per plane are written; nothing else of the font is unpacked. ---
 ; the font (asset $C0 = bank 12 entry 0, 4 RLE planes, every 4th byte) walked byte by byte; only the
 ; window UpLo / UpCnt (plane bytes, 8 per tile) is written, to VRAM UpDst (tiles in their plane order)
-UnpackFont:
+UnpackFont:                      ; (records wholly outside UpLo .. UpEnd-1 are skipped without reading them)
+    ld hl,(UpLo)
+    ld de,(UpCnt)
+    add hl,de
+    ld (UpEnd),hl
     ld hl,$8000                  ; the asset pointer of entry 0
     call Stub_ReadB12
     ld e,a
@@ -812,6 +844,14 @@ UnpackFont:
     jr z,@endplane
     jp m,@run
     ld b,a
+    call @outside
+    jr nc,@lit
+    ld a,l                       ; skip B literal bytes: HL += B, DE += B
+    add a,b
+    ld l,a
+    jr nc,@skipde
+    inc h
+    jr @skipde
 @lit:
     call @read
     call @put
@@ -821,10 +861,51 @@ UnpackFont:
     and $7F
     ld b,a
     call @read
+    call @outside
+    jr c,@skipde
 @rep:
     call @put
     djnz @rep
     jr @next
+@skipde:                         ; DE += B
+    ld a,e
+    add a,b
+    ld e,a
+    jr nc,@next
+    inc d
+    jr @next
+@outside:                        ; carry = bytes DE .. DE+B-1 all outside UpLo .. UpEnd-1 (A, BC, HL kept)
+    push hl
+    push af
+    inc b
+    dec b
+    jr z,@in                     ; B = 0 (256 times): the byte-by-byte path
+    ld hl,(UpEnd)
+    or a
+    sbc hl,de
+    jr c,@out                    ; DE >= UpEnd
+    jr z,@out
+    push de
+    ld l,b
+    ld h,0
+    add hl,de
+    ld de,(UpLo)
+    or a
+    sbc hl,de                    ; DE + B <= UpLo
+    pop de
+    jr c,@out
+    jr z,@out
+@in:
+    pop af
+    pop hl
+    scf
+    ccf
+    ret
+@out:
+    pop af
+    pop hl
+    scf
+    ret
 @endplane:
     inc c
     ld a,c
@@ -1015,6 +1096,14 @@ ReadSlot:                        ; A = slot -> SlotBuf; carry set = empty or dam
 
 SaveSlot:                        ; A = slot, B = hero y, C = x, D = start screen, SvFlag = its $C84C: the game -> battery RAM
     push af
+    push bc
+    push de
+    call FindNewest              ; Tmp+11 = the highest save number so far
+    ld hl,(Tmp+11)
+    inc hl
+    ld (Tmp+14),hl               ; this save's number
+    pop de
+    pop bc
     ld hl,SlotBuf
     ld (hl),$A5
     inc hl
@@ -1042,8 +1131,13 @@ SaveSlot:                        ; A = slot, B = hero y, C = x, D = start screen
     ld hl,$C86E
     ld bc,11
     ldir
-    ex de,hl
-    ld b,23
+    ex de,hl                     ; HL = +40: the save number
+    ld de,(Tmp+14)
+    ld (hl),e
+    inc hl
+    ld (hl),d
+    inc hl
+    ld b,21
     xor a
 @zero:
     ld (hl),a
@@ -1057,6 +1151,87 @@ SaveSlot:                        ; A = slot, B = hero y, C = x, D = start screen
     ld hl,SlotBuf
     ld bc,64
     jp Stub_Sram
+
+; A = the newest save slot (the highest save number; slots saved before save numbers existed have 0:
+; then the slot loaded last if it is used, else the first used one); carry = no slot is used.
+; Tmp+11 = the highest save number. Uses SlotBuf, Tmp+10..+13.
+FindNewest:
+    call SramPrepare             ; (LastSlot; a battery RAM without our header gets one)
+    ld a,$FF
+    ld (Tmp+10),a                ; best slot
+    ld hl,0
+    ld (Tmp+11),hl               ; its number
+    xor a
+@slot:
+    ld (Tmp+13),a
+    call ReadSlot
+    jr c,@next
+    ld a,(Tmp+10)
+    inc a
+    jr z,@take                   ; the first used slot
+    ld hl,(SlotBuf+40)
+    ld de,(Tmp+11)
+    or a
+    sbc hl,de
+    jr c,@next
+    jr z,@next
+@take:
+    ld a,(Tmp+13)
+    ld (Tmp+10),a
+    ld hl,(SlotBuf+40)
+    ld (Tmp+11),hl
+@next:
+    ld a,(Tmp+13)
+    inc a
+    cp 6
+    jr c,@slot
+    ld a,(Tmp+10)
+    inc a
+    scf
+    ret z                        ; none
+    ld hl,(Tmp+11)
+    ld a,h
+    or l
+    jr nz,@have
+    ld a,(LastSlot)              ; only old saves: the slot loaded last, if it is used
+    push af
+    call ReadSlot
+    pop bc
+    ld a,b
+    ret nc
+@have:
+    ld a,(Tmp+10)
+    or a
+    ret
+
+; $293F: the overworld's status screen is drawn, the display still off: "1  SAVE GAME" under its frame.
+; The status screen uses tiles $00-$73; unpausing reloads $0000-$13BF (asset $B0), so tiles $74-$8B
+; take the font's characters $40-$56 (space .. V) and the digit 1.
+PauseHintH:
+    call GameNt
+    ld a,$74-$40
+    ld (NtTileOfs),a
+    ld a,$8B-1
+    ld (NtDigit0),a
+    ld hl,0
+    ld (UpLo),hl
+    ld hl,23*8
+    ld (UpCnt),hl
+    ld hl,$74*32
+    ld (UpDst),hl
+    call UnpackFont
+    ld hl,($E0-$40)*8            ; the digit 1 (font tile $E0)
+    ld (UpLo),hl
+    ld hl,8
+    ld (UpCnt),hl
+    ld hl,$8B*32
+    ld (UpDst),hl
+    call UnpackFont
+    ld bc,10+256*22              ; row 22 (under the frame), column 10
+    call NtAt
+    ld hl,StrPauseHint
+    call NtPrint
+    jp ScreenOn
 
 ; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
 OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1     ; the original game
@@ -1421,14 +1596,17 @@ AutoSave:
     ld (NtAddr),hl
     xor a
     ld (NtAttr),a
+    ld (NtTileOfs),a             ; the font is the cave's own (a Pause save leaves $C0 here)
     ld hl,StrAutoSaved
     jp NtPrint
 
 ; --- the SAVE page ---
 SavePage:
     call PageOpen
-    call SramPrepare
-    ld a,(LastSlot)
+    call FindNewest              ; the cursor on the newest save (AUTO when there is none)
+    jr nc,@cur
+    xor a
+@cur:
     ld (SaveCur),a
     ld bc,14+256*1
     call NtAt
@@ -2416,6 +2594,8 @@ StrHelpSave:   .ASC "1  SAVE        2  BACK"
 StrOverwrite:  .ASC "OVERWRITE?   NO    YES"
                .DB 0, 14, 20
 StrSaved:      .ASC "     SAVED."
+               .DB 0
+StrPauseHint:  .ASC "1  SAVE GAME"
                .DB 0
 StrSaveAsk:    .ASC "SAVE THIS GAME?  NO   YES"
                .DB 0, 18, 23

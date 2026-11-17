@@ -38,6 +38,7 @@ header checksum with `python -I Tools/sms_checksum.py <rom>`.
 | 5 | Save from Pause (status screen + button 1: SAVE GAME, slots 1-5, OVERWRITE? NO / YES, the status screen and the overworld come back unchanged); Game Over asks SAVE THIS GAME? (NO first) under the password, YES = the same menu (the save continues at L14 like LAST GAME CONTINUE) | done |
 | 6 | OPTIONS (stored in battery RAM, RESET TO DEFAULTS): text / map / sword hit fixes, cave down speed 2 / 3 / 4, multipliers | stage 1 done: bank-1 stubs compacted (117 bytes free for the option hooks); stage 2 done: OPTIONS page, stored in battery RAM ($8010), loaded at power-on; stage 3 done: every option works (+ SWORD REACH) |
 | 7 | PC build (`Games/golvellius-plus`): the HUD shows the ROM's own options (one setting with title -> OPTIONS), the ROM's save slots replace the PC password slots, the world / dungeon maps follow the ROM's slots | done |
+| 8 | Follow-ups from the user's play (2026-11-17): Winkle's "GAME SAVED TO AUTO." garbled after a Pause save (font offset left over) fixed; with a save the title's cursors start on CONTINUE / SAVE and the SAVE page on the newest save (save number per slot); the status screen says "1  SAVE GAME" | done |
 
 ## Notes
 

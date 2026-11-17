@@ -27,8 +27,8 @@
  * visit. Written when the HUD closes and at exit (not with SMS_NO_SAVE).
  *
  * HUD tab MAP (own Left/Right; LB/RB, Q/E switch tabs): the arrows move a cursor (cyan) over the
- * map, the screen you are on blinks yellow; B / Enter shows the cursor's screen big (arrows = the
- * neighbouring screens), B / Enter again = back to the map. The cursor starts on your screen each
+ * map, the screen you are on blinks yellow; A / Enter shows the cursor's screen big (arrows = the
+ * neighbouring screens), A / Enter again = back to the map. The cursor starts on your screen each
  * time the HUD opens.
  * Test env: GV_MAP_LOG=1 (captures), GV_MAP_DUMP=<ppm> (map image), GV_MAP_PICDUMP=<dir> (every
  * captured picture as picNN.ppm), GV_HUD_KEYS=<U D L R S ...> (keys for the MAP page at its first
@@ -420,16 +420,16 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
     /* bottom line: cursor / hero screen and what B / Enter does */
     int ly = y1 - 9;
     if (s_zoom && s_tp_ask) {
-        snprintf(t, sizeof t, "TELEPORT TO %s? B/ENTER=YES", cn);
+        snprintf(t, sizeof t, "TELEPORT TO %s? A/ENTER=YES", cn);
         hud_text(fb, w, h, x0 + 4, ly, t, YEL);
     }
-    else if (s_zoom) hud_text(fb, w, h, x0 + 4, ly, gv_tp_allowed(s_cur) ? "ARROWS NEXT  B/ENTER TELEPORT"
-                                                                     : "ARROWS NEXT SCREEN   B/ENTER MAP", GREY);
+    else if (s_zoom) hud_text(fb, w, h, x0 + 4, ly, gv_tp_allowed(s_cur) ? "ARROWS NEXT  A/ENTER TELEPORT"
+                                                                     : "ARROWS NEXT SCREEN   A/ENTER MAP", GREY);
     else {
         int x = x0 + 4;
         snprintf(t, sizeof t, "CURSOR %s", cn); hud_text(fb, w, h, x, ly, t, CYAN); x += 6 * ((int)strlen(t) + 2);
         if (hero >= 0) { snprintf(t, sizeof t, "YOU %s", hn); hud_text(fb, w, h, x, ly, t, YEL); }
-        const char *z = "B/ENTER ZOOM";
+        const char *z = "A/ENTER ZOOM";
         hud_text(fb, w, h, x1 - 4 - 6 * (int)strlen(z), ly, z, GREY);
     }
 
