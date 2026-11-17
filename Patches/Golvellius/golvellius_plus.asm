@@ -115,6 +115,7 @@ MAP "/" = $6E
 .DEFINE UpLo        $C0CA        ; 2: UnpackFont keeps the plane bytes UpLo .. UpLo+UpCnt-1 (8 per tile) of the font
 .DEFINE UpCnt       $C0CC        ; 2
 .DEFINE UpDst       $C0CE        ; 2: ... and writes them to VRAM from UpDst
+.DEFINE SavedBank   $C0D0        ; Enter16 / Leave16: the slot-2 bank of the game code a hook came from
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -164,19 +165,19 @@ MAP "/" = $6E
 .ENDS
 .ORGA $12C8                      ; New Game: was xor a / ld ($C83E),a
 .SECTION "hook_new_game" OVERWRITE
-    jp Stub_NewGame
+    call Hook_NewGame             ; (returns with A = 0, Z, as the original)
     nop
 .ENDS
-.ORGA $13E3                      ; continue: was ld a,$B4 / ld ($C80D),a (start screen L14)
+.ORGA $13E3                      ; continue: was ld a,$B4 / ld ($C80D),a (start screen L14); $13E8 = ret
 .SECTION "hook_start_screen" OVERWRITE
-    jp Stub_StartScreen
+    call Hook_StartScreen
     nop
     nop
 .ENDS
 .ORGA $1391                      ; every game start: was ld a,$88 / ld ($C102),a / ld a,$98 / ld ($C101),a (hero x, y)
 .SECTION "hook_start_position" OVERWRITE
-    jp Stub_StartPos
-    .DB 0, 0, 0, 0, 0, 0, 0
+    call Hook_StartPos
+    .DB 0, 0, 0, 0, 0, 0, 0       ; nop x 7 -> $139B
 .ENDS
 .ORGA $2942                      ; Pause wait loop: was call $07C3
 .SECTION "hook_pause_wait" OVERWRITE
@@ -197,68 +198,85 @@ MAP "/" = $6E
 .BANK 1 SLOT 1
 .ORGA $7E99
 .SECTION "gvplus_stubs" FORCE
-Stub_TitleButton:                ; from $27F8
+; Pagers. Enter16 / Map16 / Map2 end in `ret` after a constant bank write, so the recompiler knows
+; the bank after `call` them. A hook that returns into the game: site `call Hook_X` ->
+; `Hook_X: call Enter16 ; jp X` (bank 16), X ends `jp Leave16` (the game's bank back, AF kept).
+; SavedBank is one byte: a handler must not pass through another Enter16 hook (Stub_Wait, which
+; every frame wait goes through, keeps its bank on the stack instead).
+Enter16:
+    ld a,($FFFF)
+    ld (SavedBank),a
+Map16:
     ld a,16
     ld ($FFFF),a
+    ret
+Map2:                            ; the title's bank (exits into the title menus)
+    ld a,2
+    ld ($FFFF),a
+    ret
+Leave16:
+    push af
+    ld a,(SavedBank)
+    ld ($FFFF),a
+    pop af
+    ret
+
+Hook_NewGame:                    ; from $12C8
+    call Enter16
+    jp NewGameH
+Hook_StartScreen:                ; from $13E3
+    call Enter16
+    jp StartScreenH
+Hook_StartPos:                   ; from $1391
+    call Enter16
+    jp StartPosH
+
+Stub_TitleButton:                ; from $27F8
+    call Map16
     jp TitleButton
 Stub_ContMenu:                   ; from $284B
-    ld a,16
-    ld ($FFFF),a
+    call Map16
     jp ContMenu
+Stub_GameOver:                   ; from $2156
+    call Map16
+    jp GameOverAsk
 Stub_NewGameKeys:                ; button 1 = the original select, button 2 = back to START / OPTIONS
-    ld a,b
-    and $10
+    bit 4,b
     jp nz,$2844
-    ld a,b
-    and $20
+    bit 5,b
     jp z,$282F
-    ld a,16
-    ld ($FFFF),a
+    call Map16
     jp TopMenu
 Stub_LastGameKeys:               ; button 1 = the original select, button 2 = back to PASSWORD / SAVE
-    ld a,b
-    and $10
+    bit 4,b
     jp nz,$288A
-    ld a,b
-    and $20
+    bit 5,b
     jp z,$2875
-    ld a,16
-    ld ($FFFF),a
+    call Map16
     jp ContMenu
+
 Exit_TitleWait:                  ; -> the title's wait for a button (music keeps playing, the intro demo after a while)
-    ld a,2
-    ld ($FFFF),a
+    call Map2
     jp $27AE
 Exit_NewGameMenu:                ; -> the original NEW GAME / CONTINUE menu
-    ld a,2
-    ld ($FFFF),a
+    call Map2
     jp $2806
-Exit_BackToContinue:             ; back from PASSWORD / SAVE: the original menu with the cursor on CONTINUE
-    ld a,2                       ; (its own start $2806 picks NEW GAME when no game is in RAM)
-    ld ($FFFF),a
-    ld hl,$28AC                  ; "NEW GAME" / "CONTINUE", as $2806-$280F
-    call DrawString
-    ld hl,$28B7
-    call DrawString
-    ld a,1
-    ld (MenuSel),a
-    jp $281D                     ; the menu loop
-Exit_Password:                   ; -> the original LAST GAME / PASSWORD CONTINUE menu
-    ld a,2
-    ld ($FFFF),a
-    ld hl,$28C2
+Exit_BackToContinue:             ; -> its menu loop (BackToContinue drew the menu with the cursor on CONTINUE)
+    call Map2
+    jp $281D
+Exit_Password:                   ; -> the original LAST GAME / PASSWORD CONTINUE menu (HL = $28C2)
+    call Map2
     jp $284E
 Exit_LoadGame:                   ; a slot was loaded into RAM: the game's LAST GAME CONTINUE
-    ld a,2
-    ld ($FFFF),a
+    call Map2
     jp $131B
+
 Stub_ReadB12:                    ; A = the byte at HL in bank 12 (the font asset), back to bank 16
     ld a,12
     ld ($FFFF),a
     ld a,(hl)
     push af
-    ld a,16
-    ld ($FFFF),a
+    call Map16
     pop af
     ret
 Stub_Sram:                       ; copy BC bytes HL -> DE with the battery RAM over slot 2 ($8000-$BFFF)
@@ -273,58 +291,17 @@ Stub_Sram:                       ; copy BC bytes HL -> DE with the battery RAM o
 Stub_Wait:                       ; from $07C3: play time, then the original wait (any slot-2 bank comes back)
     ld a,($FFFF)
     push af
-    ld a,16
-    ld ($FFFF),a
+    call Map16
     call PlayTick
     pop af
     ld ($FFFF),a
     xor a
     ld ($C005),a
     jp $07C7
-Stub_NewGame:                    ; from $12C8: play time 0, no pending load, then the original code
-    xor a
-    ld hl,PlayTime
-    ld (hl),a
-    inc hl
-    ld (hl),a
-    inc hl
-    ld (hl),a
-    inc hl
-    ld (hl),a
-    ld (LoadPending),a
-    ld ($C83E),a
-    jp $12CC
-Stub_StartScreen:                ; from $13E3: the start screen of a continue
-    ld a,(LoadPending)
-    or a
-    ld a,$B4                     ; L14 (the original)
-    jr z,@set
-    ld a,(LoadScreen)
-@set:
-    ld ($C80D),a
-    ret                          ; (the original $13E8 is ret)
-Stub_StartPos:                   ; from $1391: the hero's start position (and the loaded screen's tile-set flag)
-    ld hl,$8898                  ; x $88, y $98 (the original)
-    ld a,(LoadPending)
-    or a
-    jr z,@set
-    ld a,($C802)
-    cp 6                         ; only on the overworld (the game may send the hero to the start area instead)
-    jr nz,@set
-    xor a
-    ld (LoadPending),a
-    ld a,(LoadC84C)
-    ld ($C84C),a                 ; ($1384 cleared it; the screen load needs the saved screen's value)
-    ld hl,(LoadY)
-@set:
-    ld ($C101),hl                ; $C101 = y, $C102 = x
-    jp $139B
 Stub_Unpause72:                  ; asset $72 (bank 7 $82C2: VRAM $1800 -> name table, $1F00 -> sprite rows), back to bank 16
     ld a,$72
     call $2996                   ; the game's `call $0E0B ; jp (hl)`
-    ld a,16
-    ld ($FFFF),a
-    ret
+    jp Map16
 Stub_PauseWait:                  ; from $2942: the wait (paused: no play time), button 1 on the status screen = SAVE GAME
     xor a
     ld ($C005),a
@@ -337,23 +314,15 @@ Stub_PauseWait:                  ; from $2942: the wait (paused: no play time), 
     and $10
     ret z
     pop hl                       ; (back into the pause loop later by jp $291F)
-    ld a,16
-    ld ($FFFF),a
+    call Map16
     jp PauseSave
-Stub_GameOver:                   ; from $2156
-    ld a,16
-    ld ($FFFF),a
-    jp GameOverAsk
 Stub_Winkle:                     ; from bank 7 $9138: the password, then the AUTO save
     ld a,7                       ; (bank 7 is in slot 2 already: says so for the recompiler)
     ld ($FFFF),a
     call MakePassword
-    ld a,16
-    ld ($FFFF),a
+    call Enter16                 ; (saves bank 7)
     call AutoSave
-    ld a,7
-    ld ($FFFF),a
-    ret
+    jp Leave16
 .ENDS
 
 ; ---------------------------------------------------------------------------------------------
@@ -440,6 +409,7 @@ ContMenuSel:
     or a
     jr nz,@save
     call ClearMenuRows           ; PASSWORD
+    ld hl,$28C2
     jp Exit_Password
 @save:
     call SavePage                ; (does not return when a slot is loaded)
@@ -448,6 +418,12 @@ ContMenuSel:
     jr ContMenuSel
 @back:
     call ClearMenuRows
+    ld hl,$28AC                  ; "NEW GAME" / "CONTINUE" (bank 0), as $2806-$280F
+    call DrawString
+    ld hl,$28B7
+    call DrawString
+    ld a,1                       ; the cursor on CONTINUE (the menu's own start $2806 picks NEW GAME
+    ld (MenuSel),a               ; when no game is in RAM)
     jp Exit_BackToContinue
 
 ; rows 20-23 of the name table = the menu area (as the game's $27F8 does it)
@@ -1494,6 +1470,46 @@ WaitPaused:                      ; one frame without play time
     xor a
     ld ($C005),a
     jp $07C7
+
+; game-start hooks (Hook_* in bank 1: entered with Enter16, back with Leave16)
+NewGameH:                        ; $12C8 New Game: play time 0, no pending load, then the original code
+    xor a
+    ld hl,PlayTime
+    ld (hl),a
+    inc hl
+    ld (hl),a
+    inc hl
+    ld (hl),a
+    inc hl
+    ld (hl),a
+    ld (LoadPending),a
+    ld ($C83E),a                 ; the original xor a / ld ($C83E),a (A = 0, Z)
+    jp Leave16
+StartScreenH:                    ; $13E3: the start screen of a continue
+    ld a,(LoadPending)
+    or a
+    ld a,$B4                     ; L14 (the original)
+    jr z,@set
+    ld a,(LoadScreen)
+@set:
+    ld ($C80D),a
+    jp Leave16                   ; (-> $13E6 nop nop, $13E8 ret)
+StartPosH:                       ; $1391: the hero's start position (and the loaded screen's tile-set flag)
+    ld hl,$8898                  ; x $88, y $98 (the original)
+    ld a,(LoadPending)
+    or a
+    jr z,@set
+    ld a,($C802)
+    cp 6                         ; only on the overworld (the game may send the hero to the start area instead)
+    jr nz,@set
+    xor a
+    ld (LoadPending),a
+    ld a,(LoadC84C)
+    ld ($C84C),a                 ; ($1384 cleared it; the screen load needs the saved screen's value)
+    ld hl,(LoadY)
+@set:
+    ld ($C101),hl                ; $C101 = y, $C102 = x
+    jp Leave16                   ; (-> 7 x nop, $139B)
 
 ; the overworld's Pause screen, button 1 (from Stub_PauseWait)
 PauseSave:
