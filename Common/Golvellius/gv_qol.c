@@ -36,6 +36,12 @@
  *    detach, $C004, $770D again, the playing song (structure 0) restarted through $77B6.
  *    Each sound has an FM and a PSG version with their own flags: e.g. the big enemies' death sound
  *    $35 protects the effect channel in FM only, so pickups are not heard for ~2 s (CLAUDE.md).
+ *  GOLVELLIUS PLUS (our ROM patch, found by its ID block at bank 16 $8000): the ROM does TEXT FIXES, MAP
+ *    FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, KEEP GOLD and the multipliers itself (its title ->
+ *    OPTIONS page); the HUD shows those 9 instead of ours, read from / written to the ROM's own storage, and
+ *    our versions (ROM-image patches, hooks, ini keys) are off. Its save slots replace PASSWORD SAVE SLOTS;
+ *    gv_slots.c makes the maps follow them. Test env: GV_ROPT_SET=<frame>:<option>=<value>,...,
+ *    GV_HUD_PAGE=<tab> (the tab the HUD opens on).
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -51,6 +57,9 @@
 #include "video/sms_vdp.h"
 
 extern uint8_t *glue_rom_image(size_t *size);
+extern const uint8_t *glue_sram_image(size_t *size);
+extern void glue_sram_poke(size_t off, uint8_t v);
+extern void glue_sram_flush(void);
 
 #define ROM_CRC_SIZE 0x40000
 static const struct { uint32_t off; uint8_t orig, fixed; } k_map_fix[2] = {
@@ -75,6 +84,53 @@ static const char *const k_mult[] = { "X0", "X1 (ORIGINAL)", "X2", "X3", "X4", "
 static const char *const k_dina[] = { "150 GOLD (ORIGINAL)", "2600 GOLD (ALIANGER)" };
 static const char *const k_downspd[] = { "X1 (ORIGINAL)", "X1.5 (ALIANGER)" };
 static const char *const k_tp[]   = { "OFF (ORIGINAL)", "VISITED SCREENS", "PASSWORD CAVES" };
+/* Golvellius Plus (our ROM patch, Patches/Golvellius): its own OPTIONS page (title -> OPTIONS) does
+   TEXT FIXES, MAP FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, KEEP GOLD and the three multipliers
+   in the ROM. The HUD shows those same 9 options instead of our C versions: read from the ROM's RAM
+   (OptVals $C0D1, once OptLoaded $C0DA) or its battery RAM ($8010 + check byte $8019 = sum xor $5A),
+   written to both, so the HUD and the ROM's page are one setting. The ROM's save slots replace the
+   PASSWORD SAVE SLOTS (gv_slots.c makes the maps follow the ROM's slots). */
+static bool s_plus;
+#define PLUS_OPTS    0xC0D1
+#define PLUS_LOADED  0xC0DA
+#define PLUS_SRAM    0x10
+#define PLUS_N       9
+static int s_ropt[PLUS_N];                         /* text, map, sword, reach, cave, keep gold, gold, dealt, recv */
+static const uint8_t k_ropt_def[PLUS_N] = { 0, 0, 0, 0, 0, 0, 1, 1, 1 }, k_ropt_cnt[PLUS_N] = { 2, 2, 2, 3, 3, 2, 11, 11, 11 };
+static const char *const k_r_reach[] = { "OFF (ORIGINAL)", "4 PIXELS", "8 PIXELS" };
+static const char *const k_r_cave[]  = { "1X (ORIGINAL)", "1.5X", "2X" };
+static bool plus_rom(void)
+{
+    size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
+    return rom && n >= 0x40012 && !memcmp(rom + 0x40000, "GOLVELLIUS PLUS\0", 16) && rom[0x40010] == 1;
+}
+/* the ROM's current values -> s_ropt (RAM once loaded, else the battery RAM, else the defaults) */
+static void ropt_read(void)
+{
+    uint8_t v[PLUS_N];
+    if (sms_read8(PLUS_LOADED) == 1) for (int i = 0; i < PLUS_N; i++) v[i] = sms_read8((uint16_t)(PLUS_OPTS + i));
+    else {
+        size_t n = 0; const uint8_t *sr = glue_sram_image(&n);
+        uint8_t sum = 0; bool ok = sr && n > PLUS_SRAM + PLUS_N;
+        for (int i = 0; i < PLUS_N && ok; i++) sum = (uint8_t)(sum + sr[PLUS_SRAM + i]);
+        ok = ok && (uint8_t)(sum ^ 0x5A) == sr[PLUS_SRAM + PLUS_N];
+        for (int i = 0; i < PLUS_N; i++) v[i] = ok ? sr[PLUS_SRAM + i] : k_ropt_def[i];
+    }
+    for (int i = 0; i < PLUS_N; i++) s_ropt[i] = v[i] < k_ropt_cnt[i] ? v[i] : k_ropt_def[i];   /* out of range: as OptLoad */
+}
+static bool s_ropt_dirty;                          /* (on_close writes the .sav) */
+static void ropt_changed(void)                    /* a HUD change -> the ROM's RAM + battery RAM (as OptSave) */
+{
+    uint8_t sum = 0;
+    for (int i = 0; i < PLUS_N; i++) {
+        uint8_t v = (uint8_t)s_ropt[i];
+        sms_write8((uint16_t)(PLUS_OPTS + i), v);          /* in force at once (before OptLoad: it reads the battery RAM) */
+        glue_sram_poke(PLUS_SRAM + i, v);
+        sum = (uint8_t)(sum + v);
+    }
+    glue_sram_poke(PLUS_SRAM + PLUS_N, (uint8_t)(sum ^ 0x5A));
+    s_ropt_dirty = true;
+}
 static char s_music_names[6][24] = { "AUTO (ORIGINAL)" };
 static const char *k_music[6] = { s_music_names[0], s_music_names[1], s_music_names[2], s_music_names[3], s_music_names[4], s_music_names[5] };
 /* TEXT FIXES: see the header; same table in Tools/gv_make_ips.py */
@@ -165,20 +221,22 @@ static void save_config(void)
 {
     FILE *f = safe_fopen_w(s_ini, "w"); if (!f) return;   /* "<ini>.tmp", swapped in when complete */
     fprintf(f, "; Golvellius options (also in game: F1 / gamepad Start). 0 = original game.\n");
-    fprintf(f, "map_fixes      = %d     ; 1 = screen C5 gets its own room, screen H5 the right cave graphic (SMS Power bug fix)\n", s_mapfix_i);
-    fprintf(f, "sword_hit_fix  = %d     ; 1 = every sword swing can hit (original: every other swing only stuns)\n", s_hitfix_i);
-    fprintf(f, "remember_password = %d  ; 1 = passwords are saved with their maps: slot 0 = autosave, 1-5 = LB/RB in Winkle's cave and on the password screen\n", s_pw_i);
-    fprintf(f, "text_fixes     = %d     ; 1 = the 5 typos fixed: PASSWARD, 3 x GOLD for FIND, DESGINED (credits)\n", s_tfix_i);
+    if (s_plus) fprintf(f, "; Golvellius Plus: TEXT FIXES, MAP FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, KEEP GOLD and the\n"
+                       ";   multipliers are the ROM's own options (title -> OPTIONS, or the HUD): kept in the battery save\n");
+    if (!s_plus) fprintf(f, "map_fixes      = %d     ; 1 = screen C5 gets its own room, screen H5 the right cave graphic (SMS Power bug fix)\n", s_mapfix_i);
+    if (!s_plus) fprintf(f, "sword_hit_fix  = %d     ; 1 = every sword swing can hit (original: every other swing only stuns)\n", s_hitfix_i);
+    if (!s_plus) fprintf(f, "remember_password = %d  ; 1 = passwords are saved with their maps: slot 0 = autosave, 1-5 = LB/RB in Winkle's cave and on the password screen\n", s_pw_i);
+    if (!s_plus) fprintf(f, "text_fixes     = %d     ; 1 = the 5 typos fixed: PASSWARD, 3 x GOLD for FIND, DESGINED (credits)\n", s_tfix_i);
     fprintf(f, "cave_info_all  = %d     ; MAP tab / panel: 0 = area names of visited screens, caves you have been inside, 1 = everything (spoiler)\n", gv_cave_info_all);
-    fprintf(f, "damage_dealt   = %-5d ; sword damage to enemies x0..x10 (1 = original)\n", s_dealt_i);
-    fprintf(f, "damage_received = %-4d ; damage you take x0..x10 (1 = original; healing is not changed)\n", s_recv_i);
-    fprintf(f, "gold_multiplier = %-4d ; gold dropped by enemies x0..x10 (1 = original; GOLD MAX still caps it)\n", s_gold_i);
+    if (!s_plus) fprintf(f, "damage_dealt   = %-5d ; sword damage to enemies x0..x10 (1 = original)\n", s_dealt_i);
+    if (!s_plus) fprintf(f, "damage_received = %-4d ; damage you take x0..x10 (1 = original; healing is not changed)\n", s_recv_i);
+    if (!s_plus) fprintf(f, "gold_multiplier = %-4d ; gold dropped by enemies x0..x10 (1 = original; GOLD MAX still caps it)\n", s_gold_i);
     fprintf(f, "side_panel     = %d     ; widescreen window with a side panel: the surrounding screens, gold, power (F2)\n", s_panel_i);
     fprintf(f, "dungeon_map_whole = %d  ; dungeon map (side panel / MAP tab): 0 = the parts you have seen, 1 = the whole dungeon\n", gv_cave_reveal);
     fprintf(f, "dina_2600      = %d    ; 1 = Dina pays 2600 gold instead of 150 (amount from Alianger's hack)\n", s_dina_i);
     fprintf(f, "teleport       = %d     ; MAP tab teleport: 0 off, 1 to visited screens, 2 to visited password caves\n", s_tp_i);
-    fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
-    fprintf(f, "cave_down_fast = %d     ; 1 = in top-down caves the hero moves down 1.5x as fast (speed 3 instead of 2, Alianger's idea)\n", s_down_i);
+    if (!s_plus) fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
+    if (!s_plus) fprintf(f, "cave_down_fast = %d     ; 1 = in top-down caves the hero moves down 1.5x as fast (speed 3 instead of 2, Alianger's idea)\n", s_down_i);
     fprintf(f, "overworld_music = %d    ; 0 = the game's choice (by sword + shield), 1..5 = that theme once unlocked\n", s_music_i);
     fprintf(f, "fm_sound       = %d     ; sound chip: 0 = PSG (original: Western consoles have no FM unit), 1 = FM (Japanese FM Sound Unit)\n", s_fm_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
@@ -200,8 +258,16 @@ extern void gv_map_hud_closed(void);
 extern void gv_cave_save(void);
 extern void gv_cave_frame(void);
 extern void gv_cave_test(uint64_t frame);
-static void on_close(void) { save_config(); gv_map_save(); gv_cave_save(); gv_map_hud_closed(); }
-static int open_page(void) { return hud_page_index("MAP"); }
+static void on_close(void)
+{
+    save_config(); gv_map_save(); gv_cave_save(); gv_map_hud_closed();
+    if (s_ropt_dirty) { s_ropt_dirty = false; glue_sram_flush(); }   /* Plus: the ROM's options into the .sav now */
+}
+static int open_page(void)
+{
+    const char *t = getenv("GV_HUD_PAGE");               /* test: the tab the HUD opens on (window shots) */
+    return hud_page_index(t ? t : "MAP");
+}
 static void on_ff(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
 static HudOption k_opts[] = {          /* not const: TEXT FIXES gets k_notfound on another ROM */
     { "MAP FIXES",      k_onoff,    2, &s_mapfix_i, on_map_fix },
@@ -221,6 +287,27 @@ static const HudOption k_mult_opts[] = {
     { "DAMAGE DEALT",    k_mult, 11, &s_dealt_i, NULL },
     { "DAMAGE RECEIVED", k_mult, 11, &s_recv_i,  NULL },
     { "GOLD DROPS",      k_mult, 11, &s_gold_i,  NULL },
+};
+/* Golvellius Plus: the ROM's 9 options first (its OPTIONS page order; MULTIPLIERS tab = its last three),
+   then our PC-only options */
+static HudOption k_opts_plus[] = {
+    { "TEXT FIXES",     k_onoff,    2, &s_ropt[0],  ropt_changed },
+    { "MAP FIXES",      k_onoff,    2, &s_ropt[1],  ropt_changed },
+    { "SWORD HIT FIX",  k_onoff,    2, &s_ropt[2],  ropt_changed },
+    { "SWORD REACH",    k_r_reach,  3, &s_ropt[3],  ropt_changed },
+    { "CAVE DOWN SPEED", k_r_cave,  3, &s_ropt[4],  ropt_changed },
+    { "KEEP GOLD",      k_onoff,    2, &s_ropt[5],  ropt_changed },
+    { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
+    { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },
+    { "DUNGEON MAP",    k_dmap,     2, &gv_cave_reveal, NULL },
+    { "CAVE INFO",      k_cinfo,    2, &gv_cave_info_all, NULL },
+    { "DINA'S PAYOUT",  k_dina,     2, &s_dina_i,   NULL },
+    { "MAP TELEPORT",   k_tp,       3, &s_tp_i,     NULL },
+};
+static const HudOption k_mult_plus[] = {
+    { "GOLD DROPS",      k_mult, 11, &s_ropt[6], ropt_changed },
+    { "DAMAGE DEALT",    k_mult, 11, &s_ropt[7], ropt_changed },
+    { "DAMAGE RECEIVED", k_mult, 11, &s_ropt[8], ropt_changed },
 };
 static bool s_music_dirty;
 static void on_music(void) { s_music_dirty = true; }
@@ -627,7 +714,7 @@ int gv_pw_made(void)
 }
 int gv_pw_entry(void)
 {
-    if (!s_pw_i) return 0;                                  /* original: clear the buffer */
+    if (!s_pw_i && !(s_plus && getenv("GV_PASSWORD"))) return 0;   /* original: clear the buffer (test env: Plus too) */
     if (!(getenv("GV_PASSWORD") && s_pw_have) && !gv_slots_pw_fill(s_pw)) return 0;   /* test env first */
     for (int i = 0; i < 32; i++) sms_write8((uint16_t)(0xC170 + i), s_pw[i]);
     s_pw_draw = true;
@@ -676,6 +763,18 @@ static void ram_use_frame(void)
 
 void gv_on_frame_post(uint64_t frame)
 {
+    if (s_plus && !hud_is_open()) ropt_read();       /* the HUD shows what the ROM's OPTIONS page set */
+    if (s_plus) {   /* test: GV_ROPT_SET=<frame>:<option 0..8>=<value>,... = a HUD change of a ROM option */
+        static const char *e = (const char *)1; if (e == (const char *)1) e = getenv("GV_ROPT_SET");
+        for (const char *q = e; q && *q; ) {
+            unsigned long at = strtoul(q, (char **)&q, 10); int i = -1, v = 0;
+            if (*q == ':') { i = (int)strtol(q + 1, (char **)&q, 10); if (*q == '=') v = (int)strtol(q + 1, (char **)&q, 10); }
+            if (at == frame && i >= 0 && i < PLUS_N && v >= 0 && v < k_ropt_cnt[i]) {
+                s_ropt[i] = v; ropt_changed(); on_close();
+                fprintf(stderr, "[gv] test: ROM option %d = %d (frame %lu)\n", i, v, at);
+            }
+            q = strchr(q, ','); if (q) q++;
+        } }
     {   /* test: GV_FM_SWITCH=<frame>:<0|1>,... sets SOUND CHIP at that frame (as the HUD would) */
         static const char *e = (const char *)1; if (e == (const char *)1) e = getenv("GV_FM_SWITCH");
         for (const char *q = e; q && *q; ) {
@@ -745,29 +844,40 @@ void gv_on_post_reset(void)
     for (int i = 0; i < 2 && s_rom_ok; i++)           /* original, or already fixed by an earlier reset */
         s_rom_ok = rom[k_map_fix[i].off] == k_map_fix[i].orig || rom[k_map_fix[i].off] == k_map_fix[i].fixed;
     if (!s_rom_ok) fprintf(stderr, "[gv_qol] room table bytes not as expected: MAP FIXES disabled\n");
+    s_plus = plus_rom();
     load_config();
+    if (s_plus) {                                     /* the ROM does these (its OPTIONS page) and has its own save slots */
+        s_mapfix_i = s_hitfix_i = s_tfix_i = s_reach_i = s_down_i = s_pw_i = 0;
+        s_dealt_i = s_recv_i = s_gold_i = 1;
+        ropt_read();
+    }
+    { extern void gv_slots_set_plus(bool on); gv_slots_set_plus(s_plus); }
     fm_set_attached(s_fm_i);                          /* before the boot code looks for the unit */
     pw_load();
     {   const char *t = getenv("GV_PASSWORD");            /* test: 64 hex digits = a password to pre-fill */
         if (t && strlen(t) >= 64) { for (int i = 0; i < 32; i++) { unsigned v; sscanf(t + 2 * i, "%2x", &v); s_pw[i] = (uint8_t)v; } s_pw_have = true; } }
-    apply_map_fix();
-    typo_init();
-    if (!s_typo_ok) {
-        s_tfix_i = 0;
-        for (unsigned i = 0; i < sizeof k_opts / sizeof k_opts[0]; i++)
-            if (k_opts[i].value == &s_tfix_i) { k_opts[i].choices = k_notfound; k_opts[i].nchoices = 1; }
+    if (!s_plus) {                                    /* (Plus: the ROM fixes the map / texts itself) */
+        apply_map_fix();
+        typo_init();
+        if (!s_typo_ok) {
+            s_tfix_i = 0;
+            for (unsigned i = 0; i < sizeof k_opts / sizeof k_opts[0]; i++)
+                if (k_opts[i].value == &s_tfix_i) { k_opts[i].choices = k_notfound; k_opts[i].nchoices = 1; }
+        }
+        apply_typos();
     }
-    apply_typos();
     hud_set_turbo_speed(k_ff_vals[s_ff_i]);
     hud_set_title("GOLVELLIUS - OPTIONS");
-    hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
+    if (s_plus) hud_set_options(k_opts_plus, (int)(sizeof k_opts_plus / sizeof k_opts_plus[0]));
+    else hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
     hud_set_on_close(on_close);
     gv_map_init();
     { static bool once; if (!once) { once = true; atexit(gv_cave_save);
         extern void gv_slots_init(void); extern void gv_slots_exit(void); gv_slots_init(); atexit(gv_slots_exit); } }
     {   static bool pages;
         if (!pages) { pages = true;
-            hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
+            if (s_plus) hud_add_option_page("MULTIPLIERS", k_mult_plus, (int)(sizeof k_mult_plus / sizeof k_mult_plus[0]));
+            else hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
             for (int i = 0; i <= 100; i++) { snprintf(s_pct_buf[i], sizeof s_pct_buf[i], "%d%%", i); k_pct[i] = s_pct_buf[i]; }
             hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0])); } }
     {   static const char *const order[] = { "MAP", "OPTIONS", "MULTIPLIERS", "SOUND" };

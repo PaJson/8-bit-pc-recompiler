@@ -35,6 +35,7 @@ header checksum with `python -I Tools/sms_checksum.py <rom>`.
 | 4 | Save slots (AUTO + 5) in battery RAM, SAVE screen (load / delete, slot info: screen, play time, gold, power, crystals), AUTO at Winkle (+ "GAME SAVED TO AUTO."), loads start where saved, play time | done |
 | 5 | Save from Pause (status screen + button 1: SAVE GAME, slots 1-5, OVERWRITE? NO / YES, the status screen and the overworld come back unchanged); Game Over asks SAVE THIS GAME? (NO first) under the password, YES = the same menu (the save continues at L14 like LAST GAME CONTINUE) | done |
 | 6 | OPTIONS (stored in battery RAM, RESET TO DEFAULTS): text / map / sword hit fixes, cave down speed 2 / 3 / 4, multipliers | stage 1 done: bank-1 stubs compacted (117 bytes free for the option hooks); stage 2 done: OPTIONS page, stored in battery RAM ($8010), loaded at power-on; stage 3 done: every option works (+ SWORD REACH) |
+| 7 | PC build (`Games/golvellius-plus`): the HUD shows the ROM's own options (one setting with title -> OPTIONS), the ROM's save slots replace the PC password slots, the world / dungeon maps follow the ROM's slots | done |
 
 ## Notes
 

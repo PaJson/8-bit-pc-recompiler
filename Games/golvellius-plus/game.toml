@@ -19,7 +19,8 @@ rom           = "../../ROMs/Patched/Golvellius - Valley of Doom (USA, Europe, Br
 on_post_reset = "gv_on_post_reset"   # Common/Golvellius/gv_qol.c: options, map fixes
 on_frame_post = "gv_on_frame_post"   # gv_qol.c: test hooks
 
-# QoL hooks (gv_qol.c; each returns 0 = original code): sword hit spots (`ld a,4 ; ld ($C120),a`), password made / password screen
+# QoL hooks (gv_qol.c; each returns 0 = original code). Password made / password screen ($8553 / $85F6 / $8620): PASSWORD SAVE
+# SLOTS is off in this build (the ROM's own save slots replace it); kept for the test env GV_PASSWORD (pre-fills a password)
 [insn_hooks]
 addr   = [0x8553, 0x85F6, 0x8620, 0x914C, 0x19FE, 0x0435, 0x12C8, 0x6DEF]
 func   = ["gv_pw_made", "gv_pw_entry", "gv_pw_loop", "gv_dina", "gv_ow_music", "gv_frame_top", "gv_new_game", "gv_snd_update"]

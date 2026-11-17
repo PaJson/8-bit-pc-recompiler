@@ -19,6 +19,18 @@
  *  autosave starts empty (old files kept as <save>.bak.*). LAST GAME CONTINUE with a game in RAM
  *  ($131B: $C817 != 0 -> screen L14) keeps everything.
  * Nothing is written with SMS_NO_SAVE. Test env: GV_SLOT_LOG=1, GV_SLOT_KEYS=<frame>:<1|2>,... (1 = LB, 2 = RB).
+ *
+ * Golvellius Plus (our ROM patch) has its own save slots in battery RAM: AUTO (Winkle) + 1-5 (Pause /
+ * Game Over -> SAVE GAME), loaded from title -> CONTINUE -> SAVE. Those replace the slots above (the
+ * option is off there); the maps follow the ROM's slots instead, as <save>.save<n>.gvmap / .gvcave
+ * (n = 0 AUTO, 1-5), seen from what the ROM does:
+ *   save   = a slot record (battery RAM $8100 + 64 n) changes and is valid (+0 $A5, +63 = sum of +0..+62
+ *            xor $5A): the current maps are copied to that slot;
+ *   delete = a slot record becomes invalid: its map files are removed;
+ *   load   = LoadPending ($C0A5) goes 0 -> 1 (the SAVE page copied a slot into RAM; LastSlot $C0AA =
+ *            which): that slot's maps become the current ones (old files kept as <save>.bak.*); a slot
+ *            saved before this existed has no map files: the current maps are kept.
+ * New Game ($12C8) empties the current maps as before; a password continue keeps them.
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -162,6 +174,71 @@ static void load_from(int n)
     if (slog()) fprintf(stderr, "[slot] game continued from slot %d\n", n);
 }
 
+/* ---- Golvellius Plus: the maps follow the ROM's save slots (see the header) ---- */
+extern const uint8_t *glue_sram_image(size_t *size);
+#define PLUS_SLOTS   6
+#define PLUS_REC     0x100                            /* battery RAM $8100 */
+static bool s_plus, s_rec_init;
+static uint8_t s_rec[PLUS_SLOTS][64], s_last_pending;
+void gv_slots_set_plus(bool on) { s_plus = on; }
+static bool rec_valid(const uint8_t *r)
+{
+    uint8_t s = 0;
+    for (int i = 0; i < 63; i++) s = (uint8_t)(s + r[i]);
+    return r[0] == 0xA5 && (uint8_t)(s ^ 0x5A) == r[63];
+}
+static void plus_file(int n, const char *ext, char *out, size_t sz)
+{
+    char b[1024]; base(b, sizeof b);
+    snprintf(out, sz, "%s.save%d%s", b, n, ext);
+}
+static void plus_saved(int n)                         /* the ROM wrote slot n: the current maps go with it */
+{
+    if (!can_save()) return;
+    gv_map_save(); gv_cave_save();
+    for (int k = 1; k < 3; k++) {
+        char s[1100], d[1100];
+        slot_file(0, k_ext[k], s, sizeof s); plus_file(n, k_ext[k], d, sizeof d);
+        copy_file(s, d);
+    }
+    if (slog()) fprintf(stderr, "[slot] Plus: slot %d saved -> maps copied\n", n);
+}
+static void plus_deleted(int n)
+{
+    if (!can_save()) return;
+    for (int k = 1; k < 3; k++) { char d[1100]; plus_file(n, k_ext[k], d, sizeof d); remove(d); }
+    if (slog()) fprintf(stderr, "[slot] Plus: slot %d deleted -> its maps removed\n", n);
+}
+static void plus_loaded(int n)
+{
+    if (!can_save() || n < 0 || n >= PLUS_SLOTS) return;
+    char p[2][1100]; FILE *f; bool any = false;
+    for (int k = 1; k < 3; k++) { plus_file(n, k_ext[k], p[k - 1], sizeof p[k - 1]); if ((f = fopen(p[k - 1], "rb"))) { fclose(f); any = true; } }
+    if (!any) { if (slog()) fprintf(stderr, "[slot] Plus: slot %d loaded, it has no maps: current maps kept\n", n); return; }
+    gv_map_save(); gv_cave_save();
+    backup_autosave();
+    for (int k = 1; k < 3; k++) { char d[1100]; slot_file(0, k_ext[k], d, sizeof d); copy_file(p[k - 1], d); }
+    gv_map_reset(true); gv_cave_reset(true);
+    if (slog()) fprintf(stderr, "[slot] Plus: slot %d loaded -> its maps\n", n);
+}
+static void plus_frame(void)
+{
+    size_t sz = 0; const uint8_t *sr = glue_sram_image(&sz);
+    if (!sr || sz < PLUS_REC + sizeof s_rec) return;
+    uint8_t pending = sms_read8(0xC0A5);
+    if (!s_rec_init) { memcpy(s_rec, sr + PLUS_REC, sizeof s_rec); s_last_pending = pending; s_rec_init = true; return; }
+    for (int n = 0; n < PLUS_SLOTS; n++) {
+        const uint8_t *r = sr + PLUS_REC + 64 * n;
+        if (!memcmp(r, s_rec[n], 64)) continue;
+        bool was = rec_valid(s_rec[n]), now = rec_valid(r);
+        memcpy(s_rec[n], r, 64);
+        if (now) plus_saved(n);
+        else if (was) plus_deleted(n);
+    }
+    if (pending == 1 && s_last_pending == 0) plus_loaded(sms_read8(0xC0AA));
+    s_last_pending = pending;
+}
+
 void gv_slots_init(void)
 {
     static bool once; if (once) return; once = true;
@@ -238,6 +315,7 @@ void gv_slots_frame(uint64_t frame)
     uint8_t m = extra_buttons(frame), rise = (uint8_t)(m & ~last_btn); last_btn = m;
     uint8_t mode = sms_read8(0xC802);
     bool on = gv_slots_enabled();
+    if (s_plus) plus_frame();
 
     /* Winkle's cave: pick the slot; leaving = save */
     if (s_cave_made && !in_winkle()) {
