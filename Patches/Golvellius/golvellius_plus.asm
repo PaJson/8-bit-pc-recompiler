@@ -26,7 +26,7 @@
 ; Step 5: saving into SLOT 1-5: on the overworld's Pause (status) screen button 1 opens SAVE GAME
 ;   (the hero's screen and position; a used slot asks OVERWRITE?), and after Game Over's password the
 ;   game asks SAVE THIS GAME? (NO first; such a save continues at L14 like LAST GAME CONTINUE).
-;   The status screen says "1  SAVE GAME" under its frame (letters in tiles the unpause reloads).
+;   The status screen says "1 SAVE" and "2 MAP" under its frame (letters in tiles the unpause reloads).
 ;   Once a slot is used, the title's cursors start on CONTINUE and on SAVE.
 ; Step 6: OPTIONS page (title -> OPTIONS): TEXT FIXES, MAP FIXES, SWORD HIT FIX, CAVE DOWN SPEED,
 ;   KEEP GOLD, GOLD DROPS / DAMAGE DEALT / DAMAGE RECEIVED x0-x10, OVERWORLD SPEED 1X-4X (the hero's
@@ -180,6 +180,15 @@ MAP "/" = $6E
 .DEFINE MapCol      $CB91        ; text column count
 .DEFINE MapTry      $CB92
 .DEFINE MapK        $CB93
+; the Pause hint ("1 SAVE", "2 MAP" placed to the pixel)
+.DEFINE HintGlyphs  $CB94        ; 88: the glyphs of both texts (8 bytes per character)
+.DEFINE HINT_LINE   4            ; their top line inside row 22 (176 + 4 = line 180)
+.DEFINE HintTile    $C0F8        ; the next tile to write
+.DEFINE HintGP      $C0F9        ; 2: the glyphs of the text being drawn
+.DEFINE HintSh      $C0FB        ; its pixel offset inside a column (x & 7)
+.DEFINE HintCol     $C0FC        ; its first column
+.DEFINE HintN       $C0FD        ; its number of characters
+.DEFINE HintMask    $C0FE        ; $FF >> HintSh
 .DEFINE MT0         $3A          ; map tiles (Pause screen, low set): per colour k = 0..8: L, L + dot, R
 .DEFINE MT_CUR      MT0+27       ; the cursor: L, R
 
@@ -2126,7 +2135,7 @@ MapGrid:                         ; the whole grid page (display off)
     ld a,d
     add a,3
     ld b,a
-    ld c,1
+    ld c,2                       ; columns 2-3: right next to the squares (column 4 on)
     call NtAt
     ld a,d
     inc a
@@ -2391,34 +2400,259 @@ MapInfo:                         ; the cursor's screen page; arrows = the next s
     jr c,@loop
     jr MapInfo
 
-; $293F: the overworld's status screen is drawn, the display still off: "1  SAVE GAME  2  MAP" under it.
-; The status screen uses tiles $00-$73; unpausing reloads $0000-$13BF (asset $B0), so tiles $74-$8B
-; take the font's characters $40-$56 (space .. V) and the digit 1.
+; $293F: the overworld's status screen is drawn, the display still off: "1 SAVE" centred under the
+; left half of the frame (x 16-127), "2 MAP" under the right half (x 128-239), lines 180-186 = in the
+; middle of the black border (lines 175-191). Placed to the pixel: the font characters A..V and the
+; digits 1, 2 are unpacked to tiles $74-$8B, every character of both texts is read back into HintGlyphs
+; (4 planes ORed), then each column of a text is put together in Tmp (16 lines = its tiles in rows 22
+; and 23) and written to tiles $74.. (2 per column, 24 in all). The status screen uses tiles $00-$73;
+; unpausing reloads $0000-$13BF (asset $B0).
 PauseHintH:
     call GameNt
-    ld a,$74-$40
-    ld (NtTileOfs),a
-    ld a,$8B-1
-    ld (NtDigit0),a
-    ld hl,0
+    ld hl,8                      ; font characters $41-$56 (A..V) -> tiles $74-$89
     ld (UpLo),hl
-    ld hl,23*8
+    ld hl,22*8
     ld (UpCnt),hl
     ld hl,$74*32
     ld (UpDst),hl
     call UnpackFont
-    ld hl,($E0-$40)*8            ; the digits 1 and 2 (font tiles $E0, $E1)
+    ld hl,($E0-$40)*8            ; the digits 1 and 2 (font tiles $E0, $E1) -> tiles $8A, $8B
     ld (UpLo),hl
     ld hl,16
     ld (UpCnt),hl
-    ld hl,$8B*32
+    ld hl,$8A*32
     ld (UpDst),hl
     call UnpackFont
-    ld bc,5+256*22               ; row 22 (under the frame), column 5
-    call NtAt
-    ld hl,StrPauseHint
-    call NtPrint
+    ld de,HintGlyphs             ; the glyphs of both texts first: their tiles are reused below
+    ld hl,StrHintL+1
+    call HintRead
+    ld hl,StrHintR+1
+    call HintRead
+    ld hl,HintGlyphs
+    ld (HintGP),hl
+    ld a,$74
+    ld (HintTile),a
+    ld hl,StrHintL
+    call HintText
+    ld hl,StrHintR
+    call HintText
     jp ScreenOn
+
+HintRead:                        ; HL -> characters, 0: their glyphs to DE.. (8 bytes each; a space = 0)
+    ld a,(hl)
+    inc hl
+    or a
+    ret z
+    push hl
+    cp $40
+    jr z,@space
+    cp $B0
+    jr c,@letter
+    add a,$8A-$B1                ; '1', '2' -> tiles $8A, $8B
+    jr @tile
+@letter:
+    add a,$74-$41                ; 'A'..'V' -> tiles $74..$89
+@tile:
+    ld l,a
+    ld h,0
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    di
+    ld a,l
+    out ($BF),a
+    ld a,h
+    out ($BF),a                  ; VRAM read address (bit 6 clear)
+    ld b,8
+@line:
+    ld c,0
+    call @plane
+    call @plane
+    call @plane
+    call @plane
+    ld a,c
+    ld (de),a
+    inc de
+    djnz @line
+    ei
+    pop hl
+    jr HintRead
+@plane:
+    call VdpDelay
+    in a,($BE)
+    or c
+    ld c,a
+    ret
+@space:
+    xor a
+    ld b,8
+@zero:
+    ld (de),a
+    inc de
+    djnz @zero
+    pop hl
+    jr HintRead
+
+HintText:                        ; HL -> x, characters, 0 (glyphs from HintGP, which advances; tiles from HintTile)
+    ld a,(hl)
+    inc hl
+    ld c,a
+    and 7
+    ld (HintSh),a                ; the pixel offset inside a column
+    ld b,a
+    ld a,$FF
+    inc b
+    jr @mgo
+@mask:
+    srl a
+@mgo:
+    djnz @mask
+    ld (HintMask),a              ; $FF >> offset: the bits of a glyph that stay in its own column
+    ld a,c
+    rrca
+    rrca
+    rrca
+    and 31
+    ld (HintCol),a
+    ld b,0
+@count:
+    ld a,(hl)
+    or a
+    jr z,@counted
+    inc b
+    inc hl
+    jr @count
+@counted:
+    ld a,b
+    ld (HintN),a
+    ld a,(HintSh)
+    or a
+    jr z,@cols
+    inc b                        ; a shifted text reaches into one more column
+@cols:
+    ld c,0                       ; C = column of the text, B = columns left
+@col:
+    push bc
+    ld hl,Tmp
+    ld b,16
+    xor a
+@clear:
+    ld (hl),a
+    inc hl
+    djnz @clear
+    pop bc
+    push bc
+    ld a,(HintN)
+    ld b,a
+    ld a,c
+    cp b
+    jr nc,@noleft
+    call @glyph                  ; character C: its left part
+    ld a,(HintMask)
+    ld c,a
+    call HintPart
+@noleft:
+    pop bc
+    push bc
+    ld a,(HintSh)
+    or a
+    jr z,@noright
+    ld a,c
+    or a
+    jr z,@noright
+    dec a                        ; character C-1: the part that spills over
+    call @glyph
+    ld a,(HintMask)
+    cpl
+    ld c,a
+    call HintPart
+@noright:
+    ld a,(HintTile)              ; the two tiles (rows 22, 23) follow each other in VRAM
+    ld l,a
+    ld h,0
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    di
+    call SetVramAddr
+    ld hl,Tmp
+    ld b,16
+@out:
+    ld a,(hl)
+    out ($BE),a
+    call VdpDelay
+    out ($BE),a
+    call VdpDelay
+    out ($BE),a
+    call VdpDelay
+    out ($BE),a
+    inc hl
+    djnz @out
+    ei
+    pop bc
+    push bc
+    ld a,(HintCol)
+    add a,c
+    ld c,a
+    ld b,22
+    call NtAt
+    ld a,(HintTile)
+    call NtTile
+    ld b,23
+    call NtAt
+    ld a,(HintTile)
+    inc a
+    call NtTile
+    ld a,(HintTile)
+    add a,2
+    ld (HintTile),a
+    pop bc
+    inc c
+    dec b
+    jp nz,@col
+    ld a,(HintN)                 ; the next text's glyphs
+    call @glyph
+    ld (HintGP),hl
+    ret
+@glyph:                          ; A = character number -> HL = HintGP + 8 A
+    add a,a
+    add a,a
+    add a,a
+    ld hl,(HintGP)
+    add a,l
+    ld l,a
+    ret nc
+    inc h
+    ret
+
+HintPart:                        ; HL -> glyph: each line rotated right by HintSh, AND C, ORed into Tmp + HINT_LINE
+    ld de,Tmp+HINT_LINE
+    ld b,8
+@line:
+    push bc
+    ld a,(HintSh)
+    ld b,a
+    ld a,(hl)
+    inc b
+    jr @go
+@rot:
+    rrca
+@go:
+    djnz @rot
+    pop bc
+    and c
+    ex de,hl
+    or (hl)
+    ld (hl),a
+    ex de,hl
+    inc hl
+    inc de
+    djnz @line
+    ret
 
 ; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
 OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1, 0     ; the original game
@@ -3827,7 +4061,11 @@ StrOverwrite:  .ASC "OVERWRITE?   NO    YES"
                .DB 0, 14, 20
 StrSaved:      .ASC "     SAVED."
                .DB 0
-StrPauseHint:  .ASC "1  SAVE GAME     2  MAP"
+StrHintL:      .DB 48                    ; x of the first character cell ("1" is drawn from x + 1): ink 49-94
+               .ASC "1 SAVE"
+               .DB 0
+StrHintR:      .DB 164                   ; ink 164-202
+               .ASC "2 MAP"
                .DB 0
 StrWorldMap:   .ASC "WORLD MAP"
                .DB 0
