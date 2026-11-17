@@ -86,18 +86,19 @@ static const char *const k_downspd[] = { "X1 (ORIGINAL)", "X1.5 (ALIANGER)" };
 static const char *const k_tp[]   = { "OFF (ORIGINAL)", "VISITED SCREENS", "PASSWORD CAVES" };
 /* Golvellius Plus (our ROM patch, Patches/Golvellius): its own OPTIONS page (title -> OPTIONS) does
    TEXT FIXES, MAP FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, KEEP GOLD, the three multipliers
-   and OVERWORLD SPEED in the ROM. The HUD shows those same 10 options instead of our C versions: read
-   from the ROM's RAM (OptVals $C0D1, once OptLoaded $C0F5) or its battery RAM ($8010 + check byte $801A
-   = sum xor $5A; a block saved by an older patch = 9 options + check $8019, then OVERWORLD SPEED 1X),
+   OVERWORLD SPEED and EASY CAVE ENTRY in the ROM. The HUD shows those same 11 options instead of our C
+   versions: read from the ROM's RAM (OptVals $C0D1, once OptLoaded $C0F5) or its battery RAM ($8010 +
+   check byte $801B = sum xor $5A; a block saved by an older patch = 10 / 9 options + check byte, the
+   newer options at their defaults),
    written to both, so the HUD and the ROM's page are one setting. The ROM's save slots replace the
    PASSWORD SAVE SLOTS (gv_slots.c makes the maps follow the ROM's slots). */
 static bool s_plus;
 #define PLUS_OPTS    0xC0D1
 #define PLUS_LOADED  0xC0F5
 #define PLUS_SRAM    0x10
-#define PLUS_N       10
-static int s_ropt[PLUS_N];                         /* text, map, sword, reach, cave, keep gold, gold, dealt, recv, walk */
-static const uint8_t k_ropt_def[PLUS_N] = { 0, 0, 0, 0, 0, 0, 1, 1, 1, 0 }, k_ropt_cnt[PLUS_N] = { 2, 2, 2, 3, 3, 2, 11, 11, 11, 3 };
+#define PLUS_N       11
+static int s_ropt[PLUS_N];                         /* text, map, sword, reach, cave, keep gold, gold, dealt, recv, walk, easy cave */
+static const uint8_t k_ropt_def[PLUS_N] = { 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0 }, k_ropt_cnt[PLUS_N] = { 2, 2, 2, 3, 3, 2, 11, 11, 11, 3, 2 };
 static const char *const k_r_reach[] = { "OFF (ORIGINAL)", "4 PIXELS", "8 PIXELS" };
 static const char *const k_r_cave[]  = { "1X (ORIGINAL)", "1.5X", "2X" };
 static const char *const k_r_walk[]  = { "1X (ORIGINAL)", "1.5X", "2X" };
@@ -105,7 +106,7 @@ static bool plus_rom(void)
 {
     size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
     return rom && n >= 0x40012 && !memcmp(rom + 0x40000, "GOLVELLIUS PLUS\0", 16) && rom[0x40010] == 1
-        && rom[0x40011] >= 5;                         /* level 5: 10 options (an older patch has a 9-option layout) */
+        && rom[0x40011] >= 7;                         /* level 7: 11 options (older patches: 10 / 9; the build is tied to one ROM) */
 }
 /* the ROM's current values -> s_ropt (RAM once loaded, else the battery RAM, else the defaults) */
 static void ropt_read(void)
@@ -115,7 +116,7 @@ static void ropt_read(void)
     else {
         size_t n = 0; const uint8_t *sr = glue_sram_image(&n);
         int have = 0;                                  /* as OptLoad: 10 options, else an older block of 9 */
-        for (int k = PLUS_N; k >= PLUS_N - 1 && !have; k--) {
+        for (int k = PLUS_N; k >= PLUS_N - 2 && !have; k--) {   /* 11, or an older block of 10 / 9 */
             uint8_t sum = 0; bool ok = sr && n > (size_t)(PLUS_SRAM + k);
             for (int i = 0; i < k && ok; i++) sum = (uint8_t)(sum + sr[PLUS_SRAM + i]);
             if (ok && (uint8_t)(sum ^ 0x5A) == sr[PLUS_SRAM + k]) have = k;
@@ -303,6 +304,7 @@ static HudOption k_opts_plus[] = {
     { "SWORD REACH",    k_r_reach,  3, &s_ropt[3],  ropt_changed },
     { "CAVE DOWN SPEED", k_r_cave,  3, &s_ropt[4],  ropt_changed },
     { "OVERWORLD SPEED", k_r_walk,  3, &s_ropt[9],  ropt_changed },
+    { "EASY CAVE ENTRY", k_onoff,   2, &s_ropt[10], ropt_changed },
     { "KEEP GOLD",      k_onoff,    2, &s_ropt[5],  ropt_changed },
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
     { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },

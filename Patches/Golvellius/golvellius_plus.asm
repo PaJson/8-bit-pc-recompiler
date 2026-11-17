@@ -153,9 +153,9 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 .DEFINE OptDealt    OptVals+7    ; DAMAGE DEALT     x0..x10
 .DEFINE OptRecv     OptVals+8    ; DAMAGE RECEIVED  x0..x10
 .DEFINE OptWalk     OptVals+9    ; OVERWORLD SPEED  0 = 1X (original), 1 = 1.5X, 2 = 2X
-.DEFINE OPT_N       10
+.DEFINE OptEasyCave OptVals+10   ; EASY CAVE ENTRY  0 off (original), 1 on
+.DEFINE OPT_N       11
 .DEFINE OptLoaded   $C0F5        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
-.DEFINE OptCur      $C0DB        ; OPTIONS page: the row under the cursor (OPT_N = RESET TO DEFAULTS)
 .DEFINE ReachBox    $C0DC        ; 8: SWORD REACH: the box last widened, per sword object ($C120, $C140)
 .DEFINE SwingNo     $C0E4        ; SWORD HIT FIX: counts the swings (1..255)
 .DEFINE SwingSeen   $C0E5        ; 13: per enemy object ($C160 + 32 n): the swing that touched it last
@@ -188,6 +188,11 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 ; the Pause hint ("1 SAVE", "2 MAP" placed to the pixel)
 .DEFINE HintGlyphs  $CB94        ; 88: the glyphs of both texts (8 bytes per character)
 .DEFINE CentreCol   $CBEC        ; NtCentre: the column the last centred text started at (SubDraw's cursors)
+.DEFINE OptCur      $CBED        ; OPTIONS page: the cursor's position on the page (OPT_PAGEPOS = the PAGE row)
+.DEFINE OptPage     $CBEE        ; OPTIONS page: 0 / 1
+.DEFINE CaveLastX   $CBEF        ; EASY CAVE ENTRY: the hero's position at the previous step
+.DEFINE CaveLastY   $CBF0
+.DEFINE OPT_PAGEPOS 9            ; the PAGE row (screen row 20)
 .DEFINE HINT_LINE   4            ; their top line inside row 22 (176 + 4 = line 180)
 .DEFINE HintTile    $C0F8        ; the next tile to write
 .DEFINE HintGP      $C0F9        ; 2: the glyphs of the text being drawn
@@ -544,7 +549,7 @@ Stub_Winkle:                     ; from bank 7 $9138: the password, then the AUT
 GvPlusId:
     .DB "GOLVELLIUS PLUS", 0     ; 16 bytes
     .DB 1                         ; patch format version
-    .DB 6                         ; step / feature level (6 = OVERWORLD SPEED 1X / 1.5X / 2X, 10 options)
+    .DB 7                         ; step / feature level (7 = EASY CAVE ENTRY, 11 options on two pages)
 .ENDS
 
 .SECTION "gvplus_title" FREE
@@ -1291,6 +1296,9 @@ FindNewest:
 ; frame: back to the dispatch $3D40 (same input) until the extra steps are used up or a scroll
 ; ($C814) / a cave entrance (mode $11) started; the tail runs once.
 StepH:                           ; (only A and the flags change: the tail may use the other registers)
+    ld a,(OptEasyCave)
+    or a
+    call nz,CaveEasy
     ld a,(OptWalk)
     or a
     jr z,@tail
@@ -1336,6 +1344,134 @@ StepH:                           ; (only A and the flags change: the tail may us
 
     ld a,(ix+$10)                ; the original instruction
     jp Leave16
+
+; EASY CAVE ENTRY (from StepH, after every 1-pixel step on the overworld). The game enters a cave only when
+; a step ends exactly on the entrance cell's point (x = 16 n, y = 16 n + 8: $3DC7, shared by all four step
+; handlers) and the terrain there is 0 (an opening). Here: the entrance point nearest to the hero (and the
+; other one when he is exactly half-way, 8 pixels off), if this step brought him closer to it (so walking
+; out of a cave never pulls him back in) and he was already within 16 pixels of it (a continuous walk, not
+; a screen change): the hero is put on that point and the game's own entry follows ($C813 = 1, mode $11,
+; +$1D = $FF, +$1E = 0, as at $3DE9).
+CaveEasy:
+    ld a,($C802)
+    cp 6
+    ret nz
+    ld a,($C814)
+    or a
+    ret nz
+    push bc
+    push de
+    push hl
+    ld a,(ix+2)                  ; the nearest point
+    add a,8
+    and $F0
+    ld c,a
+    ld a,(ix+1)
+    and $F0
+    add a,8
+    ld b,a
+    call @try
+    jr c,@done
+    ld a,(ix+2)                  ; half-way across: also the point to the left
+    and $0F
+    cp 8
+    jr nz,@noleft
+    ld a,c
+    sub 16
+    ld c,a
+    call @try
+    jr c,@done
+    ld a,c
+    add a,16
+    ld c,a
+@noleft:
+    ld a,(ix+1)                  ; half-way down: also the point above
+    and $0F
+    jr nz,@done
+    ld a,b
+    sub 16
+    ld b,a
+    call @try
+    jr c,@done
+    ld a,(ix+2)
+    and $0F
+    cp 8
+    jr nz,@done
+    ld a,c
+    sub 16
+    ld c,a
+    call @try
+@done:
+    ld a,(ix+2)
+    ld (CaveLastX),a
+    ld a,(ix+1)
+    ld (CaveLastY),a
+    pop hl
+    pop de
+    pop bc
+    ret
+@try:                            ; B = y, C = x of an entrance point: carry = entered
+    ld a,c                       ; inside the playfield (x 16..240, y 8..184)
+    sub 16
+    cp 225
+    ret nc
+    ld a,b
+    sub 8
+    cp 177
+    ret nc
+    ld a,(CaveLastX)             ; the distance before this step (each axis within 16)
+    ld e,c
+    call AbsDiff
+    cp 17
+    ret nc
+    ld d,a
+    ld a,(CaveLastY)
+    ld e,b
+    call AbsDiff
+    cp 17
+    ret nc
+    add a,d
+    ld d,a
+    ld a,(ix+2)                  ; ... and now
+    ld e,c
+    call AbsDiff
+    ld h,a
+    ld a,(ix+1)
+    ld e,b
+    call AbsDiff
+    add a,h
+    cp d
+    ret nc                       ; not closer
+    ld l,(ix+1)
+    ld h,(ix+2)
+    ld (ix+1),b                  ; the terrain at the point ($2D06 with A = 0, as the game's test)
+    ld (ix+2),c
+    push hl
+    push bc
+    xor a
+    call $2D06
+    pop bc
+    pop hl
+    or a
+    jr z,@in
+    ld (ix+1),l                  ; not an opening: the hero stays where he is
+    ld (ix+2),h
+    or a
+    ret
+@in:
+    ld a,1
+    ld ($C813),a
+    ld a,$11
+    ld ($C802),a
+    ld (ix+$1D),$FF
+    ld (ix+$1E),0
+    scf
+    ret
+AbsDiff:                         ; A = |A - E|
+    sub e
+    ret nc
+    neg
+    ret
 
 ; ===== the map (Pause on the overworld + button 2) =====
 ; Remembered per game: MapVis (screens seen: marked when a screen is loaded, $193D) and MapEnt (caves /
@@ -2709,10 +2845,13 @@ HintPart:                        ; HL -> glyph: each line rotated right by HintS
     ret
 
 ; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
-OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1, 0     ; the original game
-OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11, 3  ; number of values
-OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2, 1     ; 0 OFF / ON, 1 a name from OptNames, 2 0X..10X
-OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0, SpeedNames
+OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0     ; the original game
+OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11, 3, 2  ; number of values
+OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2, 1, 0     ; 0 OFF / ON, 1 a name from OptNames, 2 0X..10X
+OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0, SpeedNames, 0
+OptPages:    .DW OptPage0, OptPage1               ; the options on each page (storage numbers), $FF = end
+OptPage0:    .DB 0, 1, 2, 3, 10, 4, 9, 5, $FF     ; fixes and helpers
+OptPage1:    .DB 6, 7, 8, $FF                     ; multipliers
 
 OptSum:                          ; HL -> OPT_N bytes: A = their check byte
     ld b,OPT_N
@@ -2732,19 +2871,36 @@ OptLoad:                         ; battery RAM -> OptVals; missing, damaged or o
     ld de,Tmp
     ld bc,OPT_N+1
     call Stub_Sram
+    ld c,OPT_N                   ; OPT_N options + check byte, else an older block (10 = before EASY CAVE
+@try:                            ; ENTRY, 9 = before OVERWORLD SPEED)
     ld hl,Tmp
-    call OptSum
-    ld hl,Tmp+OPT_N
-    cp (hl)
-    jr z,@valid
-    ld hl,Tmp                    ; saved before OVERWORLD SPEED existed: 9 options + their check byte
-    ld b,OPT_N-1
+    ld b,c
     call OptSumB
-    ld hl,Tmp+OPT_N-1
+    ld e,c
+    ld d,0
+    ld hl,Tmp
+    add hl,de
     cp (hl)
-    jr nz,@def
-    xor a
-    ld (hl),a                    ; OVERWORLD SPEED: the default
+    jr z,@found
+    dec c
+    ld a,c
+    cp OPT_N-2
+    jr nc,@try
+    jr @def
+@found:                          ; the options newer than the block: their defaults
+    ld a,c
+    cp OPT_N
+    jr nc,@valid
+    ld e,c
+    ld d,0
+    ld hl,OptDefaults
+    add hl,de
+    ld a,(hl)
+    ld hl,Tmp
+    add hl,de
+    ld (hl),a
+    inc c
+    jr @found
 @valid:
     ld hl,Tmp
     ld de,OptCount
@@ -2788,9 +2944,10 @@ OptSave:                         ; OptVals -> battery RAM (with our header when 
     ld bc,OPT_N+1
     jp Stub_Sram
 
-; the page: title row 0, option n on row 2 + 2n (label column 3, value column 22, arrow column 1,
-; '*' at column 30 when the value is the original game's), help on row 22, the '*' legend on row 23.
-; Up / down = row, left = previous value, right / button 1 = next value, button 2 = save and back.
+; the page: title row 0, page option n on row 2 + 2n (label column 3, value column 22, arrow column 1, '*' at
+; column 30 when the value is the original game's), the PAGE row on row 20, help on row 22, the '*' legend
+; on row 23. Up / down = row, left = previous value, right / button 1 = next value (on the PAGE row: the
+; other page), button 2 = save and back.
 OptionsPage:
     call PageOpen
     ld hl,$2000+StarTile*32      ; our '*' (colour 15 = every plane, as the font)
@@ -2801,6 +2958,7 @@ OptionsPage:
     call NtCentre
     xor a
     ld (OptCur),a
+    ld (OptPage),a
     ld bc,12+256*0
     call NtAt
     ld hl,StrOptTitle
@@ -2808,14 +2966,7 @@ OptionsPage:
     ld hl,StrOptHelp
     ld (HelpText),hl
     call DrawHelp
-    ld a,OPT_N-1
-@rows:
-    push af
-    call OptDrawRow
-    pop af
-    dec a
-    jp p,@rows
-    call OptCursors
+    call OptDrawPage
     call PageShow
 @loop:
     call WaitFrame
@@ -2827,26 +2978,52 @@ OptionsPage:
     ld a,(OptCur)
     bit 0,b
     jr z,@notup
+    or a                         ; up: first option -> PAGE row -> last option
+    jr nz,@up1
+    ld a,OPT_PAGEPOS
+    jr @move
+@up1:
+    cp OPT_PAGEPOS
+    jr nz,@up2
+    call OptRows
+@up2:
     dec a
-    jp p,@move
-    ld a,OPT_N-1
     jr @move
 @notup:
     bit 1,b
     jr z,@notdown
-    inc a
-    cp OPT_N
-    jr c,@move
+    cp OPT_PAGEPOS               ; down: last option -> PAGE row -> first option
+    jr nz,@dn1
     xor a
+    jr @move
+@dn1:
+    inc a
+    ld c,a
+    call OptRows
+    cp c
+    ld a,c
+    jr nz,@move
+    ld a,OPT_PAGEPOS
 @move:
     ld (OptCur),a
     call OptCursors
     jp @loop
 @notdown:
-    ld c,a                       ; the option
+    ld c,a                       ; the position
     ld a,b
     and $1C                      ; left, right, button 1
     jp z,@loop
+    ld a,c
+    cp OPT_PAGEPOS
+    jr nz,@value
+    ld a,(OptPage)               ; the PAGE row: the other page
+    xor 1
+    ld (OptPage),a
+    call OptDrawPage
+    jp @loop
+@value:
+    call OptIndex
+    ld c,a                       ; the option
     ld e,c
     ld d,0
     ld hl,OptCount
@@ -2873,15 +3050,97 @@ OptionsPage:
     xor a
 @set:
     ld (hl),a
-    ld a,c
+    ld a,(OptCur)
     call OptDrawRow
     jp @loop
 @back:
     call OptSave
     jp PageClose
 
+OptList:                         ; HL -> the current page's option list (DE changes)
+    ld a,(OptPage)
+    add a,a
+    ld e,a
+    ld d,0
+    ld hl,OptPages
+    add hl,de
+    ld a,(hl)
+    inc hl
+    ld h,(hl)
+    ld l,a
+    ret
+OptRows:                         ; A = the number of options on this page (BC, DE, HL kept)
+    push bc
+    push de
+    push hl
+    call OptList
+    ld b,0
+@count:
+    ld a,(hl)
+    inc a
+    jr z,@got
+    inc b
+    inc hl
+    jr @count
+@got:
+    ld a,b
+    pop hl
+    pop de
+    pop bc
+    ret
+OptIndex:                        ; A = position on the page -> A = the option (BC, DE, HL kept)
+    push de
+    push hl
+    push af
+    call OptList
+    pop af
+    ld e,a
+    ld d,0
+    add hl,de
+    ld a,(hl)
+    pop hl
+    pop de
+    ret
+
+OptDrawPage:                     ; rows 2-20: this page's options, the PAGE row, the cursor
+    ld a,OPT_PAGEPOS
+@clear:
+    push af
+    add a,a
+    add a,2
+    ld b,a
+    ld c,3
+    call NtAt
+    ld b,28
+    call NtSpaces
+    pop af
+    dec a
+    jp p,@clear
+    call OptRows
+@rows:
+    or a
+    jr z,@page
+    dec a
+    push af
+    call OptDrawRow
+    pop af
+    jr @rows
+@page:
+    ld bc,3+256*20
+    call NtAt
+    ld hl,StrPage
+    call NtPrint
+    ld bc,22+256*20
+    call NtAt
+    ld a,(OptPage)
+    inc a
+    call NtDigit
+    ld a,$6E                     ; '/' (MAP "/": a quoted '/' would be ASCII $2F)
+    call NtChar
+    ld a,2
+    call NtDigit
 OptCursors:                      ; the arrow at the row under the cursor, spaces elsewhere
-    ld a,OPT_N-1
+    ld a,OPT_PAGEPOS
 @each:
     push af
     add a,a
@@ -2903,8 +3162,11 @@ OptCursors:                      ; the arrow at the row under the cursor, spaces
     jp p,@each
     ret
 
-OptDrawRow:                      ; A = row (0..OPT_N-1): its label, value and '*' when it is the original
+OptDrawRow:                      ; A = position on the page: its option's label, value and '*' when it is the original
+    ld (Tmp+13),a
+    call OptIndex
     ld (Tmp+15),a
+    ld a,(Tmp+13)
     add a,a
     add a,2
     ld b,a
@@ -2921,7 +3183,7 @@ OptDrawRow:                      ; A = row (0..OPT_N-1): its label, value and '*
     ld h,(hl)
     ld l,a
     call NtPrint
-    ld a,(Tmp+15)
+    ld a,(Tmp+13)
     add a,a
     add a,2
     ld b,a
@@ -2996,7 +3258,7 @@ OptDrawRow:                      ; A = row (0..OPT_N-1): its label, value and '*
     ld l,a
     jp NtPrint
 
-OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9
+OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9, @l10
 @l0: .ASC "TEXT FIXES"
      .DB 0
 @l1: .ASC "MAP FIXES"
@@ -3017,6 +3279,10 @@ OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9
      .DB 0
 @l9: .ASC "OVERWORLD SPEED"
      .DB 0
+@l10: .ASC "EASY CAVE ENTRY"
+     .DB 0
+StrPage:     .ASC "PAGE"
+             .DB 0
 ReachNames:  .DW StrOff, @r1, @r2
 @r1: .ASC "4 PIXELS"
      .DB 0
@@ -3641,6 +3907,8 @@ StartPosH:                       ; $1391: the hero's start position (and the loa
 
 ; --- option hooks (Hook_* in bank 1: entered with Enter16, back with Leave16 = the game's bank, AF kept) ---
 MapH:                            ; $193D: the screen just loaded ($C80D) is seen (the map); MAP FIXES: its room record is at $CAD0
+    ld a,$FF                     ; EASY CAVE ENTRY: no previous step on this screen yet (a loaded save, a
+    ld (CaveLastY),a             ; teleport, back out of a cave: the first step never counts as "closer")
     push hl
     ld a,($C80D)
     cp 182

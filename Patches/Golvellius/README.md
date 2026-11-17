@@ -41,6 +41,7 @@ header checksum with `python -I Tools/sms_checksum.py <rom>`.
 | 8 | Follow-ups from the user's play (2026-11-17): Winkle's "GAME SAVED TO AUTO." garbled after a Pause save (font offset left over) fixed; with a save the title's cursors start on CONTINUE / SAVE and the SAVE page on the newest save (save number per slot); the status screen says "1  SAVE GAME" | done |
 | 9 | OPTIONS: OVERWORLD SPEED 1X / 1.5X / 2X (10 options; the battery RAM block grows by one byte, older blocks still load, an out-of-range value resets only its option); '*' after the original game's values, RESET TO DEFAULTS removed (user's choice) | done |
 | 10 | The map: Pause + button 2 = a 13 x 14 grid of the screens seen (area colours, dot = cave entered, your screen blinks), button 1 = the screen's page (area, the cave's person / item / price / BOUGHT, advice text; only for caves entered), kept per save slot (battery RAM `$8300 + 64 n`) | done |
+| 11 | OPTIONS on two pages (PAGE row; page 2 = the multipliers), EASY CAVE ENTRY (enter a cave when the hero is within 8 px of the entrance point on both axes and the step brought him closer; snapped onto the point, then the game's own entry), help / prompt lines centred with our own ':', play time h:mm, multipliers 0X..10X | done |
 
 ## Notes
 
