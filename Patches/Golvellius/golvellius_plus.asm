@@ -30,7 +30,11 @@
 ;   Once a slot is used, the title's cursors start on CONTINUE and on SAVE.
 ; Step 6: OPTIONS page (title -> OPTIONS): TEXT FIXES, MAP FIXES, SWORD HIT FIX, CAVE DOWN SPEED,
 ;   KEEP GOLD, GOLD DROPS / DAMAGE DEALT / DAMAGE RECEIVED x0-x10, OVERWORLD SPEED 1X-4X (the hero's
-;   1-pixel overworld step runs up to 4 times per frame, with every check of the game), RESET TO DEFAULTS. Kept in battery
+;   1-pixel overworld step runs up to 2 times per frame, with every check of the game); '*' marks the
+;   original game's values.
+; The map: the overworld's Pause screen + button 2 = a 13 x 14 grid of the screens seen in this game
+;   (area colours, a dot = its cave entered, your screen blinks), button 1 on a square = its page (area,
+;   what its cave holds, the advice text; only for caves entered); kept with every save slot. Kept in battery
 ;   RAM (not shown as a slot), loaded into RAM at the first frame wait after power-on, so everything,
 ;   the intro demo included, uses them; saved when the page is left. Every default = the original game.
 ;   What each does (hooks below): TEXT FIXES = the 5 typos of the English ROM (PASSWARD, 3 x GOLD for
@@ -59,6 +63,8 @@
 ;   $8010 the options (OptVals, 10 bytes: the index of each chosen value), $801A their check byte
 ;     (sum xor $5A); missing / damaged / out of range = the defaults; a block saved by level 4 (9
 ;     options, check byte $8019) is still read (OVERWORLD SPEED then 1X)
+;   $8300 + 64 * n  slot n's map: +0 $A5, +1 the screens seen (23 bytes), +24 the caves entered (23),
+;     +47 check byte (sum xor $5A); missing = an empty map (a slot saved before the map existed)
 ;   $8100 + 64 * n  slot n (0 = AUTO, 1-5): +0 $A5 = used, +1 screen, +2 hero y, +3 hero x,
 ;     +4 play time (frames, seconds, minutes BCD, hours BCD), +8 $C84C (screen tile-set flag),
 ;     +9 $C817, +10 $C839-$C84B (19), +29 $C86E-$C878 (11), +40 save number (word: the highest
@@ -156,6 +162,26 @@ MAP "/" = $6E
 .DEFINE StepLeft    $C0F6        ; OVERWORLD SPEED: extra steps left in this frame
 .DEFINE StepFlags   $C0F7        ; bit 0 = an extra step is running, bit 1 = 1.5X: this frame has one
 .DEFINE StarTile    $BA          ; OPTIONS page: our '*' (title tiles 256+$BA, VRAM $3740)
+; the map (Pause + button 2): in the free buffer after SlotBuf
+.DEFINE MapVis      $CB58        ; 23: the overworld screens seen in this game (bit n & 7 of byte n / 8)
+.DEFINE MapEnt      $CB6F        ; 23: the screens whose cave / dungeon the hero has been inside
+.DEFINE MapBytes    46           ; MapVis + MapEnt (a slot's map block: $A5, these, check byte)
+.DEFINE MapCur      $CB86        ; the screen under the cursor
+.DEFINE MapTick     $CB87        ; frames on the page (blinking)
+.DEFINE MapSlot     $CB88        ; SaveSlot: the slot being written
+.DEFINE MapHold     $CB89        ; frames a direction is held (repeat)
+.DEFINE MapS        $CB8A        ; scratch: a screen
+.DEFINE MapS2       $CB8B
+.DEFINE MapCid      $CB8C        ; CaveLines: the screen's cave id
+.DEFINE MapCode     $CB8D        ; CaveLines: what the cave offers
+.DEFINE MapLo       $CB8E        ; CaveLines: its price (BCD, x100)
+.DEFINE MapHi       $CB8F
+.DEFINE MapRow      $CB90        ; text row
+.DEFINE MapCol      $CB91        ; text column count
+.DEFINE MapTry      $CB92
+.DEFINE MapK        $CB93
+.DEFINE MT0         $3A          ; map tiles (Pause screen, low set): per colour k = 0..8: L, L + dot, R
+.DEFINE MT_CUR      MT0+27       ; the cursor: L, R
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -442,6 +468,7 @@ Exit_LoadGame:                   ; a slot was loaded into RAM: the game's LAST G
 
 Stub_ReadB12:                    ; A = the byte at HL in bank 12 (the font asset), back to bank 16
     ld a,12
+Stub_ReadB:                      ; A = bank: A = the byte at HL there, back to bank 16 (BC, DE, HL kept)
     ld ($FFFF),a
     ld a,(hl)
     push af
@@ -480,11 +507,11 @@ Stub_PauseWait:                  ; from $2942: the wait (paused: no play time), 
     ret nz
     call ReadPad
     ld a,(PadNew)
-    and $10
+    and $30                      ; button 1 = SAVE GAME, button 2 = the map
     ret z
     pop hl                       ; (back into the pause loop later by jp $291F)
     call Map16
-    jp PauseSave
+    jp PauseButton
 Stub_Winkle:                     ; from bank 7 $9138: the password, then the AUTO save
     ld a,7                       ; (bank 7 is in slot 2 already: says so for the recompiler)
     ld ($FFFF),a
@@ -984,6 +1011,21 @@ PlayTick:
     ret c
     cp $13
     ret nc
+    cp $11                       ; inside a cave room ($11) or a dungeon (7, 8, boss $0A): the map's "entered"
+    jr z,@ent
+    cp 7
+    jr z,@ent
+    cp 8
+    jr z,@ent
+    cp $0A
+    jr nz,@time
+@ent:
+    ld a,($C80D)                 ; (the overworld screen of the entrance; 182 = the New Game start area)
+    cp 182
+    jr nc,@time
+    ld hl,MapEnt
+    call MarkSet
+@time:
     ld hl,PlayTime
     inc (hl)
     ld a,(hl)
@@ -1115,6 +1157,7 @@ ReadSlot:                        ; A = slot -> SlotBuf; carry set = empty or dam
     ret
 
 SaveSlot:                        ; A = slot, B = hero y, C = x, D = start screen, SvFlag = its $C84C: the game -> battery RAM
+    ld (MapSlot),a               ; (its map block follows the record)
     push af
     push bc
     push de
@@ -1170,7 +1213,8 @@ SaveSlot:                        ; A = slot, B = hero y, C = x, D = start screen
     ex de,hl
     ld hl,SlotBuf
     ld bc,64
-    jp Stub_Sram
+    call Stub_Sram
+    jp SaveMap
 
 ; A = the newest save slot (the highest save number; slots saved before save numbers existed have 0:
 ; then the slot loaded last if it is used, else the first used one); carry = no slot is used.
@@ -1271,7 +1315,1083 @@ StepH:                           ; (only A and the flags change: the tail may us
     ld a,(ix+$10)                ; the original instruction
     jp Leave16
 
-; $293F: the overworld's status screen is drawn, the display still off: "1  SAVE GAME" under its frame.
+; ===== the map (Pause on the overworld + button 2) =====
+; Remembered per game: MapVis (screens seen: marked when a screen is loaded, $193D) and MapEnt (caves /
+; dungeons entered: marked by the frame tick in modes $11 / 7 / 8 / $0A), kept with every save slot in
+; battery RAM $8300 + 64 n ($A5, the 46 bytes, check byte = sum xor $5A). The page: a 13 x 14 grid on the
+; Pause screen's name table, seen screens in their area's colour (a dot = its cave entered), your screen
+; blinks white, the cursor blinks as a frame; button 1 on a seen screen = its page (area, what its cave
+; holds, the advice text; only for caves entered, like the PC HUD), arrows there = the next seen screen
+; that way. Cave data: screen -> room bank 5 $9890, room record $9947 (+3 = cave id); area id bank 5
+; $9E48 (low nibble, 0 = the previous screen's); bank 7: people $8CDA, offers / advice $8C8F, prices
+; $8D87, herb caves $944A, texts $967C, boss names $933C (length-prefixed DESPA .. HAIDEE).
+
+PauseButton:                     ; the Pause (status) screen: button 1 = SAVE GAME, button 2 = the map
+    ld a,(PadNew)
+    and $10
+    jp nz,PauseSave
+    jp PauseMap
+
+BitPtr:                          ; A = screen, HL = a bit set -> HL = its byte, A = its mask (BC, DE kept)
+    push bc
+    ld c,a
+    srl a
+    srl a
+    srl a
+    add a,l
+    ld l,a
+    jr nc,@nc
+    inc h
+@nc:
+    ld a,c
+    and 7
+    ld b,a
+    ld a,1
+    jr z,@done
+@sh:
+    add a,a
+    djnz @sh
+@done:
+    pop bc
+    ret
+MarkSet:                         ; A = screen, HL = a bit set: set its bit
+    call BitPtr
+    or (hl)
+    ld (hl),a
+    ret
+MapClear:                        ; an empty map
+    ld hl,MapVis
+    ld b,MapBytes
+    xor a
+@c:
+    ld (hl),a
+    inc hl
+    djnz @c
+    ret
+MapAddr:                         ; A = slot -> HL = its map block ($8300 + 64 n)
+    call SlotAddr
+    ld de,$0200
+    add hl,de
+    ret
+SaveMap:                         ; the map -> the block of slot MapSlot
+    ld hl,SlotBuf
+    ld (hl),$A5
+    inc hl
+    ex de,hl
+    ld hl,MapVis
+    ld bc,MapBytes
+    ldir
+    ld hl,SlotBuf
+    ld b,MapBytes+1
+    call OptSumB
+    ld (SlotBuf+MapBytes+1),a
+    ld a,(MapSlot)
+    call MapAddr
+    ex de,hl
+    ld hl,SlotBuf
+    ld bc,MapBytes+2
+    jp Stub_Sram
+LoadMap:                         ; A = slot: its map block -> the map (none / damaged: an empty map)
+    call MapAddr
+    ld de,SlotBuf
+    ld bc,MapBytes+2
+    call Stub_Sram
+    ld a,(SlotBuf)
+    cp $A5
+    jr nz,MapClear
+    ld hl,SlotBuf
+    ld b,MapBytes+1
+    call OptSumB
+    ld hl,SlotBuf+MapBytes+1
+    cp (hl)
+    jr nz,MapClear
+    ld hl,SlotBuf+1
+    ld de,MapVis
+    ld bc,MapBytes
+    ldir
+    ret
+
+DivMod13:                        ; A = screen -> B = row (0-13), C = column (0-12)
+    ld b,0
+@sub:
+    cp 13
+    jr c,@done
+    sub 13
+    inc b
+    jr @sub
+@done:
+    ld c,a
+    ret
+AreaOf:                          ; A = screen -> A = 0 Despa's valley, 1 Rolick's desert, 2 graveyard, 3 swamp,
+    ld c,a                       ; 4 lake, 5 Crawky's forest, 6 Haidee's forest, 7 unknown
+    ld e,a
+    ld d,0
+    ld hl,$9E48
+    add hl,de
+    ld a,5
+    call Stub_ReadB
+    and 15
+    jr nz,@id
+    ld a,c
+    or a
+    jr z,@id
+    dec hl
+    ld a,5
+    call Stub_ReadB
+    and 15
+@id:
+    cp 1
+    jr nz,@other
+    ld a,c                       ; area 1: the valley (rows 12-14) or the desert above it
+    cp 11*13
+    ld a,0
+    ret nc
+    inc a
+    ret
+@other:
+    ld e,a
+    ld d,0
+    ld hl,AreaIndex
+    add hl,de
+    ld a,(hl)
+    ret
+AreaIndex:   .DB 7, 0, 7, 2, 3, 3, 4, 5, 6, 7, 7, 7, 7, 7, 7, 7
+AreaBoss:    .DB 1, 2, 3, 4, 5, 6, 7
+AreaWords:   .DW StrValley, StrDesert, StrGraveyard, StrSwamp, StrLake, StrForest, StrForest
+CaveId:                          ; A = screen -> A = its cave id (bank 5: screen -> room, room record +3)
+    ld e,a
+    ld d,0
+    ld hl,$9890
+    add hl,de
+    ld a,5
+    call Stub_ReadB
+    ld l,a
+    ld h,0
+    ld e,l
+    ld d,h
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    or a
+    sbc hl,de                    ; room * 7
+    ld de,$9947+3
+    add hl,de
+    ld a,5
+    jp Stub_ReadB
+
+PrintScreen:                     ; A = screen: "L13"
+    call DivMod13
+    ld a,c
+    add a,'A'
+    call NtChar
+    ld a,b
+    inc a
+    cp 10
+    jr c,@one
+    sub 10
+    push af
+    ld a,1
+    call NtDigit
+    pop af
+@one:
+    jp NtDigit
+PrintBoss:                       ; A = 1-8: the boss's name (the game's list in bank 7; 8 = ours); C = its last letter
+    cp 8
+    jr nz,@list
+    ld hl,StrGolvellius
+    call NtPrint
+    ld c,'S'
+    ret
+@list:
+    ld b,a
+    ld hl,$933C
+@skip:
+    dec b
+    jr z,@print
+    ld a,7
+    call Stub_ReadB
+    inc a
+    add a,l
+    ld l,a
+    jr nc,@skip
+    inc h
+    jr @skip
+@print:
+    ld a,7
+    call Stub_ReadB
+    ld b,a
+    inc hl
+@ch:
+    ld a,7
+    call Stub_ReadB
+    ld c,a
+    call NtChar
+    inc hl
+    djnz @ch
+    ret
+PrintPoss:                       ; after a name ending in C: "'S " or "' "
+    ld a,c
+    cp 'S'
+    ld hl,StrPossS
+    jp z,NtPrint
+    ld hl,StrPoss
+    jp NtPrint
+PrintArea:                       ; A = screen: "DESPA'S VALLEY" (nothing for an unknown area)
+    call AreaOf
+    cp 7
+    ret z
+    ld (MapK),a
+    ld e,a
+    ld d,0
+    ld hl,AreaBoss
+    add hl,de
+    ld a,(hl)
+    call PrintBoss
+    call PrintPoss
+    ld a,(MapK)
+    add a,a
+    ld e,a
+    ld d,0
+    ld hl,AreaWords
+    add hl,de
+    ld a,(hl)
+    inc hl
+    ld h,(hl)
+    ld l,a
+    jp NtPrint
+
+Bought:                          ; A = cave id $B0+ -> A = 1 bought / taken, 0 not, $FF has no flag (herbs)
+    sub $B0
+    ld c,a
+    ld e,0
+    ld hl,$944A
+    ld b,12
+@h:
+    ld a,7
+    call Stub_ReadB
+    cp c
+    jr z,@none
+    jr nc,@stop
+    inc e
+    inc hl
+    djnz @h
+@stop:
+    ld a,c
+    sub e
+    ld c,a
+    srl a
+    srl a
+    srl a
+    ld e,a
+    ld d,0
+    ld hl,$C86F
+    add hl,de
+    ld a,c
+    and 7
+    ld b,a
+    ld a,1
+    jr z,@m
+@sh:
+    add a,a
+    djnz @sh
+@m:
+    and (hl)
+    ret z
+    ld a,1
+    ret
+@none:
+    ld a,$FF
+    ret
+
+CaveLines:                       ; A = screen: what its cave holds, rows MapRow / MapRow+1 from column 2
+    ld (MapS2),a
+    call CaveId
+    ld (MapCid),a
+    ld a,(MapRow)
+    ld b,a
+    ld c,2
+    call NtAt
+    ld a,(MapCid)
+    or a
+    jr z,@house
+    ld a,(MapS2)
+    ld hl,MapEnt
+    call BitPtr
+    and (hl)
+    jr nz,@known
+    ld hl,StrCaveQ
+    jp NtPrint
+@house:
+    ld hl,StrStartHouse
+    jp NtPrint
+@known:
+    ld a,(MapCid)
+    cp $10
+    jr nc,@nd
+    ld hl,StrDungeon             ; a dungeon: "DESPA'S CAVE"
+    call NtPrint
+    ld a,(MapCid)
+    call PrintBoss
+    call PrintPoss
+    ld hl,StrCave
+    jp NtPrint
+@nd:
+    cp $50
+    jr nc,@np
+    rrca                         ; Randar, Enny, Winkle, Dina
+    rrca
+    rrca
+    rrca
+    and 15
+    ld e,a
+    ld d,0
+    ld hl,$8CDA
+    add hl,de
+    ld a,7
+    call Stub_ReadB
+    dec a
+    cp 4
+    jr nc,@cave
+    add a,a
+    ld e,a
+    ld d,0
+    ld hl,PeopleStr
+    jp @word
+@np:
+    cp $B0
+    jr nc,@offer
+    ld hl,StrAdvice
+    jp NtPrint
+@cave:
+    ld hl,StrCave
+    jp NtPrint
+@offer:
+    ld e,a
+    ld d,0
+    ld hl,$8C8F
+    add hl,de
+    ld a,7
+    call Stub_ReadB
+    ld (MapCode),a
+    cp $33
+    jr c,@item
+    cp $36
+    jr nc,@cave
+    ld hl,StrOldWoman
+    jp NtPrint
+@item:
+    sub $28
+    jr c,@cave
+    add a,a
+    ld e,a
+    ld d,0
+    ld hl,OfferStr
+    add hl,de
+    ld a,(hl)
+    inc hl
+    ld h,(hl)
+    ld l,a
+    call NtPrint
+    ld a,(MapCid)                ; its price: 3 BCD digits x 100 gold, high nibble of the 2nd byte = crystal - 1
+    sub $B0
+    add a,a
+    ld e,a
+    ld d,0
+    ld hl,$8D87
+    add hl,de
+    ld a,7
+    call Stub_ReadB
+    ld (MapLo),a
+    inc hl
+    ld a,7
+    call Stub_ReadB
+    ld (MapHi),a
+    ld a,(MapCode)
+    cp $2A
+    jr nz,@line2
+    ld a,$40
+    call NtChar
+    ld a,(MapHi)
+    rrca
+    rrca
+    rrca
+    rrca
+    and 15
+    inc a
+    call NtDigit
+@line2:
+    ld a,(MapRow)
+    inc a
+    ld b,a
+    ld c,2
+    call NtAt
+    ld a,(MapCode)
+    cp $30
+    jr z,@free
+    ld a,(MapHi)
+    and 15
+    ld b,a
+    ld a,(MapLo)
+    or b
+    jr z,@free
+    ld a,(MapHi)
+    and 15
+    ld c,a
+    jr z,@d2
+    call NtDigit
+@d2:
+    ld a,(MapLo)
+    rrca
+    rrca
+    rrca
+    rrca
+    and 15
+    ld b,a
+    or c
+    jr z,@d3
+    ld a,b
+    call NtDigit
+@d3:
+    ld a,(MapLo)
+    and 15
+    call NtDigit
+    ld hl,StrGoldPrice
+    call NtPrint
+    jr @status
+@free:
+    ld hl,StrFree
+    call NtPrint
+@status:
+    ld a,(MapCid)
+    call Bought
+    or a
+    ret z
+    inc a
+    ret z
+    ld hl,StrBought
+    ld a,(MapCode)
+    cp $30
+    jr nz,@b
+    ld hl,StrTaken
+@b:
+    jp NtPrint
+@word:
+    add hl,de
+    ld a,(hl)
+    inc hl
+    ld h,(hl)
+    ld l,a
+    jp NtPrint
+PeopleStr:   .DW StrRandar, StrEnny, StrWinkle, StrDina
+OfferStr:    .DW StrO28, StrO29, StrO2A, StrO2B, StrO2C, StrO2D, StrO2E, StrO2F, StrO30, StrO31, StrO32
+
+TypoFix:                         ; A = the bank-7 character at HL: TEXT FIXES applied (as TextH)
+    push bc
+    push de
+    ld c,a
+    ld a,(OptText)
+    or a
+    jr z,@done
+    push hl
+    ex de,hl
+    ld hl,TypoTable
+    ld b,(TypoEnd-TypoTable)/3
+@scan:
+    ld a,(hl)
+    inc hl
+    cp e
+    jr nz,@skip
+    ld a,(hl)
+    cp d
+    jr nz,@skip
+    inc hl
+    ld c,(hl)
+    jr @found
+@skip:
+    inc hl
+    inc hl
+    djnz @scan
+@found:
+    pop hl
+@done:
+    ld a,c
+    pop de
+    pop bc
+    ret
+MapTextChar:                     ; A = a character of the game's texts: printed; carry = a column was used
+    cp $41
+    jr c,@sym
+    cp $5B
+    jr nc,@sym
+@put:
+    call NtChar
+    scf
+    ret
+@sym:
+    or a
+    jr nz,@s1
+    ld a,$40                     ; $00 = space
+    jr @put
+@s1:
+    cp $5B
+    jr c,@s2
+    cp $60
+    jr c,@put                    ; . ' ! , ?
+@s2:
+    cp $2C
+    jr nz,@s3
+    ld a,$5B
+    jr @put
+@s3:
+    cp $6C
+    jr z,@put
+    cp $6F
+    jr z,@q
+    cp $70
+    jr nz,@s4
+@q:
+    ld a,$5C                     ; quotes as '
+    jr @put
+@s4:
+    cp $CD
+    jr nz,@s5
+    ld a,$40                     ; '-' (not in the font) as a space
+    jr @put
+@s5:
+    cp $DF
+    jr c,@no
+    cp $E9
+    jr nc,@no
+    sub $DF
+    call NtDigit
+    scf
+    ret
+@no:
+    or a
+    ret
+MapAdvice:                       ; A = cave id $50-$AF: the person's text from row MapRow (up to its first command)
+    ld e,a
+    ld d,0
+    ld hl,$8C8F
+    add hl,de
+    ld a,7
+    call Stub_ReadB              ; the text number
+    add a,a
+    ld e,a
+    ld d,0
+    ld hl,$967C
+    add hl,de
+    ld a,7
+    call Stub_ReadB
+    ld e,a
+    inc hl
+    ld a,7
+    call Stub_ReadB
+    ld d,a
+    ex de,hl
+    inc hl                       ; 2 header bytes
+    inc hl
+    xor a
+    ld (MapCol),a
+    call @row
+@ch:
+    ld a,7
+    call Stub_ReadB
+    call TypoFix
+    inc hl
+    cp $FF
+    jr z,@nl
+    cp $F0
+    ret nc
+    call MapTextChar
+    jr nc,@ch
+    ld a,(MapCol)
+    inc a
+    ld (MapCol),a
+    cp 29
+    jr c,@ch
+@nl:
+    ld a,(MapRow)
+    inc a
+    ld (MapRow),a
+    cp 22
+    ret nc
+    xor a
+    ld (MapCol),a
+    call @row
+    jr @ch
+@row:
+    ld a,(MapRow)
+    ld b,a
+    ld c,2
+    jp NtAt
+
+MapClearNt:                      ; the whole name table: spaces (display off)
+    ld hl,$3800
+    di
+    call SetVramAddr
+    ld bc,32*24
+@c:
+    ld a,(NtTileOfs)
+    add a,$40
+    out ($BE),a
+    xor a
+    out ($BE),a
+    dec bc
+    ld a,b
+    or c
+    jr nz,@c
+    ei
+    ret
+ClearRow:                        ; B = row: columns 1-30 spaces
+    ld c,1
+    call NtAt
+    ld b,30
+    jp NtSpaces
+
+MapTiles:                        ; tiles MT0..: per colour (MapTileCols) L, L with a dot, R; then the cursor L, R
+    ld hl,MT0*32
+    di
+    call SetVramAddr
+    ld de,MapTileCols
+@col:
+    ld a,(de)
+    or a
+    jr z,@cursor
+    ld (Tmp+10),a
+    push de
+    ld hl,ShapeL
+    call @tile
+    ld hl,ShapeLDot
+    call @tile
+    ld hl,ShapeR
+    call @tile
+    pop de
+    inc de
+    jr @col
+@cursor:
+    xor a
+    ld (Tmp+10),a
+    ld hl,ShapeCurL
+    call @tile
+    ld hl,ShapeCurR
+    call @tile
+    ei
+    ret
+@tile:                           ; HL -> 8 x (mask in the colour, mask in colour 15): 32 bytes
+    ld b,8
+@row:
+    ld a,(Tmp+10)
+    ld c,a
+    ld d,(hl)
+    inc hl
+    ld e,(hl)
+    inc hl
+    push bc
+    ld b,4
+@plane:
+    xor a
+    rr c
+    jr nc,@p0
+    ld a,d
+@p0:
+    or e
+    out ($BE),a
+    djnz @plane
+    pop bc
+    djnz @row
+    ret
+MapTileCols: .DB 1, 2, 3, 4, 5, 6, 7, 8, 15, 0     ; area k = 0..7 -> colour k + 1; 8 = white (your screen)
+ShapeL:      .DB $FF,0, $FF,0, $FF,0, $FF,0, $FF,0, $FF,0, $FF,0, 0,0
+ShapeLDot:   .DB $FF,0, $FF,0, $F9,$06, $F9,$06, $F9,$06, $FF,0, $FF,0, 0,0
+ShapeR:      .DB $FC,0, $FC,0, $FC,0, $FC,0, $FC,0, $FC,0, $FC,0, 0,0
+ShapeCurL:   .DB 0,$FF, 0,$80, 0,$80, 0,$80, 0,$80, 0,$80, 0,$FF, 0,0
+ShapeCurR:   .DB 0,$FC, 0,$04, 0,$04, 0,$04, 0,$04, 0,$04, 0,$FC, 0,0
+MapPal:      .DB $00, $06, $1F, $26, $09, $34, $0C, $18, $15, $00, $00, $00, $00, $00, $00, $3F
+
+MapSquare:                       ; A = screen: its square on the grid (2 tiles at row 3 + y, column 4 + 2 x)
+    ld (MapS),a
+    call DivMod13
+    ld a,b
+    add a,3
+    ld b,a
+    ld a,c
+    add a,a
+    add a,4
+    ld c,a
+    call NtAt
+    ld a,(MapS)
+    ld hl,MapCur
+    cp (hl)
+    jr nz,@nc
+    ld a,(MapTick)
+    and 16
+    jr z,@nc
+    ld a,MT_CUR
+    call NtTile
+    ld a,MT_CUR+1
+    jp NtTile
+@nc:
+    ld a,(MapS)
+    ld hl,MapVis
+    call BitPtr
+    and (hl)
+    jr nz,@vis
+    ld a,$40
+    call NtChar
+    ld a,$40
+    jp NtChar
+@vis:
+    ld a,(MapS)
+    ld hl,$C80D
+    cp (hl)
+    jr nz,@area
+    ld a,(MapTick)
+    and 8
+    ld a,8
+    jr nz,@k
+@area:
+    ld a,(MapS)
+    call AreaOf
+@k:
+    ld e,a
+    add a,a
+    add a,e
+    add a,MT0
+    ld e,a
+    ld a,(MapS)
+    ld hl,MapEnt
+    call BitPtr
+    and (hl)
+    ld a,e
+    jr z,@l
+    inc a
+@l:
+    call NtTile
+    ld a,e
+    add a,2
+    jp NtTile
+
+MapCurInfo:                      ; rows 18-21: the cursor's screen
+    ld b,18
+    call ClearRow
+    ld b,19
+    call ClearRow
+    ld b,20
+    call ClearRow
+    ld b,21
+    call ClearRow
+    ld bc,2+256*18
+    call NtAt
+    ld a,(MapCur)
+    call PrintScreen
+    ld hl,StrGap2
+    call NtPrint
+    ld a,(MapCur)
+    ld hl,MapVis
+    call BitPtr
+    and (hl)
+    jr nz,@vis
+    ld hl,StrNotSeen
+    jp NtPrint
+@vis:
+    ld a,(MapCur)
+    call PrintArea
+    ld a,20
+    ld (MapRow),a
+    ld a,(MapCur)
+    jp CaveLines
+
+MapGrid:                         ; the whole grid page (display off)
+    call MapClearNt
+    ld bc,11+256*1               ; (row 0 is partly hidden on the Pause screen)
+    call NtAt
+    ld hl,StrWorldMap
+    call NtPrint
+    ld d,13                      ; column letters
+    ld c,4
+    ld e,'A'
+@let:
+    ld b,2
+    call NtAt
+    ld a,e
+    call NtChar
+    inc e
+    inc c
+    inc c
+    dec d
+    jr nz,@let
+    ld d,0                       ; row numbers
+@num:
+    ld a,d
+    add a,3
+    ld b,a
+    ld c,1
+    call NtAt
+    ld a,d
+    inc a
+    cp 10
+    jr c,@n1
+    sub 10
+    push af
+    ld a,1
+    call NtDigit
+    pop af
+    jr @n2
+@n1:
+    push af
+    ld a,$40
+    call NtChar
+    pop af
+@n2:
+    call NtDigit
+    inc d
+    ld a,d
+    cp 14
+    jr nz,@num
+    xor a
+@sq:
+    push af
+    call MapSquare
+    pop af
+    inc a
+    cp 182
+    jr nz,@sq
+    call MapCurInfo
+    ld hl,StrMapHelp
+    ld (HelpText),hl
+    jp DrawHelp
+
+MapStep:                         ; A = screen, E = direction bits (up, down, left, right) -> A = the neighbour; carry = none
+    ld d,a
+    call DivMod13
+    bit 0,e
+    jr z,@nu
+    ld a,b
+    or a
+    scf
+    ret z
+    ld a,d
+    sub 13
+    or a
+    ret
+@nu:
+    bit 1,e
+    jr z,@nd
+    ld a,b
+    cp 13
+    scf
+    ret z
+    ld a,d
+    add a,13
+    or a
+    ret
+@nd:
+    bit 2,e
+    jr z,@nl
+    ld a,c
+    or a
+    scf
+    ret z
+    ld a,d
+    dec a
+    or a
+    ret
+@nl:
+    bit 3,e
+    scf
+    ret z
+    ld a,c
+    cp 12
+    scf
+    ret z
+    ld a,d
+    inc a
+    or a
+    ret
+MapNext:                         ; E = direction: MapCur = the next seen screen that way; carry = none
+    ld a,(MapCur)
+@step:
+    call MapStep
+    ret c
+    ld (MapTry),a
+    ld hl,MapVis
+    call BitPtr
+    and (hl)
+    ld a,(MapTry)
+    jr z,@step
+    ld (MapCur),a
+    or a
+    ret
+MapDir:                          ; -> A = the direction bits to act on this frame (a press, or held: repeat)
+    ld a,(PadNew)
+    and $0F
+    jr z,@held
+    ld b,a
+    xor a
+    ld (MapHold),a
+    ld a,b
+    ret
+@held:
+    ld a,($C806)
+    and $0F
+    jr nz,@h
+    ld (MapHold),a
+    ret
+@h:
+    ld b,a
+    ld hl,MapHold
+    ld a,(hl)
+    cp 200
+    jr nc,@rep
+    inc (hl)
+@rep:
+    ld a,(hl)
+    cp 16
+    jr c,@no
+    and 3
+    jr nz,@no
+    ld a,b
+    ret
+@no:
+    xor a
+    ret
+
+PauseMap:                        ; from the Pause (status) screen, button 2
+    call ScreenOff
+    call GameNt
+    ld a,$C0                     ; the font as for SAVE GAME: characters $40-$6F -> tiles $00-$2F,
+    ld (NtTileOfs),a             ; digits -> $30-$39 (inside the status tiles, reloaded afterwards)
+    ld a,$30
+    ld (NtDigit0),a
+    ld hl,0
+    ld (UpLo),hl
+    ld hl,48*8
+    ld (UpCnt),hl
+    ld hl,$0000
+    ld (UpDst),hl
+    call UnpackFont
+    ld hl,($DF-$40)*8
+    ld (UpLo),hl
+    ld hl,80
+    ld (UpCnt),hl
+    ld hl,$0600
+    ld (UpDst),hl
+    call UnpackFont
+    call MapTiles
+    ld hl,MapPal                 ; the game's: 16 colours -> $C060, uploaded at the next frame
+    call $0490
+    ld a,($C80D)
+    ld (MapCur),a
+    xor a
+    ld (MapHold),a
+    ld a,16
+    ld (MapTick),a
+@full:
+    call MapGrid
+    call ScreenOn
+@loop:
+    call WaitPaused
+    ld hl,MapTick
+    inc (hl)
+    ld a,(hl)
+    and 7
+    jr nz,@keys
+    ld a,($C80D)                 ; blinking: your screen and the cursor
+    call MapSquare
+    ld a,(MapCur)
+    call MapSquare
+@keys:
+    call ReadPad
+    ld a,(PadNew)
+    ld b,a
+    and $20
+    jr nz,@back
+    bit 4,b
+    jr nz,@open
+    call MapDir
+    or a
+    jr z,@loop
+    ld e,a
+    ld a,(MapCur)
+    ld (MapTry),a
+    call MapStep
+    jr c,@loop
+    ld (MapCur),a
+    ld a,16
+    ld (MapTick),a
+    ld a,(MapTry)
+    call MapSquare
+    ld a,(MapCur)
+    call MapSquare
+    call MapCurInfo
+    jr @loop
+@open:
+    ld a,(MapCur)
+    ld hl,MapVis
+    call BitPtr
+    and (hl)
+    jr z,@loop
+    call MapInfo
+    call ScreenOff
+    ld a,16
+    ld (MapTick),a
+    jr @full
+@back:
+    call ScreenOff
+    call Stub_Unpause72          ; as after SAVE GAME: the overworld's name table back, then the status screen
+    jp $291F
+
+MapInfo:                         ; the cursor's screen page; arrows = the next seen screen that way, 2 = back
+    call ScreenOff
+    call MapClearNt
+    ld bc,2+256*2
+    call NtAt
+    ld a,(MapCur)
+    call PrintScreen
+    ld hl,StrGap2
+    call NtPrint
+    ld a,(MapCur)
+    call PrintArea
+    ld a,4
+    ld (MapRow),a
+    ld a,(MapCur)
+    call CaveLines
+    ld a,(MapCid)
+    cp $50
+    jr c,@help
+    cp $B0
+    jr nc,@help
+    ld a,(MapCur)
+    ld hl,MapEnt
+    call BitPtr
+    and (hl)
+    jr z,@help
+    ld a,7
+    ld (MapRow),a
+    ld a,(MapCid)
+    call MapAdvice
+@help:
+    ld hl,StrMapInfoHelp
+    ld (HelpText),hl
+    call DrawHelp
+    call ScreenOn
+@loop:
+    call WaitPaused
+    call ReadPad
+    ld a,(PadNew)
+    ld b,a
+    and $20
+    ret nz
+    ld a,b
+    and $0F
+    jr z,@loop
+    ld e,a
+    call MapNext
+    jr c,@loop
+    jr MapInfo
+
+; $293F: the overworld's status screen is drawn, the display still off: "1  SAVE GAME  2  MAP" under it.
 ; The status screen uses tiles $00-$73; unpausing reloads $0000-$13BF (asset $B0), so tiles $74-$8B
 ; take the font's characters $40-$56 (space .. V) and the digit 1.
 PauseHintH:
@@ -1287,14 +2407,14 @@ PauseHintH:
     ld hl,$74*32
     ld (UpDst),hl
     call UnpackFont
-    ld hl,($E0-$40)*8            ; the digit 1 (font tile $E0)
+    ld hl,($E0-$40)*8            ; the digits 1 and 2 (font tiles $E0, $E1)
     ld (UpLo),hl
-    ld hl,8
+    ld hl,16
     ld (UpCnt),hl
     ld hl,$8B*32
     ld (UpDst),hl
     call UnpackFont
-    ld bc,10+256*22              ; row 22 (under the frame), column 10
+    ld bc,5+256*22               ; row 22 (under the frame), column 5
     call NtAt
     ld hl,StrPauseHint
     call NtPrint
@@ -2039,6 +3159,8 @@ LoadSlot:                        ; SlotBuf (valid) -> the game's RAM, then LAST 
     ld de,$C86E
     ld bc,11
     ldir
+    ld a,(SaveCur)               ; the slot's map (an older slot: none, the map starts empty)
+    call LoadMap
     ld a,1
     ld (LoadPending),a
     ld a,(SaveCur)
@@ -2189,7 +3311,8 @@ WaitPaused:                      ; one frame without play time
     jp $07C7
 
 ; game-start hooks (Hook_* in bank 1: entered with Enter16, back with Leave16)
-NewGameH:                        ; $12C8 New Game: play time 0, no pending load, then the original code
+NewGameH:                        ; $12C8 New Game: play time 0, an empty map, no pending load, then the original code
+    call MapClear
     xor a
     ld hl,PlayTime
     ld (hl),a
@@ -2229,7 +3352,15 @@ StartPosH:                       ; $1391: the hero's start position (and the loa
     jp Leave16                   ; (-> 7 x nop, $139B)
 
 ; --- option hooks (Hook_* in bank 1: entered with Enter16, back with Leave16 = the game's bank, AF kept) ---
-MapH:                            ; $193D MAP FIXES: the room record of the screen just loaded is at $CAD0
+MapH:                            ; $193D: the screen just loaded ($C80D) is seen (the map); MAP FIXES: its room record is at $CAD0
+    push hl
+    ld a,($C80D)
+    cp 182
+    jr nc,@seen
+    ld hl,MapVis
+    call MarkSet
+@seen:
+    pop hl
     ld a,(OptMap)
     or a
     jr z,@done
@@ -2696,7 +3827,85 @@ StrOverwrite:  .ASC "OVERWRITE?   NO    YES"
                .DB 0, 14, 20
 StrSaved:      .ASC "     SAVED."
                .DB 0
-StrPauseHint:  .ASC "1  SAVE GAME"
+StrPauseHint:  .ASC "1  SAVE GAME     2  MAP"
+               .DB 0
+StrWorldMap:   .ASC "WORLD MAP"
+               .DB 0
+StrMapHelp:    .ASC "1  OPEN        2  BACK"
+               .DB 0
+StrMapInfoHelp: .ASC "ARROWS  NEXT    2  BACK"
+               .DB 0
+StrGap2:       .ASC "  "
+               .DB 0
+StrNotSeen:    .ASC "NOT SEEN YET"
+               .DB 0
+StrCaveQ:      .ASC "CAVE  ?"
+               .DB 0
+StrStartHouse: .ASC "START HOUSE"
+               .DB 0
+StrDungeon:    .ASC "DUNGEON  "
+               .DB 0
+StrCave:       .ASC "CAVE"
+               .DB 0
+StrAdvice:     .ASC "ADVICE"
+               .DB 0
+StrOldWoman:   .ASC "THE OLD WOMAN"
+               .DB 0
+StrRandar:     .ASC "RANDAR  POWER FOR GOLD"
+               .DB 0
+StrEnny:       .ASC "ENNY  POWER FOR GOLD"
+               .DB 0
+StrWinkle:     .ASC "WINKLE  PASSWORD"
+               .DB 0
+StrDina:       .ASC "DINA  GOLD FOR POWER"
+               .DB 0
+StrO28:        .ASC "POTION OF LIFE"
+               .DB 0
+StrO29:        .ASC "BIBLE"
+               .DB 0
+StrO2A:        .ASC "CRYSTAL"
+               .DB 0
+StrO2B:        .ASC "SWORD"
+               .DB 0
+StrO2C:        .ASC "SHIELD"
+               .DB 0
+StrO2D:        .ASC "PENDANT"
+               .DB 0
+StrO2E:        .ASC "BOOTS"
+               .DB 0
+StrO2F:        .ASC "RING THAT BREAKS ROCK"
+               .DB 0
+StrO30:        .ASC "RING FOR THE OLD WOMAN"
+               .DB 0
+StrO31:        .ASC "HERB MEA"
+               .DB 0
+StrO32:        .ASC "MAGIC MIRROR"
+               .DB 0
+StrGoldPrice:  .ASC "00 GOLD"
+               .DB 0
+StrFree:       .ASC "FREE"
+               .DB 0
+StrBought:     .ASC "    BOUGHT"
+               .DB 0
+StrTaken:      .ASC "    TAKEN"
+               .DB 0
+StrGolvellius: .ASC "GOLVELLIUS"
+               .DB 0
+StrPoss:       .ASC "'S "
+               .DB 0
+StrPossS:      .ASC "' "
+               .DB 0
+StrValley:     .ASC "VALLEY"
+               .DB 0
+StrDesert:     .ASC "DESERT"
+               .DB 0
+StrGraveyard:  .ASC "GRAVEYARD"
+               .DB 0
+StrSwamp:      .ASC "SWAMP"
+               .DB 0
+StrLake:       .ASC "LAKE"
+               .DB 0
+StrForest:     .ASC "FOREST"
                .DB 0
 StrSaveAsk:    .ASC "SAVE THIS GAME?  NO   YES"
                .DB 0, 18, 23
