@@ -26,6 +26,10 @@
 ; Step 5: saving into SLOT 1-5: on the overworld's Pause (status) screen button 1 opens SAVE GAME
 ;   (the hero's screen and position; a used slot asks OVERWRITE?), and after Game Over's password the
 ;   game asks SAVE THIS GAME? (NO first; such a save continues at L14 like LAST GAME CONTINUE).
+; Step 6: OPTIONS page (title -> OPTIONS): TEXT FIXES, MAP FIXES, SWORD HIT FIX, CAVE DOWN SPEED,
+;   KEEP GOLD, GOLD DROPS / DAMAGE DEALT / DAMAGE RECEIVED x0-x10, RESET TO DEFAULTS. Kept in battery
+;   RAM (not shown as a slot), loaded into RAM at the first frame wait after power-on, so everything,
+;   the intro demo included, uses them; saved when the page is left. Every default = the original game.
 ;
 ; Memory: banks 0 and 1 are always in slots 0/1 ($0000-$7FFF; the game never remaps them),
 ; slot 2 ($8000-$BFFF) is switched by the game (register $FFFF) and also shows the battery RAM
@@ -42,6 +46,8 @@
 ;
 ; Battery RAM (8 KB is enough; a real board needs battery RAM, emulators and flash carts have it):
 ;   $8000 "GVPLUS", format 1, slot loaded last
+;   $8010 the options (OptVals, 8 bytes: the index of each chosen value), $8018 their check byte
+;     (sum xor $5A); missing / damaged / out of range = the defaults
 ;   $8100 + 64 * n  slot n (0 = AUTO, 1-5): +0 $A5 = used, +1 screen, +2 hero y, +3 hero x,
 ;     +4 play time (frames, seconds, minutes BCD, hours BCD), +8 $C84C (screen tile-set flag),
 ;     +9 $C817, +10 $C839-$C84B (19), +29 $C86E-$C878 (11), +40..+62 0, +63 checksum
@@ -116,6 +122,18 @@ MAP "/" = $6E
 .DEFINE UpCnt       $C0CC        ; 2
 .DEFINE UpDst       $C0CE        ; 2: ... and writes them to VRAM from UpDst
 .DEFINE SavedBank   $C0D0        ; Enter16 / Leave16: the slot-2 bank of the game code a hook came from
+.DEFINE OptVals     $C0D1        ; 8: the options (index of the chosen value; OptDefaults = the original game)
+.DEFINE OptText     OptVals+0    ; TEXT FIXES       0 off, 1 on
+.DEFINE OptMap      OptVals+1    ; MAP FIXES        0 off, 1 on
+.DEFINE OptSword    OptVals+2    ; SWORD HIT FIX    0 off, 1 on
+.DEFINE OptCave     OptVals+3    ; CAVE DOWN SPEED  0 = speed 2 (original), 1 = 3, 2 = 4
+.DEFINE OptKeepGold OptVals+4    ; KEEP GOLD        0 off (a continue halves the gold), 1 on
+.DEFINE OptGold     OptVals+5    ; GOLD DROPS       x0..x10 (1 = original)
+.DEFINE OptDealt    OptVals+6    ; DAMAGE DEALT     x0..x10
+.DEFINE OptRecv     OptVals+7    ; DAMAGE RECEIVED  x0..x10
+.DEFINE OPT_N       8
+.DEFINE OptLoaded   $C0D9        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
+.DEFINE OptCur      $C0DA        ; OPTIONS page: the row under the cursor (OPT_N = RESET TO DEFAULTS)
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -373,8 +391,7 @@ TopMenuSel:                      ; MenuSel already set
     call ClearMenuRows           ; START
     jp Exit_NewGameMenu
 @options:
-    ld hl,PageOptions
-    call ShowPage
+    call OptionsPage
     ld a,1
     ld (MenuSel),a
     jr TopMenuSel
@@ -522,39 +539,6 @@ SetNameTable:                    ; A = VDP register 2
     out ($BF),a
     ei
     ret
-
-; a page of fixed strings: HL = 0-ended list of strings (column, row, text, 0); returns on button 2
-ShowPage:
-    push hl
-    call PageOpen
-    pop hl
-@string:
-    ld e,(hl)
-    inc hl
-    ld d,(hl)
-    inc hl
-    ld a,d
-    or e
-    jr z,@shown
-    push hl
-    ex de,hl
-    ld c,(hl)
-    inc hl
-    ld b,(hl)
-    inc hl
-    call NtAt
-    call NtPrint
-    pop hl
-    jr @string
-@shown:
-    call PageShow
-@wait:
-    call WaitFrame
-    call ReadPad
-    ld a,(PadNew)
-    and $20                      ; button 2 = back
-    jr z,@wait
-    jp PageClose
 
 ; --- writing into a name table (works with the display on: one character at a time) ---
 NtAt:                            ; B = row, C = column of the name table NtBaseHi
@@ -766,6 +750,9 @@ UnpackFont:
 
 ; --- play time (every frame wait): only while a game runs (modes 5-$12; not the title, not Game Over) ---
 PlayTick:
+    ld a,(OptLoaded)             ; the first frame wait after power-on: the options from the battery RAM
+    or a
+    call z,OptLoad
     ld a,($C802)
     cp 5
     ret c
@@ -945,6 +932,313 @@ SaveSlot:                        ; A = slot, B = hero y, C = x, D = start screen
     ld hl,SlotBuf
     ld bc,64
     jp Stub_Sram
+
+; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
+OptDefaults: .DB 0, 0, 0, 0, 0, 1, 1, 1     ; the original game
+OptCount:    .DB 2, 2, 2, 3, 2, 11, 11, 11  ; number of values
+OptKinds:    .DB 0, 0, 0, 1, 0, 2, 2, 2     ; 0 OFF / ON, 1 a speed name, 2 X0..X10
+
+OptSum:                          ; HL -> OPT_N bytes: A = their check byte
+    ld b,OPT_N
+    xor a
+@add:
+    add a,(hl)
+    inc hl
+    djnz @add
+    xor $5A
+    ret
+
+OptLoad:                         ; battery RAM -> OptVals; missing, damaged or out of range = the defaults
+    ld a,1
+    ld (OptLoaded),a
+    ld hl,$8010
+    ld de,Tmp
+    ld bc,OPT_N+1
+    call Stub_Sram
+    ld hl,Tmp
+    call OptSum
+    ld hl,Tmp+OPT_N
+    cp (hl)
+    jr nz,@def
+    ld hl,Tmp
+    ld de,OptCount
+    ld b,OPT_N
+@range:
+    ld a,(de)
+    dec a                        ; the highest index
+    cp (hl)
+    jr c,@def
+    inc hl
+    inc de
+    djnz @range
+    ld hl,Tmp
+    jr OptCopy
+@def:
+OptReset:
+    ld hl,OptDefaults
+OptCopy:
+    ld de,OptVals
+    ld bc,OPT_N
+    ldir
+    ret
+
+OptSave:                         ; OptVals -> battery RAM (with our header when the battery RAM has none yet)
+    call SramPrepare
+    ld hl,OptVals
+    ld de,Tmp
+    ld bc,OPT_N
+    ldir
+    ld hl,Tmp
+    call OptSum
+    ld (Tmp+OPT_N),a
+    ld hl,Tmp
+    ld de,$8010
+    ld bc,OPT_N+1
+    jp Stub_Sram
+
+; the page: title row 1, option n on row 3 + 2n (label column 3, value column 22, arrow column 1),
+; RESET TO DEFAULTS last, help on row 22. Up / down = row, left = previous value, right / button 1 =
+; next value, button 1 on RESET = asks NO / YES, button 2 = save and back.
+OptionsPage:
+    call PageOpen
+    xor a
+    ld (OptCur),a
+    ld bc,12+256*1
+    call NtAt
+    ld hl,StrOptTitle
+    call NtPrint
+    ld hl,StrOptHelp
+    ld (HelpText),hl
+    call DrawHelp
+    ld a,OPT_N
+@rows:
+    push af
+    call OptDrawRow
+    pop af
+    dec a
+    jp p,@rows
+    call OptCursors
+    call PageShow
+@loop:
+    call WaitFrame
+    call ReadPad
+    ld a,(PadNew)
+    ld b,a
+    and $20
+    jp nz,@back
+    ld a,(OptCur)
+    bit 0,b
+    jr z,@notup
+    dec a
+    jp p,@move
+    ld a,OPT_N
+    jr @move
+@notup:
+    bit 1,b
+    jr z,@notdown
+    inc a
+    cp OPT_N+1
+    jr c,@move
+    xor a
+@move:
+    ld (OptCur),a
+    call OptCursors
+    jp @loop
+@notdown:
+    cp OPT_N
+    jr z,@reset
+    ld c,a                       ; the option
+    ld a,b
+    and $1C                      ; left, right, button 1
+    jp z,@loop
+    ld e,c
+    ld d,0
+    ld hl,OptCount
+    add hl,de
+    ld a,(hl)
+    ld (Tmp+14),a                ; number of values
+    ld hl,OptVals
+    add hl,de
+    ld a,(hl)
+    bit 2,b
+    jr z,@next
+    dec a                        ; left
+    jp p,@set
+    ld a,(Tmp+14)
+    dec a
+    jr @set
+@next:
+    inc a
+    push hl
+    ld hl,Tmp+14
+    cp (hl)
+    pop hl
+    jr c,@set
+    xor a
+@set:
+    ld (hl),a
+    ld a,c
+    call OptDrawRow
+    jp @loop
+@reset:
+    bit 4,b
+    jp z,@loop
+    xor a                        ; are you sure? (NO first)
+    ld (SubSel),a
+    ld hl,StrOptReset
+    call SubDraw
+@ask:
+    call SubKeys
+    jr z,@ask
+    jr c,@asked                  ; button 2 = no
+    ld a,(SubSel)
+    or a
+    jr z,@asked
+    call OptReset
+    ld a,OPT_N-1
+@redraw:
+    push af
+    call OptDrawRow
+    pop af
+    dec a
+    jp p,@redraw
+@asked:
+    call DrawHelp
+    jp @loop
+@back:
+    call OptSave
+    jp PageClose
+
+OptCursors:                      ; the arrow at the row under the cursor, spaces elsewhere
+    ld a,OPT_N
+@each:
+    push af
+    add a,a
+    add a,3
+    ld b,a
+    ld c,1
+    call NtAt
+    pop af
+    push af
+    ld hl,OptCur
+    cp (hl)
+    ld a,$40
+    jr nz,@put
+    ld a,$61
+@put:
+    call NtChar
+    pop af
+    dec a
+    jp p,@each
+    ret
+
+OptDrawRow:                      ; A = row (0..OPT_N): its label and value
+    ld (Tmp+15),a
+    add a,a
+    add a,3
+    ld b,a
+    ld c,3
+    call NtAt
+    ld a,(Tmp+15)
+    add a,a
+    ld e,a
+    ld d,0
+    ld hl,OptLabels
+    add hl,de
+    ld a,(hl)
+    inc hl
+    ld h,(hl)
+    ld l,a
+    call NtPrint
+    ld a,(Tmp+15)
+    cp OPT_N
+    ret z                        ; RESET TO DEFAULTS: no value
+    add a,a
+    add a,3
+    ld b,a
+    ld c,22
+    call NtAt
+    push bc
+    ld b,8
+    call NtSpaces
+    pop bc
+    call NtAt
+    ld a,(Tmp+15)
+    ld e,a
+    ld d,0
+    ld hl,OptKinds
+    add hl,de
+    ld b,(hl)
+    ld hl,OptVals
+    add hl,de
+    ld a,(hl)                    ; the value's index
+    dec b
+    jp m,@onoff
+    jr z,@speed
+    push af                      ; X0..X10
+    ld a,'X'
+    call NtChar
+    pop af
+    cp 10
+    jp c,NtDigit
+    ld a,1
+    call NtDigit
+    xor a
+    jp NtDigit
+@onoff:
+    ld hl,StrOff
+    or a
+    jp z,NtPrint
+    ld hl,StrOn
+    jp NtPrint
+@speed:
+    add a,a
+    ld e,a
+    ld d,0
+    ld hl,SpeedNames
+    add hl,de
+    ld a,(hl)
+    inc hl
+    ld h,(hl)
+    ld l,a
+    jp NtPrint
+
+OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8
+@l0: .ASC "TEXT FIXES"
+     .DB 0
+@l1: .ASC "MAP FIXES"
+     .DB 0
+@l2: .ASC "SWORD HIT FIX"
+     .DB 0
+@l3: .ASC "CAVE DOWN SPEED"
+     .DB 0
+@l4: .ASC "KEEP GOLD"
+     .DB 0
+@l5: .ASC "GOLD DROPS"
+     .DB 0
+@l6: .ASC "DAMAGE DEALT"
+     .DB 0
+@l7: .ASC "DAMAGE RECEIVED"
+     .DB 0
+@l8: .ASC "RESET TO DEFAULTS"
+     .DB 0
+SpeedNames:  .DW @s0, @s1, @s2
+@s0: .ASC "1X"
+     .DB 0
+@s1: .ASC "1.5X"
+     .DB 0
+@s2: .ASC "2X"
+     .DB 0
+StrOff:      .ASC "OFF"
+             .DB 0
+StrOn:       .ASC "ON"
+             .DB 0
+StrOptTitle: .ASC "OPTIONS"
+             .DB 0
+StrOptHelp:  .ASC "1  CHANGE      2  BACK"
+             .DB 0
+StrOptReset: .ASC "DEFAULTS?    NO    YES"
+             .DB 0, 14, 20
 
 ; Winkle made the password (we are in his cave room, bank 7 code below us): AUTO = this game,
 ; position = the cave's entrance cell (where the game puts the hero when he leaves), and a line
@@ -1587,17 +1881,6 @@ StrPassword: .DB 12, 20
 StrSave:     .DB 12, 22
              .ASC "SAVE"
              .DB 0
-
-PageOptions: .DW @t1, @t2, @t3, 0
-@t1: .DB 12, 3
-     .ASC "OPTIONS"
-     .DB 0
-@t2: .DB 7, 10
-     .ASC "NOTHING HERE YET."
-     .DB 0
-@t3: .DB 8, 20
-     .ASC "BUTTON 2  BACK"
-     .DB 0
 
 StrSaveTitle:  .ASC "SAVE"
                .DB 0
