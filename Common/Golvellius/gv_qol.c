@@ -24,9 +24,11 @@
  *    the tail runs once, with (ix+5) = the facing before the frame's first step (else a turn in the first
  *    step was never seen and the sword, which takes its direction from the sprite frame $C103, swung the
  *    old way for up to 8 frames).
- *  EASY CAVE ENTRY (Plus CaveEasy, from the same hook after every step): the game enters a cave only on
- *    the entrance cell's exact point (x 16 n, y 16 n + 8, $3DC7) with terrain 0 ($2D06); here also when the
- *    hero is near it: the nearest point (+ the other one when exactly 8 px off on an axis), only if this
+ *  EASY CAVE ENTRY OFF / HALF / QUARTER (Plus CaveEasy, from the same hook after every step): the game
+ *    enters a cave only on the entrance cell's exact point (x 16 n, y 16 n + 8, $3DC7) with terrain 0
+ *    ($2D06); here also when the hero is near it: the nearest point (+ the other one when exactly 8 px off
+ *    on an axis); HALF = in line with it on one axis, QUARTER = up to 8 px off on both (the hero turns only
+ *    on 8-px lines, so finer steps make no difference); only if this
  *    step brought him closer and the previous step was within 16 px on both axes (reset when the mode
  *    leaves 6, on a scroll, a teleport); then the hero is put on the point and the game's entry writes
  *    follow ($C813 = 1, mode $11, +$1D = $FF, +$1E = 0).
@@ -97,7 +99,8 @@ static const char *const k_cinfo[] = { "ENTERED CAVES", "ALL CAVES (SPOILER)" };
 static const char *const k_dmap[] = { "EXPLORED PART", "WHOLE DUNGEON" };
 /* value names as on the Golvellius Plus OPTIONS page */
 static const char *const k_reach[] = { "OFF (ORIGINAL)", "4 PIXELS", "8 PIXELS" };
-static const char *const k_speed[] = { "1X (ORIGINAL)", "1.5X", "2X" };   /* CAVE DOWN SPEED, OVERWORLD SPEED */
+static const char *const k_easy[]  = { "OFF (ORIGINAL)", "HALF", "QUARTER" };   /* EASY CAVE ENTRY */
+static const char *const k_speed[] ={ "1X (ORIGINAL)", "1.5X", "2X" };   /* CAVE DOWN SPEED, OVERWORLD SPEED */
 static const char *const k_mult[] = { "0X", "1X (ORIGINAL)", "2X", "3X", "4X", "5X", "6X", "7X", "8X", "9X", "10X" };
 static const char *const k_dina[] = { "150 GOLD (ORIGINAL)", "2600 GOLD (ALIANGER)" };
 static const char *const k_tp[]   = { "OFF (ORIGINAL)", "VISITED SCREENS", "PASSWORD CAVES" };
@@ -186,7 +189,7 @@ static void load_config(void)
         else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "cave_down_fast")) s_down_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;   /* 1 = 1.5X (older inis: 0 / 1) */
         else if (!strcmp(key, "overworld_speed")) s_walk_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
-        else if (!strcmp(key, "easy_cave_entry")) s_easy_i = v != 0;
+        else if (!strcmp(key, "easy_cave_entry")) s_easy_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "keep_gold")) s_keep_i = v != 0;
         else if (!strcmp(key, "overworld_music")) s_music_i = v < 0 ? 0 : v > 5 ? 5 : (int)v;
         else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
@@ -219,7 +222,7 @@ static void save_config(void)
     if (!s_plus) fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
     if (!s_plus) fprintf(f, "cave_down_fast = %d     ; top-down caves, moving down: 0 = original, 1 = 1.5x as fast (Alianger's idea), 2 = 2x\n", s_down_i);
     if (!s_plus) fprintf(f, "overworld_speed = %d    ; walking on the overworld: 0 = original, 1 = 1.5x, 2 = 2x\n", s_walk_i);
-    if (!s_plus) fprintf(f, "easy_cave_entry = %d    ; 1 = walking at a cave entrance from close by enters it (original: only exactly in line)\n", s_easy_i);
+    if (!s_plus) fprintf(f, "easy_cave_entry = %d    ; enter a cave without lining up exactly: 1 = half of you over the entrance, 2 = already a quarter (0 = original)\n", s_easy_i);
     if (!s_plus) fprintf(f, "keep_gold      = %d     ; 1 = a continue keeps all the gold (original: halved)\n", s_keep_i);
     fprintf(f, "overworld_music = %d    ; 0 = the game's choice (by sword + shield), 1..5 = that theme once unlocked\n", s_music_i);
     fprintf(f, "fm_sound       = %d     ; sound chip: 0 = PSG (original: Western consoles have no FM unit), 1 = FM (Japanese FM Sound Unit)\n", s_fm_i);
@@ -260,7 +263,7 @@ static HudOption k_opts[] = {          /* not const: TEXT FIXES gets k_notfound 
     { "SWORD REACH",    k_reach,    3, &s_reach_i,  NULL },
     { "CAVE DOWN SPEED", k_speed,   3, &s_down_i,   NULL },
     { "OVERWORLD SPEED", k_speed,   3, &s_walk_i,   NULL },
-    { "EASY CAVE ENTRY", k_onoff,   2, &s_easy_i,   NULL },
+    { "EASY CAVE ENTRY", k_easy,    3, &s_easy_i,   NULL },
     { "KEEP GOLD",      k_onoff,    2, &s_keep_i,   NULL },
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
     { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },
@@ -660,6 +663,7 @@ static bool cave_try(uint16_t ix, uint8_t y, uint8_t x)
     if (dx >= 17 || dy >= 17) return false;                  /* the previous step was within 16 px */
     uint8_t hy = sms_read8((uint16_t)(ix + 1)), hx = sms_read8((uint16_t)(ix + 2));
     if ((uint8_t)(absd(hx, x) + absd(hy, y)) >= (uint8_t)(dx + dy)) return false;   /* not closer */
+    if (s_easy_i == 1 && absd(hx, x) && absd(hy, y)) return false;   /* HALF: in line on one axis (QUARTER: any) */
     sms_write8((uint16_t)(ix + 1), y); sms_write8((uint16_t)(ix + 2), x);
     Z80State keep = g_z80;
     g_z80.a = 0;

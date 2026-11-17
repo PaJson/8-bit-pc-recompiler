@@ -153,7 +153,7 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 .DEFINE OptDealt    OptVals+7    ; DAMAGE DEALT     x0..x10
 .DEFINE OptRecv     OptVals+8    ; DAMAGE RECEIVED  x0..x10
 .DEFINE OptWalk     OptVals+9    ; OVERWORLD SPEED  0 = 1X (original), 1 = 1.5X, 2 = 2X
-.DEFINE OptEasyCave OptVals+10   ; EASY CAVE ENTRY  0 off (original), 1 on
+.DEFINE OptEasyCave OptVals+10   ; EASY CAVE ENTRY  0 off (original), 1 HALF (half the hero over it), 2 QUARTER
 .DEFINE OPT_N       11
 .DEFINE OptLoaded   $C0F5        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
 .DEFINE ReachBox    $C0DC        ; 8: SWORD REACH: the box last widened, per sword object ($C120, $C140)
@@ -1483,9 +1483,20 @@ CaveEasy:
     ld a,(ix+1)
     ld e,b
     call AbsDiff
+    ld l,a
     add a,h
     cp d
     ret nc                       ; not closer
+    ld a,(OptEasyCave)           ; HALF: in line with the point on one axis (at least half of the hero over
+    dec a                        ; the entrance); QUARTER: any candidate (8 off on both axes = a quarter)
+    jr nz,@near
+    ld a,h
+    or a
+    jr z,@near
+    ld a,l
+    or a
+    ret nz                       ; (carry clear: not entered)
+@near:
     ld l,(ix+1)
     ld h,(ix+2)
     ld (ix+1),b                  ; the terrain at the point ($2D06 with A = 0, as the game's test)
@@ -3540,9 +3551,9 @@ HintPart:                        ; HL -> glyph: each line rotated right by HintS
 
 ; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
 OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0     ; the original game
-OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11, 3, 2  ; number of values
-OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2, 1, 0     ; 0 OFF / ON, 1 a name from OptNames, 2 0X..10X
-OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0, SpeedNames, 0
+OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11, 3, 3  ; number of values
+OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2, 1, 1     ; 0 OFF / ON, 1 a name from OptNames, 2 0X..10X
+OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0, SpeedNames, EasyNames
 OptPages:    .DW OptPage0, OptPage1               ; the options on each page (storage numbers), $FF = end
 OptPage0:    .DB 0, 1, 2, 3, 10, 4, 9, 5, $FF     ; fixes and helpers
 OptPage1:    .DB 6, 7, 8, $FF                     ; multipliers
@@ -3981,6 +3992,11 @@ ReachNames:  .DW StrOff, @r1, @r2
 @r1: .ASC "4 PIXELS"
      .DB 0
 @r2: .ASC "8 PIXELS"
+     .DB 0
+EasyNames:   .DW StrOff, @e1, @e2
+@e1: .ASC "HALF"
+     .DB 0
+@e2: .ASC "QUARTER"
      .DB 0
 SpeedNames:  .DW @s0, @s1, @s2
 @s0: .ASC "1X"

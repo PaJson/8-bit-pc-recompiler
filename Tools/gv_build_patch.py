@@ -69,8 +69,8 @@ at the bottom, left / right there switches):
   MAP FIXES         screen C5 gets its own room, H4 the right cave picture (SMS Power fix)
   SWORD HIT FIX     every new swing can hurt (original: often only knocks back)
   SWORD REACH       the sword's hit area 4 or 8 pixels larger
-  EASY CAVE ENTRY   walk into a cave as soon as half of you is over the entrance (original: only
-                    when you are exactly lined up with it)
+  EASY CAVE ENTRY   walk into a cave when HALF of you is over the entrance, or already a QUARTER
+                    (at a corner); original: only when you are exactly lined up with it
   CAVE DOWN SPEED   walking down in top-down caves 1.5x / 2x as fast
   OVERWORLD SPEED   walking on the overworld 1.5x / 2x as fast
   KEEP GOLD         continuing no longer halves your gold
