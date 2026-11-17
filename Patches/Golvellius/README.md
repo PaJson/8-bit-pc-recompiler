@@ -39,7 +39,7 @@ header checksum with `python -I Tools/sms_checksum.py <rom>`.
 | 6 | OPTIONS (stored in battery RAM, RESET TO DEFAULTS): text / map / sword hit fixes, cave down speed 2 / 3 / 4, multipliers | stage 1 done: bank-1 stubs compacted (117 bytes free for the option hooks); stage 2 done: OPTIONS page, stored in battery RAM ($8010), loaded at power-on; stage 3 done: every option works (+ SWORD REACH) |
 | 7 | PC build (`Games/golvellius-plus`): the HUD shows the ROM's own options (one setting with title -> OPTIONS), the ROM's save slots replace the PC password slots, the world / dungeon maps follow the ROM's slots | done |
 | 8 | Follow-ups from the user's play (2026-11-17): Winkle's "GAME SAVED TO AUTO." garbled after a Pause save (font offset left over) fixed; with a save the title's cursors start on CONTINUE / SAVE and the SAVE page on the newest save (save number per slot); the status screen says "1  SAVE GAME" | done |
-| 9 | OPTIONS: OVERWORLD SPEED 1X-4X (10 options; the battery RAM block grows by one byte, older blocks still load); the OPTIONS page's help moves to row 23 | done |
+| 9 | OPTIONS: OVERWORLD SPEED 1X / 1.5X / 2X (10 options; the battery RAM block grows by one byte, older blocks still load, an out-of-range value resets only its option); '*' after the original game's values, RESET TO DEFAULTS removed (user's choice) | done |
 
 ## Notes
 

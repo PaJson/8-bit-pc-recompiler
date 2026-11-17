@@ -144,7 +144,7 @@ MAP "/" = $6E
 .DEFINE OptGold     OptVals+6    ; GOLD DROPS       x0..x10 (1 = original)
 .DEFINE OptDealt    OptVals+7    ; DAMAGE DEALT     x0..x10
 .DEFINE OptRecv     OptVals+8    ; DAMAGE RECEIVED  x0..x10
-.DEFINE OptWalk     OptVals+9    ; OVERWORLD SPEED  0 = 1 step per frame (original) .. 3 = 4 steps
+.DEFINE OptWalk     OptVals+9    ; OVERWORLD SPEED  0 = 1X (original), 1 = 1.5X, 2 = 2X
 .DEFINE OPT_N       10
 .DEFINE OptLoaded   $C0F5        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
 .DEFINE OptCur      $C0DB        ; OPTIONS page: the row under the cursor (OPT_N = RESET TO DEFAULTS)
@@ -152,8 +152,10 @@ MAP "/" = $6E
 .DEFINE SwingNo     $C0E4        ; SWORD HIT FIX: counts the swings (1..255)
 .DEFINE SwingSeen   $C0E5        ; 13: per enemy object ($C160 + 32 n): the swing that touched it last
 .DEFINE UpEnd       $C0F2        ; 2: UnpackFont: UpLo + UpCnt
-.DEFINE HelpRow     $C0F4        ; the row of DrawHelp / SubDraw (22; 23 on the OPTIONS page)
+.DEFINE HelpRow     $C0F4        ; the row of DrawHelp / SubDraw (22)
 .DEFINE StepLeft    $C0F6        ; OVERWORLD SPEED: extra steps left in this frame
+.DEFINE StepFlags   $C0F7        ; bit 0 = an extra step is running, bit 1 = 1.5X: this frame has one
+.DEFINE StarTile    $BA          ; OPTIONS page: our '*' (title tiles 256+$BA, VRAM $3740)
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -500,7 +502,7 @@ Stub_Winkle:                     ; from bank 7 $9138: the password, then the AUT
 GvPlusId:
     .DB "GOLVELLIUS PLUS", 0     ; 16 bytes
     .DB 1                         ; patch format version
-    .DB 5                         ; step / feature level (5 = OVERWORLD SPEED: 10 options)
+    .DB 6                         ; step / feature level (6 = OVERWORLD SPEED 1X / 1.5X / 2X, 10 options)
 .ENDS
 
 .SECTION "gvplus_title" FREE
@@ -1227,25 +1229,44 @@ FindNewest:
 ; $322C / $3425 / $3766) follows. On the overworld (mode 6) the step runs OptWalk more times per
 ; frame: back to the dispatch $3D40 (same input) until the extra steps are used up or a scroll
 ; ($C814) / a cave entrance (mode $11) started; the tail runs once.
-StepH:
+StepH:                           ; (only A and the flags change: the tail may use the other registers)
     ld a,(OptWalk)
     or a
     jr z,@tail
+    ld a,(StepFlags)
+    bit 0,a
+    jr nz,@more                  ; an extra step of this frame
+    xor 2                        ; the frame's own step: this frame's extra steps (2X: 1, 1.5X: 1 every
+    ld (StepFlags),a             ; other frame)
+    ld a,(OptWalk)
+    cp 2
+    ld a,1
+    jr z,@set
+    ld a,(StepFlags)
+    and 2
+    rrca
+@set:
+    ld (StepLeft),a
+@more:
     ld a,($C802)
     cp 6
-    jr nz,@reset
+    jr nz,@done
     ld a,($C814)
     or a
-    jr nz,@reset
+    jr nz,@done
     ld a,(StepLeft)
     or a
-    jr z,@reset
+    jr z,@done
     dec a
     ld (StepLeft),a
+    ld a,(StepFlags)
+    or 1
+    ld (StepFlags),a
     jp Step_Again
-@reset:
-    ld a,(OptWalk)
-    ld (StepLeft),a
+@done:
+    ld a,(StepFlags)
+    and $FE
+    ld (StepFlags),a
 @tail:
     ld a,(ix+$10)                ; the original instruction
     jp Leave16
@@ -1281,9 +1302,9 @@ PauseHintH:
 
 ; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
 OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1, 0     ; the original game
-OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11, 4  ; number of values
+OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11, 3  ; number of values
 OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2, 1     ; 0 OFF / ON, 1 a name from OptNames, 2 X0..X10
-OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0, WalkNames
+OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0, SpeedNames
 
 OptSum:                          ; HL -> OPT_N bytes: A = their check byte
     ld b,OPT_N
@@ -1319,15 +1340,21 @@ OptLoad:                         ; battery RAM -> OptVals; missing, damaged or o
 @valid:
     ld hl,Tmp
     ld de,OptCount
-    ld b,OPT_N
-@range:
+    ld bc,OptDefaults
+@range:                          ; a value out of range: that option's default
     ld a,(de)
     dec a                        ; the highest index
     cp (hl)
-    jr c,@def
+    jr nc,@inrange
+    ld a,(bc)
+    ld (hl),a
+@inrange:
     inc hl
     inc de
-    djnz @range
+    inc bc
+    ld a,l
+    cp (Tmp+OPT_N)&$FF
+    jr nz,@range
     ld hl,Tmp
     jr OptCopy
 @def:
@@ -1353,13 +1380,31 @@ OptSave:                         ; OptVals -> battery RAM (with our header when 
     ld bc,OPT_N+1
     jp Stub_Sram
 
-; the page: title row 0, option n on row 2 + 2n (label column 3, value column 22, arrow column 1),
-; RESET TO DEFAULTS last (row 22), help on row 23. Up / down = row, left = previous value, right / button 1 =
-; next value, button 1 on RESET = asks NO / YES, button 2 = save and back.
+; the page: title row 0, option n on row 2 + 2n (label column 3, value column 22, arrow column 1,
+; '*' at column 30 when the value is the original game's), help on row 22, the '*' legend on row 23.
+; Up / down = row, left = previous value, right / button 1 = next value, button 2 = save and back.
 OptionsPage:
     call PageOpen
-    ld a,23
-    ld (HelpRow),a
+    ld hl,$2000+StarTile*32      ; our '*' (colour 15 = every plane, as the font)
+    di
+    call SetVramAddr
+    ld hl,StarBits
+    ld b,8
+@star:
+    ld a,(hl)
+    out ($BE),a
+    out ($BE),a
+    out ($BE),a
+    out ($BE),a
+    inc hl
+    djnz @star
+    ei
+    ld bc,9+256*23
+    call NtAt
+    ld a,StarTile
+    call NtTile
+    ld hl,StrOptLegend
+    call NtPrint
     xor a
     ld (OptCur),a
     ld bc,12+256*0
@@ -1369,7 +1414,7 @@ OptionsPage:
     ld hl,StrOptHelp
     ld (HelpText),hl
     call DrawHelp
-    ld a,OPT_N
+    ld a,OPT_N-1
 @rows:
     push af
     call OptDrawRow
@@ -1390,13 +1435,13 @@ OptionsPage:
     jr z,@notup
     dec a
     jp p,@move
-    ld a,OPT_N
+    ld a,OPT_N-1
     jr @move
 @notup:
     bit 1,b
     jr z,@notdown
     inc a
-    cp OPT_N+1
+    cp OPT_N
     jr c,@move
     xor a
 @move:
@@ -1404,8 +1449,6 @@ OptionsPage:
     call OptCursors
     jp @loop
 @notdown:
-    cp OPT_N
-    jr z,@reset
     ld c,a                       ; the option
     ld a,b
     and $1C                      ; left, right, button 1
@@ -1439,37 +1482,12 @@ OptionsPage:
     ld a,c
     call OptDrawRow
     jp @loop
-@reset:
-    bit 4,b
-    jp z,@loop
-    xor a                        ; are you sure? (NO first)
-    ld (SubSel),a
-    ld hl,StrOptReset
-    call SubDraw
-@ask:
-    call SubKeys
-    jr z,@ask
-    jr c,@asked                  ; button 2 = no
-    ld a,(SubSel)
-    or a
-    jr z,@asked
-    call OptReset
-    ld a,OPT_N-1
-@redraw:
-    push af
-    call OptDrawRow
-    pop af
-    dec a
-    jp p,@redraw
-@asked:
-    call DrawHelp
-    jp @loop
 @back:
     call OptSave
     jp PageClose
 
 OptCursors:                      ; the arrow at the row under the cursor, spaces elsewhere
-    ld a,OPT_N
+    ld a,OPT_N-1
 @each:
     push af
     add a,a
@@ -1491,7 +1509,7 @@ OptCursors:                      ; the arrow at the row under the cursor, spaces
     jp p,@each
     ret
 
-OptDrawRow:                      ; A = row (0..OPT_N): its label and value
+OptDrawRow:                      ; A = row (0..OPT_N-1): its label, value and '*' when it is the original
     ld (Tmp+15),a
     add a,a
     add a,2
@@ -1510,8 +1528,6 @@ OptDrawRow:                      ; A = row (0..OPT_N): its label and value
     ld l,a
     call NtPrint
     ld a,(Tmp+15)
-    cp OPT_N
-    ret z                        ; RESET TO DEFAULTS: no value
     add a,a
     add a,2
     ld b,a
@@ -1520,6 +1536,20 @@ OptDrawRow:                      ; A = row (0..OPT_N): its label and value
     push bc
     ld b,8
     call NtSpaces
+    ld a,(Tmp+15)                ; column 30: '*' = the original game's value
+    ld e,a
+    ld d,0
+    ld hl,OptDefaults
+    add hl,de
+    ld a,(hl)
+    ld hl,OptVals
+    add hl,de
+    cp (hl)
+    ld a,$40
+    jr nz,@mark
+    ld a,StarTile
+@mark:
+    call NtTile
     pop bc
     call NtAt
     ld a,(Tmp+15)
@@ -1573,7 +1603,7 @@ OptDrawRow:                      ; A = row (0..OPT_N): its label and value
     ld l,a
     jp NtPrint
 
-OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9, @l10
+OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9
 @l0: .ASC "TEXT FIXES"
      .DB 0
 @l1: .ASC "MAP FIXES"
@@ -1594,21 +1624,10 @@ OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9, @l10
      .DB 0
 @l9: .ASC "OVERWORLD SPEED"
      .DB 0
-@l10: .ASC "RESET TO DEFAULTS"
-     .DB 0
 ReachNames:  .DW StrOff, @r1, @r2
 @r1: .ASC "4 PIXELS"
      .DB 0
 @r2: .ASC "8 PIXELS"
-     .DB 0
-WalkNames:   .DW @w1, @w2, @w3, @w4
-@w1: .ASC "1X"
-     .DB 0
-@w2: .ASC "2X"
-     .DB 0
-@w3: .ASC "3X"
-     .DB 0
-@w4: .ASC "4X"
      .DB 0
 SpeedNames:  .DW @s0, @s1, @s2
 @s0: .ASC "1X"
@@ -1625,8 +1644,9 @@ StrOptTitle: .ASC "OPTIONS"
              .DB 0
 StrOptHelp:  .ASC "1  CHANGE      2  BACK"
              .DB 0
-StrOptReset: .ASC "DEFAULTS?    NO    YES"
-             .DB 0, 14, 20
+StrOptLegend: .ASC "  ORIGINAL GAME"
+             .DB 0
+StarBits:    .DB $00, $10, $54, $38, $54, $10, $00, $00   ; our '*' (8 x 8)
 
 ; Winkle made the password (we are in his cave room, bank 7 code below us): AUTO = this game,
 ; position = the cave's entrance cell (where the game puts the hero when he leaves), and a line

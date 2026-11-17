@@ -97,10 +97,10 @@ static bool s_plus;
 #define PLUS_SRAM    0x10
 #define PLUS_N       10
 static int s_ropt[PLUS_N];                         /* text, map, sword, reach, cave, keep gold, gold, dealt, recv, walk */
-static const uint8_t k_ropt_def[PLUS_N] = { 0, 0, 0, 0, 0, 0, 1, 1, 1, 0 }, k_ropt_cnt[PLUS_N] = { 2, 2, 2, 3, 3, 2, 11, 11, 11, 4 };
+static const uint8_t k_ropt_def[PLUS_N] = { 0, 0, 0, 0, 0, 0, 1, 1, 1, 0 }, k_ropt_cnt[PLUS_N] = { 2, 2, 2, 3, 3, 2, 11, 11, 11, 3 };
 static const char *const k_r_reach[] = { "OFF (ORIGINAL)", "4 PIXELS", "8 PIXELS" };
 static const char *const k_r_cave[]  = { "1X (ORIGINAL)", "1.5X", "2X" };
-static const char *const k_r_walk[]  = { "1X (ORIGINAL)", "2X", "3X", "4X" };
+static const char *const k_r_walk[]  = { "1X (ORIGINAL)", "1.5X", "2X" };
 static bool plus_rom(void)
 {
     size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
@@ -302,7 +302,7 @@ static HudOption k_opts_plus[] = {
     { "SWORD HIT FIX",  k_onoff,    2, &s_ropt[2],  ropt_changed },
     { "SWORD REACH",    k_r_reach,  3, &s_ropt[3],  ropt_changed },
     { "CAVE DOWN SPEED", k_r_cave,  3, &s_ropt[4],  ropt_changed },
-    { "OVERWORLD SPEED", k_r_walk,  4, &s_ropt[9],  ropt_changed },
+    { "OVERWORLD SPEED", k_r_walk,  3, &s_ropt[9],  ropt_changed },
     { "KEEP GOLD",      k_onoff,    2, &s_ropt[5],  ropt_changed },
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
     { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },

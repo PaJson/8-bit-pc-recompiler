@@ -63,7 +63,7 @@ Save slots: AUTO + 5.
   - Game Over asks "SAVE THIS GAME?" under the password (you continue at the start house).
   - SAVE page: button 1 on a slot = LOAD / DELETE. A loaded game starts where it was saved.
   - Each slot shows its screen, play time, gold, power and crystals.
-OPTIONS page (stored in the battery RAM; RESET TO DEFAULTS at the bottom):
+OPTIONS page (stored in the battery RAM; * marks the original game's value):
   TEXT FIXES        PASSWARD, three "GOLD" that should be "FIND", DESGINED in the credits
   MAP FIXES         screen C5 gets its own room, H4 the right cave picture (SMS Power fix)
   SWORD HIT FIX     every new swing can hurt (original: often only knocks back)
@@ -71,7 +71,7 @@ OPTIONS page (stored in the battery RAM; RESET TO DEFAULTS at the bottom):
   CAVE DOWN SPEED   walking down in top-down caves 1.5x / 2x as fast
   KEEP GOLD         continuing no longer halves your gold
   GOLD DROPS, DAMAGE DEALT, DAMAGE RECEIVED   x0 .. x10 (x1 = original)
-  OVERWORLD SPEED   walking on the overworld 2x / 3x / 4x as fast
+  OVERWORLD SPEED   walking on the overworld 1.5x / 2x as fast
 
 Passwords work as before (passwords from the original game too).
 """
