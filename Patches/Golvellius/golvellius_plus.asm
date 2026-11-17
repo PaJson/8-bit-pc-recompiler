@@ -29,7 +29,8 @@
 ;   The status screen says "1  SAVE GAME" under its frame (letters in tiles the unpause reloads).
 ;   Once a slot is used, the title's cursors start on CONTINUE and on SAVE.
 ; Step 6: OPTIONS page (title -> OPTIONS): TEXT FIXES, MAP FIXES, SWORD HIT FIX, CAVE DOWN SPEED,
-;   KEEP GOLD, GOLD DROPS / DAMAGE DEALT / DAMAGE RECEIVED x0-x10, RESET TO DEFAULTS. Kept in battery
+;   KEEP GOLD, GOLD DROPS / DAMAGE DEALT / DAMAGE RECEIVED x0-x10, OVERWORLD SPEED 1X-4X (the hero's
+;   1-pixel overworld step runs up to 4 times per frame, with every check of the game), RESET TO DEFAULTS. Kept in battery
 ;   RAM (not shown as a slot), loaded into RAM at the first frame wait after power-on, so everything,
 ;   the intro demo included, uses them; saved when the page is left. Every default = the original game.
 ;   What each does (hooks below): TEXT FIXES = the 5 typos of the English ROM (PASSWARD, 3 x GOLD for
@@ -55,8 +56,9 @@
 ;
 ; Battery RAM (8 KB is enough; a real board needs battery RAM, emulators and flash carts have it):
 ;   $8000 "GVPLUS", format 1, slot loaded last
-;   $8010 the options (OptVals, 9 bytes: the index of each chosen value), $8019 their check byte
-;     (sum xor $5A); missing / damaged / out of range = the defaults
+;   $8010 the options (OptVals, 10 bytes: the index of each chosen value), $801A their check byte
+;     (sum xor $5A); missing / damaged / out of range = the defaults; a block saved by level 4 (9
+;     options, check byte $8019) is still read (OVERWORLD SPEED then 1X)
 ;   $8100 + 64 * n  slot n (0 = AUTO, 1-5): +0 $A5 = used, +1 screen, +2 hero y, +3 hero x,
 ;     +4 play time (frames, seconds, minutes BCD, hours BCD), +8 $C84C (screen tile-set flag),
 ;     +9 $C817, +10 $C839-$C84B (19), +29 $C86E-$C878 (11), +40 save number (word: the highest
@@ -132,7 +134,7 @@ MAP "/" = $6E
 .DEFINE UpCnt       $C0CC        ; 2
 .DEFINE UpDst       $C0CE        ; 2: ... and writes them to VRAM from UpDst
 .DEFINE SavedBank   $C0D0        ; Enter16 / Leave16: the slot-2 bank of the game code a hook came from
-.DEFINE OptVals     $C0D1        ; 9: the options (index of the chosen value; OptDefaults = the original game)
+.DEFINE OptVals     $C0D1        ; 10: the options (index of the chosen value; OptDefaults = the original game)
 .DEFINE OptText     OptVals+0    ; TEXT FIXES       0 off, 1 on
 .DEFINE OptMap      OptVals+1    ; MAP FIXES        0 off, 1 on
 .DEFINE OptSword    OptVals+2    ; SWORD HIT FIX    0 off, 1 on
@@ -142,13 +144,16 @@ MAP "/" = $6E
 .DEFINE OptGold     OptVals+6    ; GOLD DROPS       x0..x10 (1 = original)
 .DEFINE OptDealt    OptVals+7    ; DAMAGE DEALT     x0..x10
 .DEFINE OptRecv     OptVals+8    ; DAMAGE RECEIVED  x0..x10
-.DEFINE OPT_N       9
-.DEFINE OptLoaded   $C0DA        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
+.DEFINE OptWalk     OptVals+9    ; OVERWORLD SPEED  0 = 1 step per frame (original) .. 3 = 4 steps
+.DEFINE OPT_N       10
+.DEFINE OptLoaded   $C0F5        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
 .DEFINE OptCur      $C0DB        ; OPTIONS page: the row under the cursor (OPT_N = RESET TO DEFAULTS)
 .DEFINE ReachBox    $C0DC        ; 8: SWORD REACH: the box last widened, per sword object ($C120, $C140)
 .DEFINE SwingNo     $C0E4        ; SWORD HIT FIX: counts the swings (1..255)
 .DEFINE SwingSeen   $C0E5        ; 13: per enemy object ($C160 + 32 n): the swing that touched it last
 .DEFINE UpEnd       $C0F2        ; 2: UnpackFont: UpLo + UpCnt
+.DEFINE HelpRow     $C0F4        ; the row of DrawHelp / SubDraw (22; 23 on the OPTIONS page)
+.DEFINE StepLeft    $C0F6        ; OVERWORLD SPEED: extra steps left in this frame
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -215,6 +220,10 @@ MAP "/" = $6E
 .ORGA $293F                      ; the overworld's status screen is drawn (display still off): was call $0D20
 .SECTION "hook_pause_hint" OVERWRITE
     call Hook_PauseHint
+.ENDS
+.ORGA $3ED3                      ; the overworld hero's step is done (shared tail): was ld a,(ix+$10)
+.SECTION "hook_walk_step" OVERWRITE
+    call Hook_Step
 .ENDS
 .ORGA $2942                      ; Pause wait loop: was call $07C3
 .SECTION "hook_pause_wait" OVERWRITE
@@ -388,6 +397,13 @@ Stub_TitleButton:                ; from $27F8
 Stub_ContMenu:                   ; from $284B
     call Map16
     jp ContMenu
+Hook_Step:                       ; from $3ED3: another 1-pixel step this frame, or the tail (A = (ix+$10))
+    call Enter16
+    jp StepH
+Step_Again:                      ; StepH: one more step: the game's bank back, drop the hook's return,
+    call Leave16                 ; the step dispatch again (same input $C801)
+    pop hl
+    jp $3D40
 Hook_PauseHint:                  ; from $293F (slot 2 may stay bank 16: the pause loop and its end map their own)
     call Map16
     jp PauseHintH
@@ -484,7 +500,7 @@ Stub_Winkle:                     ; from bank 7 $9138: the password, then the AUT
 GvPlusId:
     .DB "GOLVELLIUS PLUS", 0     ; 16 bytes
     .DB 1                         ; patch format version
-    .DB 4                         ; step / feature level (4 = save slots)
+    .DB 5                         ; step / feature level (5 = OVERWORLD SPEED: 10 options)
 .ENDS
 
 .SECTION "gvplus_title" FREE
@@ -653,6 +669,8 @@ PageOpen:                        ; fade out, display off, digits, an empty page 
     ld (NtBaseHi),a
     ld a,$B0
     ld (NtDigit0),a
+    ld a,22
+    ld (HelpRow),a
     xor a
     ld (NtColBias),a
     ld (NtTileOfs),a
@@ -1204,6 +1222,34 @@ FindNewest:
     or a
     ret
 
+; $3ED3 OVERWORLD SPEED: the hero's 1-pixel step (one of $3D8F / $3E06 / $3E49 / $3E8E, each with the
+; game's own wall, turning, cave and screen-edge checks) is done and the shared tail (animation,
+; $322C / $3425 / $3766) follows. On the overworld (mode 6) the step runs OptWalk more times per
+; frame: back to the dispatch $3D40 (same input) until the extra steps are used up or a scroll
+; ($C814) / a cave entrance (mode $11) started; the tail runs once.
+StepH:
+    ld a,(OptWalk)
+    or a
+    jr z,@tail
+    ld a,($C802)
+    cp 6
+    jr nz,@reset
+    ld a,($C814)
+    or a
+    jr nz,@reset
+    ld a,(StepLeft)
+    or a
+    jr z,@reset
+    dec a
+    ld (StepLeft),a
+    jp Step_Again
+@reset:
+    ld a,(OptWalk)
+    ld (StepLeft),a
+@tail:
+    ld a,(ix+$10)                ; the original instruction
+    jp Leave16
+
 ; $293F: the overworld's status screen is drawn, the display still off: "1  SAVE GAME" under its frame.
 ; The status screen uses tiles $00-$73; unpausing reloads $0000-$13BF (asset $B0), so tiles $74-$8B
 ; take the font's characters $40-$56 (space .. V) and the digit 1.
@@ -1234,13 +1280,14 @@ PauseHintH:
     jp ScreenOn
 
 ; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
-OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1     ; the original game
-OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11  ; number of values
-OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2     ; 0 OFF / ON, 1 a name from OptNames, 2 X0..X10
-OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0
+OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1, 0     ; the original game
+OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11, 4  ; number of values
+OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2, 1     ; 0 OFF / ON, 1 a name from OptNames, 2 X0..X10
+OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0, WalkNames
 
 OptSum:                          ; HL -> OPT_N bytes: A = their check byte
     ld b,OPT_N
+OptSumB:                         ; (B bytes)
     xor a
 @add:
     add a,(hl)
@@ -1260,7 +1307,16 @@ OptLoad:                         ; battery RAM -> OptVals; missing, damaged or o
     call OptSum
     ld hl,Tmp+OPT_N
     cp (hl)
+    jr z,@valid
+    ld hl,Tmp                    ; saved before OVERWORLD SPEED existed: 9 options + their check byte
+    ld b,OPT_N-1
+    call OptSumB
+    ld hl,Tmp+OPT_N-1
+    cp (hl)
     jr nz,@def
+    xor a
+    ld (hl),a                    ; OVERWORLD SPEED: the default
+@valid:
     ld hl,Tmp
     ld de,OptCount
     ld b,OPT_N
@@ -1298,10 +1354,12 @@ OptSave:                         ; OptVals -> battery RAM (with our header when 
     jp Stub_Sram
 
 ; the page: title row 0, option n on row 2 + 2n (label column 3, value column 22, arrow column 1),
-; RESET TO DEFAULTS last, help on row 22. Up / down = row, left = previous value, right / button 1 =
+; RESET TO DEFAULTS last (row 22), help on row 23. Up / down = row, left = previous value, right / button 1 =
 ; next value, button 1 on RESET = asks NO / YES, button 2 = save and back.
 OptionsPage:
     call PageOpen
+    ld a,23
+    ld (HelpRow),a
     xor a
     ld (OptCur),a
     ld bc,12+256*0
@@ -1515,7 +1573,7 @@ OptDrawRow:                      ; A = row (0..OPT_N): its label and value
     ld l,a
     jp NtPrint
 
-OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9
+OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9, @l10
 @l0: .ASC "TEXT FIXES"
      .DB 0
 @l1: .ASC "MAP FIXES"
@@ -1534,12 +1592,23 @@ OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9
      .DB 0
 @l8: .ASC "DAMAGE RECEIVED"
      .DB 0
-@l9: .ASC "RESET TO DEFAULTS"
+@l9: .ASC "OVERWORLD SPEED"
+     .DB 0
+@l10: .ASC "RESET TO DEFAULTS"
      .DB 0
 ReachNames:  .DW StrOff, @r1, @r2
 @r1: .ASC "4 PIXELS"
      .DB 0
 @r2: .ASC "8 PIXELS"
+     .DB 0
+WalkNames:   .DW @w1, @w2, @w3, @w4
+@w1: .ASC "1X"
+     .DB 0
+@w2: .ASC "2X"
+     .DB 0
+@w3: .ASC "3X"
+     .DB 0
+@w4: .ASC "4X"
      .DB 0
 SpeedNames:  .DW @s0, @s1, @s2
 @s0: .ASC "1X"
@@ -1688,12 +1757,16 @@ DrawCursors:                     ; the arrow at column 1 of the slot under the c
     jp p,@each
     ret
 
-DrawHelp:                        ; row 22: HelpText
-    ld bc,2+256*22
+DrawHelp:                        ; row HelpRow: HelpText
+    ld a,(HelpRow)
+    ld b,a
+    ld c,2
     call NtAt
     ld b,28
     call NtSpaces
-    ld bc,5+256*22
+    ld a,(HelpRow)
+    ld b,a
+    ld c,5
     call NtAt
     ld hl,(HelpText)
     jp NtPrint
@@ -1855,19 +1928,24 @@ SlotMenu:
 ; row 22 for a two-choice question: HL -> text, 0, column of choice 0, column of choice 1
 SubDraw:
     push hl
-    ld bc,2+256*22
+    ld a,(HelpRow)
+    ld b,a
+    ld c,2
     call NtAt
     ld b,28
     call NtSpaces
     pop hl
-    ld bc,3+256*22
+    ld a,(HelpRow)
+    ld b,a
+    ld c,3
     call NtAt
     call NtPrint                 ; HL -> the two cursor columns now
     ld (Tmp+12),hl
 SubCursor:
     ld hl,(Tmp+12)
     ld c,(hl)
-    ld b,22
+    ld a,(HelpRow)
+    ld b,a
     call NtAt
     ld a,(SubSel)
     or a
@@ -1879,7 +1957,8 @@ SubCursor:
     ld hl,(Tmp+12)
     inc hl
     ld c,(hl)
-    ld b,22
+    ld a,(HelpRow)
+    ld b,a
     call NtAt
     ld a,(SubSel)
     or a
@@ -2068,6 +2147,8 @@ SaveMenu:                        ; (the caller set the name table / font: GameNt
 GameNt:                          ; text on the game's own screen: name table $3800, its low-set font, and
     ld a,$38                     ; columns that follow its horizontal scroll (reg 8 shadow $C057: $F8 or $08
     ld (NtBaseHi),a              ; on the overworld), so column n is always at x = 8n (column 0 = blanked)
+    ld a,22
+    ld (HelpRow),a
     ld a,$DF
     ld (NtDigit0),a
     xor a
