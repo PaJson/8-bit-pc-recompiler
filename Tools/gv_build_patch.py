@@ -77,8 +77,9 @@ at the bottom, left / right there switches):
   page 2: GOLD DROPS, DAMAGE DEALT, DAMAGE RECEIVED   0X .. 10X (1X = original)
 
 THE MAP (Pause on the overworld, then button 2): every screen you have seen, in its area's colour
-(a dot = you have been inside its cave), your screen blinks. Button 1 on a square: what is there
-(the cave's person, item and price, BOUGHT, the advice text; only for caves you have entered).
+(a dot = you have been inside its cave), your screen blinks. Button 1 on a square: a picture of
+that screen (half size, drawn from your ROM) and what is there (the cave's person, item and price,
+BOUGHT, the advice text; only for caves you have entered).
 Arrows on that page jump to the next screen you have seen. Pause on the map = straight back to the
 game. The map is saved with each save slot.
 

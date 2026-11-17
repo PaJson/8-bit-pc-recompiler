@@ -193,6 +193,31 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 .DEFINE CaveLastX   $CBEF        ; EASY CAVE ENTRY: the hero's position at the previous step
 .DEFINE CaveLastY   $CBF0
 .DEFINE OPT_PAGEPOS 9            ; the PAGE row (screen row 20)
+; the map page's picture (half size: one 8 x 8 tile per 16 x 16 metatile; HintGlyphs' space is free then)
+.DEFINE PicList     $CB94        ; 64: the metatiles drawn so far (index = output tile - PicT0)
+.DEFINE Meta        $CBD4        ; 4: a metatile's tiles TL TR BL BR (tile 256 + n)
+.DEFINE PicA        $CBD8        ; 4: a source tile row, planes 0-3 (left tile)
+.DEFINE PicB        $CBDC        ; 4: (right tile; must follow PicA)
+.DEFINE PicT        $CBE0        ; the output tile being made
+.DEFINE PicH        $CBE1        ; its half (0 = from TL / TR, 1 = from BL / BR)
+.DEFINE PicR        $CBE2        ; its row in that half (0-3)
+.DEFINE PicS        $CBE3        ; the screen drawn
+.DEFINE GfxId       $CBF1        ; the area id whose tiles the game loaded last ($1A52 hook)
+.DEFINE PicCode     $CBF2        ; the area palette asset whose tiles (+1) are in VRAM $2E00 now
+.DEFINE PicFlag     $CBF3        ; the $C84C state the common tiles in VRAM $2000 have now
+.DEFINE PicN        $CBF4        ; metatiles in PicList
+.DEFINE PicLive     $CBF5        ; 1 = the hero's own screen (RAM $CA00 / $CC00 / $C84D)
+.DEFINE PicArea     $CBF6        ; another screen: its area id ($1A3D's rule)
+.DEFINE PicTFlag    $CBF7        ; ... its $C84C (layout id >= $53)
+.DEFINE PicLayB     $CBF8        ; ... its layout's bank (3 / 4)
+.DEFINE PicLayP     $CBF9        ; 2: ... and address
+.DEFINE PicEnt      $CBFB        ; ... its entrance cell ($FF = none drawn: only caves you have been inside)
+.DEFINE PicEntM     $CBFC        ; ... the entrance metatile
+.DEFINE PicCell     $CBFD        ; the cell being drawn (0-179)
+.DEFINE PicM        $CBFE        ; the metatile being looked up
+.DEFINE PicT0       MT0          ; output tiles $3A..$7A (the map squares' tiles: MapTiles makes them again)
+.DEFINE PIC_ROW     1            ; the picture: rows 1-12, columns 8-22
+.DEFINE PIC_COL     8
 .DEFINE HINT_LINE   4            ; their top line inside row 22 (176 + 4 = line 180)
 .DEFINE HintTile    $C0F8        ; the next tile to write
 .DEFINE HintGP      $C0F9        ; 2: the glyphs of the text being drawn
@@ -268,6 +293,10 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 .ORGA $293F                      ; the overworld's status screen is drawn (display still off): was call $0D20
 .SECTION "hook_pause_hint" OVERWRITE
     call Hook_PauseHint
+.ENDS
+.ORGA $1A52                      ; an area's graphics are loaded ($1A3D): was ld ($C819),a
+.SECTION "hook_area" OVERWRITE
+    call Hook_Area
 .ENDS
 .ORGA $3ED3                      ; the overworld hero's step is done (shared tail): was ld a,(ix+$10)
 .SECTION "hook_walk_step" OVERWRITE
@@ -539,6 +568,16 @@ Stub_Winkle:                     ; from bank 7 $9138: the password, then the AUT
     call Enter16                 ; (saves bank 7)
     call AutoSave
     jp Leave16
+Hook_Area:                       ; from $1A52: the area whose graphics the game loads (the map pictures put
+    ld ($C819),a                 ; them back afterwards)
+    ld (GfxId),a
+    ret
+Stub_Unpack:                     ; A = asset, DE = VRAM: the game's tile unpacker ($0E0B maps the asset's
+    push de                      ; bank), back to bank 16
+    call LoadAsset
+    pop de
+    call UnpackTiles
+    jp Map16
 .ENDS
 
 ; ---------------------------------------------------------------------------------------------
@@ -2441,6 +2480,11 @@ PauseMap:                        ; from the Pause (status) screen, button 2
     call MapTiles
     ld hl,MapPal                 ; the game's: 16 colours -> $C060, uploaded at the next frame
     call $0490
+    ld a,(GfxId)                 ; the overworld graphics in VRAM now (the pictures may load others)
+    call AreaCode
+    ld (PicCode),a
+    ld a,($C84C)
+    ld (PicFlag),a
     ld a,($C80D)
     ld (MapCur),a
     xor a
@@ -2454,7 +2498,7 @@ PauseMap:                        ; from the Pause (status) screen, button 2
     call WaitPaused
     ld a,($C005)                 ; Pause: back to the game (as from the status screen)
     inc a
-    jr z,@unpause
+    jp z,@unpause
     ld hl,MapTick
     inc (hl)
     ld a,(hl)
@@ -2498,21 +2542,32 @@ PauseMap:                        ; from the Pause (status) screen, button 2
     call MapInfo
     jr c,@unpause
     call ScreenOff
+    call MapTiles                ; (the picture used their tiles and its own palette)
+    ld hl,MapPal
+    call $0490
+    xor a
+    ld (NtAttr),a
     ld a,16
     ld (MapTick),a
-    jr @full
+    jp @full
 @back:
     call ScreenOff
     call Stub_Unpause72          ; as after SAVE GAME: the overworld's name table back, then the status screen
     jp $291F
 @unpause:                        ; $C005 = $FF: the pause loop's own end ($2945 tests it, $294B unpauses:
-    jp $2945                     ; sound, asset $72 + $B0, the overworld palette, the screen redrawn)
+    ld a,$FF                     ; sound, asset $72 + $B0, the overworld palette, the screen redrawn); set
+    ld ($C005),a                 ; again: a page's frame waits since the press ($07C3) cleared it
+    jp $2945
 
 MapInfo:                         ; the cursor's screen page; arrows = the next seen screen that way, 2 = back,
                                  ; Pause = carry (back to the game)
     call ScreenOff
     call MapClearNt
-    ld bc,2+256*2
+    ld a,(MapCur)
+    call PicDraw
+    ld a,$08                     ; the text: sprite palette (its colour 15 is white; the picture has its
+    ld (NtAttr),a                ; area's colours)
+    ld bc,2+256*13
     call NtAt
     ld a,(MapCur)
     call PrintScreen
@@ -2520,7 +2575,7 @@ MapInfo:                         ; the cursor's screen page; arrows = the next s
     call NtPrint
     ld a,(MapCur)
     call PrintArea
-    ld a,4
+    ld a,14
     ld (MapRow),a
     ld a,(MapCur)
     call CaveLines
@@ -2534,7 +2589,7 @@ MapInfo:                         ; the cursor's screen page; arrows = the next s
     call BitPtr
     and (hl)
     jr z,@help
-    ld a,7
+    ld a,17
     ld (MapRow),a
     ld a,(MapCid)
     call MapAdvice
@@ -2547,20 +2602,612 @@ MapInfo:                         ; the cursor's screen page; arrows = the next s
     call WaitPaused
     ld a,($C005)                 ; Pause: carry (back to the game)
     inc a
-    scf
-    ret z
+    jr z,@pause
     call ReadPad
     ld a,(PadNew)
     ld b,a
     and $20
-    ret nz                       ; (carry clear)
+    jr nz,@back
     ld a,b
     and $0F
     jr z,@loop
     ld e,a
     call MapNext
     jr c,@loop
-    jr MapInfo
+    jp MapInfo
+@pause:
+    call PicRestore
+    call ScreenOn                ; (the unpause expects the display on, as on the status screen)
+    scf
+    ret
+@back:
+    call PicRestore
+    or a                         ; (carry clear)
+    ret
+
+; ---- the picture: the screen at half size, made from the ROM's own data (nothing of it is stored in the
+; patch). Layout: room table bank 5 $9890 -> record $9947 + 7 n (0 layout id, 2 entrance cell, 6 entrance
+; metatile), layout = bank 3 $8000 + 180 id (id < $5B) or bank 4 $8000 + 180 (id - $5B), 15 x 12 metatiles.
+; Metatile m = 4 tile numbers (tile 256 + n, palette 0): m < $58 asset $84 (+ asset $8E for m $36-$3B and
+; $45-$4C when $C84C: layout id >= $53), m >= $58 asset $1ABB[area]. Tiles: asset $D0 -> $2000 (+ asset $8D
+; when $C84C), asset $1A77[area] + 1 -> $2E00; palette = asset $1A77[area]. Area = bank 5 $9E48[screen] & 15,
+; 0 = the previous screen's ($1A3D). Those tiles are loaded into VRAM $2000-$37FF (the Pause screen leaves
+; them alone) when another area's are there, read back, every other pixel of a metatile's 16 x 16 kept ->
+; one low tile ($3A..), and the game's set is put back when the page closes (PicRestore). The hero's own
+; screen comes from RAM as it is now ($CA00, $CC00, palette $C84D). An entrance is drawn only for caves
+; you have been inside (MapEnt), MAP FIXES as at $193D.
+PicDraw:                         ; A = screen (display off; the name table cleared)
+    ld (PicS),a
+    xor a
+    ld (NtAttr),a
+    ld (PicN),a
+    ld a,(PicS)
+    ld hl,$C80D
+    cp (hl)
+    jr nz,@other
+    ld a,1
+    ld (PicLive),a
+    ld a,(GfxId)
+    call AreaCode
+    ld b,a
+    ld a,($C84C)
+    ld c,a
+    call PicGfx
+    ld hl,$C84D                  ; the overworld's palette (kept there during the pause)
+    call $0490
+    jr @cells
+@other:
+    xor a
+    ld (PicLive),a
+    call PicRoom
+    ld a,(PicArea)
+    call AreaCode
+    push af
+    ld b,a
+    ld a,(PicTFlag)
+    ld c,a
+    call PicGfx
+    pop af
+    call AssetAddr               ; its palette -> Tmp -> $C060
+    ld de,Tmp
+    ld b,16
+@pal:
+    ld a,c
+    call Stub_ReadB
+    ld (de),a
+    inc hl
+    inc de
+    djnz @pal
+    ld hl,Tmp
+    call $0490
+@cells:
+    xor a
+    ld (PicCell),a
+    ld b,PIC_ROW
+@row:
+    push bc
+    ld c,PIC_COL
+    call NtAt
+    ld b,15
+@col:
+    push bc
+    call PicCellM
+    call PicTile
+    call NtTile
+    ld hl,PicCell
+    inc (hl)
+    pop bc
+    djnz @col
+    pop bc
+    inc b
+    ld a,b
+    cp PIC_ROW+12
+    jr nz,@row
+    ret
+
+PicRestore:                      ; the game's own overworld graphics back into VRAM (display off first)
+    call ScreenOff
+    ld a,(GfxId)
+    call AreaCode
+    ld b,a
+    ld a,($C84C)
+    ld c,a
+PicGfx:                          ; B = area palette asset (tiles = B + 1), C = $C84C: make VRAM hold them
+    ld a,(PicFlag)
+    cp c
+    jr z,@area
+    ld a,c
+    ld (PicFlag),a
+    push bc
+    ld a,$D0
+    ld de,$2000
+    call Stub_Unpack
+    pop bc
+    ld a,c
+    or a
+    push bc
+    call nz,PicPatch
+    pop bc
+    ld a,$FF                     ; (the area's tiles again too: the common set may reach into them)
+    ld (PicCode),a
+@area:
+    ld a,(PicCode)
+    cp b
+    ret z
+    ld a,b
+    ld (PicCode),a
+    inc a
+    ld de,$2E00
+    jp Stub_Unpack
+
+PicPatch:                        ; $C84C: asset $8D -> VRAM $2780 ($60), $28E0 ($100), $2AE0 ($80), as $1C05
+    ld a,$8D
+    call AssetAddr
+    ld de,$2780
+    ld b,$60
+    call @seg
+    ld de,$28E0
+    ld b,0
+    call @seg
+    ld de,$2AE0
+    ld b,$80
+@seg:
+    ex de,hl
+    di
+    call SetVramAddr
+    ex de,hl
+@byte:
+    ld a,c
+    call Stub_ReadB
+    out ($BE),a
+    inc hl
+    djnz @byte
+    ei
+    ret
+
+AreaCode:                        ; A = area id -> A = its palette asset ($1A77, bank 0; the tiles are + 1)
+    ld e,a
+    ld d,0
+    ld hl,$1A77
+    add hl,de
+    ld a,(hl)
+    ret
+
+AssetAddr:                       ; A = asset code -> C = its bank, HL = its data (the asset loader's table)
+    ld b,a
+    rrca
+    rrca
+    rrca
+    rrca
+    and $0F
+    ld c,a
+    ld a,b
+    and $0F
+    add a,a
+    ld l,a
+    ld h,$80
+    ld a,c
+    call Stub_ReadB
+    ld e,a
+    inc hl
+    ld a,c
+    call Stub_ReadB
+    ld d,a
+    ex de,hl
+    ret
+
+PicRoom:                         ; PicS (another screen): layout, entrance, area, $C84C
+    ld a,(PicS)
+    ld e,a
+    ld d,0
+    ld hl,$9890
+    add hl,de
+    ld a,5
+    call Stub_ReadB              ; its room
+    ld l,a
+    ld h,0
+    ld b,h
+    ld c,l
+    add hl,hl
+    add hl,bc
+    add hl,hl
+    add hl,bc                    ; * 7
+    ld bc,$9947
+    add hl,bc
+    push hl
+    ld a,5
+    call Stub_ReadB              ; layout id
+    ld c,a
+    ld a,(OptMap)                ; MAP FIXES: C5 (screen 54) its own layout
+    or a
+    jr z,@nofix1
+    ld a,(PicS)
+    cp 54
+    jr nz,@nofix1
+    ld a,c
+    cp $8E
+    jr nz,@nofix1
+    ld c,$7E
+@nofix1:
+    ld a,c
+    cp $53
+    ccf
+    ld a,0
+    rla
+    ld (PicTFlag),a              ; layout id >= $53: the $C84C set
+    ld a,c
+    ld b,3
+    cp $5B
+    jr c,@bank
+    sub $5B
+    inc b
+@bank:
+    ld e,a                       ; address = $8000 + 180 * id
+    ld d,0
+    ld l,e
+    ld h,d
+    add hl,hl
+    add hl,hl                    ; 4
+    ld d,h
+    ld e,l
+    add hl,hl
+    add hl,hl                    ; 16
+    ex de,hl
+    add hl,de                    ; 20
+    ex de,hl
+    add hl,hl                    ; 32
+    ex de,hl
+    add hl,de                    ; 52
+    ex de,hl
+    add hl,hl
+    add hl,hl                    ; 128
+    add hl,de                    ; 180
+    ld de,$8000
+    add hl,de
+    ld (PicLayP),hl
+    ld a,b
+    ld (PicLayB),a
+    pop hl
+    inc hl
+    inc hl
+    ld a,5
+    call Stub_ReadB              ; entrance cell
+    ld (PicEnt),a
+    ld de,4
+    add hl,de
+    ld a,5
+    call Stub_ReadB              ; entrance metatile
+    ld c,a
+    ld a,(OptMap)                ; MAP FIXES: H4 (screen 46) the cave picture $2B
+    or a
+    jr z,@nofix2
+    ld a,(PicS)
+    cp 46
+    jr nz,@nofix2
+    ld a,c
+    cp $94
+    jr nz,@nofix2
+    ld c,$2B
+@nofix2:
+    ld a,c
+    ld (PicEntM),a
+    or a
+    jr z,@noent
+    ld a,(PicS)                  ; only caves you have been inside
+    ld hl,MapEnt
+    call BitPtr
+    and (hl)
+    jr nz,@area
+@noent:
+    ld a,$FF
+    ld (PicEnt),a
+@area:
+    ld a,(PicS)                  ; area id, 0 = the previous screen's
+    ld e,a
+    ld d,0
+    ld hl,$9E48
+    add hl,de
+    ld a,5
+    call Stub_ReadB
+    and $0F
+    jr nz,@got
+    dec hl
+    ld a,5
+    call Stub_ReadB
+    and $0F
+@got:
+    ld (PicArea),a
+    ret
+
+PicCellM:                        ; A = the metatile of cell PicCell
+    ld a,(PicCell)
+    ld e,a
+    ld d,0
+    ld a,(PicLive)
+    or a
+    jr z,@rom
+    ld hl,$CA00
+    add hl,de
+    ld a,(hl)
+    ret
+@rom:
+    ld a,(PicEnt)
+    cp e
+    jr nz,@lay
+    ld a,(PicEntM)
+    ret
+@lay:
+    ld hl,(PicLayP)
+    add hl,de
+    ld a,(PicLayB)
+    jp Stub_ReadB
+
+PicTile:                         ; A = metatile -> A = its output tile (made the first time)
+    ld (PicM),a
+    ld hl,PicList
+    ld a,(PicN)
+    or a
+    jr z,@new
+    ld b,a
+    ld c,0
+@find:
+    ld a,(PicM)
+    cp (hl)
+    jr z,@found
+    inc hl
+    inc c
+    djnz @find
+@new:
+    ld a,(PicN)
+    cp 65
+    jr nc,@full
+    ld c,a
+    inc a
+    ld (PicN),a
+    ld a,(PicM)
+    ld (hl),a
+    push bc
+    call PicMeta
+    pop bc
+    ld a,c
+    add a,PicT0
+    push af
+    call PicShrink
+    pop af
+    ret
+@found:
+    ld a,c
+    add a,PicT0
+    ret
+@full:
+    ld a,PicT0
+    ret
+
+PicMeta:                         ; PicM -> Meta: its 4 tile numbers
+    ld a,(PicM)
+    ld e,a
+    ld a,(PicLive)
+    or a
+    jr z,@rom
+    ld l,e
+    ld h,0
+    add hl,hl
+    add hl,hl
+    ld bc,$CC00
+    add hl,bc
+    ld de,Meta
+    ld bc,4
+    ldir
+    ret
+@rom:
+    ld a,e
+    cp $58
+    jr c,@common
+    sub $58
+    ld l,a
+    ld h,0
+    add hl,hl
+    add hl,hl
+    push hl
+    ld a,(PicArea)
+    ld c,a
+    ld b,0
+    ld hl,$1ABB
+    add hl,bc
+    ld a,(hl)
+    jr @asset
+@common:
+    ld a,(PicTFlag)
+    or a
+    jr z,@base
+    ld a,e
+    sub $36
+    cp 6
+    jr c,@patch
+    ld a,e
+    sub $45
+    cp 8
+    jr nc,@base
+    add a,6
+@patch:
+    ld l,a
+    ld h,0
+    add hl,hl
+    add hl,hl
+    push hl
+    ld a,$8E
+    jr @asset
+@base:
+    ld l,e
+    ld h,0
+    add hl,hl
+    add hl,hl
+    push hl
+    ld a,$84
+@asset:
+    call AssetAddr
+    pop de
+    add hl,de
+    ld de,Meta
+    ld b,4
+@copy:
+    ld a,c
+    call Stub_ReadB
+    ld (de),a
+    inc hl
+    inc de
+    djnz @copy
+    ret
+
+PicShrink:                       ; A = output tile: Meta's 16 x 16 pixels, every other one, -> that low tile
+    ld (PicT),a
+    xor a
+    ld (PicH),a
+@half:
+    xor a
+    ld (PicR),a
+    ld de,Tmp
+@row:
+    push de
+    ld a,(PicH)
+    add a,a
+    call @meta
+    call @src
+    ld de,PicA
+    call @read4
+    ld a,(PicH)
+    add a,a
+    inc a
+    call @meta
+    call @src
+    ld de,PicB
+    call @read4
+    pop de
+    ld hl,PicA
+    ld b,4
+@plane:
+    ld a,(hl)                    ; left tile: pixels 0 2 4 6 -> 0-3, right tile -> 4-7
+    call Compact
+    add a,a
+    add a,a
+    add a,a
+    add a,a
+    ld c,a
+    push hl
+    inc hl
+    inc hl
+    inc hl
+    inc hl
+    ld a,(hl)
+    pop hl
+    call Compact
+    or c
+    ld (de),a
+    inc de
+    inc hl
+    djnz @plane
+    ld a,(PicR)
+    inc a
+    ld (PicR),a
+    cp 4
+    jr nz,@row
+    ld a,(PicT)                  ; Tmp = 4 rows -> the tile's first or second half
+    ld l,a
+    ld h,0
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    ld a,(PicH)
+    or a
+    jr z,@put
+    ld bc,16
+    add hl,bc
+@put:
+    di
+    call SetVramAddr
+    ld hl,Tmp
+    ld b,16
+@out:
+    ld a,(hl)
+    out ($BE),a
+    inc hl
+    djnz @out
+    ei
+    ld a,(PicH)
+    inc a
+    ld (PicH),a
+    cp 2
+    jp nz,@half
+    ret
+@meta:                           ; A = 0-3 -> A = Meta[A]
+    ld e,a
+    ld d,0
+    ld hl,Meta
+    add hl,de
+    ld a,(hl)
+    ret
+@src:                            ; A = tile n -> HL = VRAM $2000 + 32 n + 8 PicR (source row 2 PicR)
+    ld l,a
+    ld h,0
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    add hl,hl
+    ld a,(PicR)
+    add a,a
+    add a,a
+    add a,a
+    ld e,a
+    ld d,$20
+    add hl,de
+    ret
+@read4:                          ; HL = VRAM -> DE.. 4 bytes
+    di
+    ld a,l
+    out ($BF),a
+    ld a,h
+    out ($BF),a                  ; read address (bit 6 clear)
+    ld b,4
+@in:
+    call VdpDelay
+    in a,($BE)
+    ld (de),a
+    inc de
+    djnz @in
+    ei
+    ret
+
+Compact:                         ; A = 8 pixels of a plane -> A = pixels 0 2 4 6 (bits 7 5 3 1) as bits 3-0
+    push hl
+    push de
+    ld e,a
+    ld d,0
+    ld hl,CompactTab
+    add hl,de
+    ld a,(hl)
+    pop de
+    pop hl
+    ret
+CompactTab:
+    .DB $0, $0, $1, $1, $0, $0, $1, $1, $2, $2, $3, $3, $2, $2, $3, $3
+    .DB $0, $0, $1, $1, $0, $0, $1, $1, $2, $2, $3, $3, $2, $2, $3, $3
+    .DB $4, $4, $5, $5, $4, $4, $5, $5, $6, $6, $7, $7, $6, $6, $7, $7
+    .DB $4, $4, $5, $5, $4, $4, $5, $5, $6, $6, $7, $7, $6, $6, $7, $7
+    .DB $0, $0, $1, $1, $0, $0, $1, $1, $2, $2, $3, $3, $2, $2, $3, $3
+    .DB $0, $0, $1, $1, $0, $0, $1, $1, $2, $2, $3, $3, $2, $2, $3, $3
+    .DB $4, $4, $5, $5, $4, $4, $5, $5, $6, $6, $7, $7, $6, $6, $7, $7
+    .DB $4, $4, $5, $5, $4, $4, $5, $5, $6, $6, $7, $7, $6, $6, $7, $7
+    .DB $8, $8, $9, $9, $8, $8, $9, $9, $A, $A, $B, $B, $A, $A, $B, $B
+    .DB $8, $8, $9, $9, $8, $8, $9, $9, $A, $A, $B, $B, $A, $A, $B, $B
+    .DB $C, $C, $D, $D, $C, $C, $D, $D, $E, $E, $F, $F, $E, $E, $F, $F
+    .DB $C, $C, $D, $D, $C, $C, $D, $D, $E, $E, $F, $F, $E, $E, $F, $F
+    .DB $8, $8, $9, $9, $8, $8, $9, $9, $A, $A, $B, $B, $A, $A, $B, $B
+    .DB $8, $8, $9, $9, $8, $8, $9, $9, $A, $A, $B, $B, $A, $A, $B, $B
+    .DB $C, $C, $D, $D, $C, $C, $D, $D, $E, $E, $F, $F, $E, $E, $F, $F
+    .DB $C, $C, $D, $D, $C, $C, $D, $D, $E, $E, $F, $F, $E, $E, $F, $F
 
 ; $293F: the overworld's status screen is drawn, the display still off: "1 SAVE" centred under the
 ; left half of the frame (x 16-127), "2 MAP" under the right half (x 128-239), lines 180-186 = in the
