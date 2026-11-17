@@ -215,6 +215,8 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 .DEFINE PicEntM     $CBFC        ; ... the entrance metatile
 .DEFINE PicCell     $CBFD        ; the cell being drawn (0-179)
 .DEFINE PicM        $CBFE        ; the metatile being looked up
+.DEFINE AutoBlink   $CBFF        ; Winkle's room: frames since the AUTO line appeared (0 = no line; it blinks)
+.DEFINE AUTO_COL    6            ; "GAME SAVED TO AUTO." (19 characters) centred on row 12
 .DEFINE PicT0       MT0          ; output tiles $3A..$7A (the map squares' tiles: MapTiles makes them again)
 .DEFINE PIC_ROW     1            ; the picture: rows 1-12, columns 8-22
 .DEFINE PIC_COL     8
@@ -1067,6 +1069,9 @@ PlayTick:
     ld a,(OptLoaded)             ; the first frame wait after power-on: the options from the battery RAM
     or a
     call z,OptLoad
+    ld a,(AutoBlink)             ; Winkle's "GAME SAVED TO AUTO." blinks
+    or a
+    call nz,AutoTick
     ld a,($C802)
     cp 5
     ret c
@@ -4030,13 +4035,41 @@ AutoSave:
     ld d,a
     xor a
     call SaveSlot
-    ld hl,$3800 + 12*64 + 2*2    ; row 12, column 2 of the cave room's name table, low tile set
+    ld a,1                       ; the line, blinking while we stay in his room (PlayTick -> AutoTick)
+    ld (AutoBlink),a
+AutoLine:                        ; A = 0: spaces, else "GAME SAVED TO AUTO." (row 12, centred, low tile set)
+    push af
+    ld hl,$3800 + 12*64 + AUTO_COL*2
     ld (NtAddr),hl
     xor a
     ld (NtAttr),a
     ld (NtTileOfs),a             ; the font is the cave's own (a Pause save leaves $C0 here)
+    pop af
+    or a
     ld hl,StrAutoSaved
-    jp NtPrint
+    jp nz,NtPrint
+    ld b,19
+    jp NtSpaces
+AutoTick:                        ; every frame wait while AutoBlink: 32 frames on, 32 off; ends when the room is left
+    ld a,($C802)
+    cp $11
+    jr nz,@stop
+    ld hl,AutoBlink
+    inc (hl)
+    jr nz,@go
+    ld (hl),64                   ; (never 0 again while blinking)
+@go:
+    ld a,(hl)
+    and 31
+    ret nz
+    ld a,(hl)
+    cpl
+    and 32                       ; bit 5 clear = on
+    jp AutoLine
+@stop:
+    xor a
+    ld (AutoBlink),a
+    ret
 
 ; --- the SAVE page ---
 SavePage:
