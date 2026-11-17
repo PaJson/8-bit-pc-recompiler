@@ -28,6 +28,14 @@
  *    times "GOLD" for "FIND" ($24 "DIDST THOU GOLD THE RING", $2B "GO GOLD MORE!", $2F "HELP THEE
  *    GOLD MANY UNUSUAL OBJECTS"), credits "DESGINED BY" (bank 15). Cave texts use $00 for a space, the
  *    credits '@'. Tools/gv_make_ips.py writes the same fixes (+ MAP FIXES) as an IPS for other emulators.
+ *  SOUND CHIP PSG (original: Western consoles have no FM unit) / FM (the Japanese FM Sound Unit). The
+ *    boot code ($00C3) detects the unit through port $F2 and keeps the result in $C004 bit 0; the
+ *    driver init $770D (A = $80 FM / 0 PSG, from $040F) stores it in $C646 and initialises the chip.
+ *    The engine's unit is attached before the boot (gv_on_post_reset); a change in the HUD is done in
+ *    the driver's frame update (gv_snd_update at $6DEF, frame interrupt, bank 2 mapped): attach /
+ *    detach, $C004, $770D again, the playing song (structure 0) restarted through $77B6.
+ *    Each sound has an FM and a PSG version with their own flags: e.g. the big enemies' death sound
+ *    $35 protects the effect channel in FM only, so pickups are not heard for ~2 s (CLAUDE.md).
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -56,6 +64,7 @@ static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAUL
 static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_tfix_i;
 /* MULTIPLIERS tab (x0..x10, index = factor; 1 = original), DINA, TELEPORT, OVERWORLD MUSIC */
 static int s_bgm_i = 100, s_sfx_i = 100;            /* SOUND tab: music / effects volume, percent */
+static int s_fm_i;                                    /* SOUND CHIP: 0 PSG (original), 1 FM */
 static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_reach_i, s_down_i;
 extern int gv_cave_reveal;                         /* gv_cave.c: DUNGEON MAP option */
 extern int gv_cave_info_all;                       /* gv_info.c: CAVE INFO option */
@@ -143,6 +152,7 @@ static void load_config(void)
         else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "cave_down_fast")) s_down_i = v != 0;
         else if (!strcmp(key, "overworld_music")) s_music_i = v < 0 ? 0 : v > 5 ? 5 : (int)v;
+        else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fast_forward") && v > 0) {
@@ -170,6 +180,7 @@ static void save_config(void)
     fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
     fprintf(f, "cave_down_fast = %d     ; 1 = in top-down caves the hero moves down 1.5x as fast (speed 3 instead of 2, Alianger's idea)\n", s_down_i);
     fprintf(f, "overworld_music = %d    ; 0 = the game's choice (by sword + shield), 1..5 = that theme once unlocked\n", s_music_i);
+    fprintf(f, "fm_sound       = %d     ; sound chip: 0 = PSG (original: Western consoles have no FM unit), 1 = FM (Japanese FM Sound Unit)\n", s_fm_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
     fprintf(f, "sfx_volume     = %-5d ; sound effects volume in percent (0..100)\n", s_sfx_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
@@ -223,8 +234,10 @@ static void on_music(void) { s_music_dirty = true; }
 static char s_pct_buf[101][6];
 static const char *k_pct[101];
 static unsigned vol_gain(int pct) { double g = pct / 100.0; return (unsigned)(g * g * 256.0 + 0.5); }  /* loudness-like curve */
+static unsigned s_snd_frames;                                /* frames (sound_frame runs every frame) */
 static void sound_frame(void)
 {
+    s_snd_frames++;
     bool fm = (sms_read8(0xC646) & 0x80) != 0, sfx_fm[9] = { false }, sfx_psg[4] = { false };
     for (int n = 0; n < 10; n++) {
         uint16_t b = (uint16_t)(0xC64B + 0x26 * n);
@@ -241,6 +254,14 @@ static void sound_frame(void)
         unsigned m = 0;
         for (int i = 0; i < 4; i++) m |= (unsigned)sfx_psg[i] << i;
         for (int i = 0; i < 9; i++) m |= (unsigned)sfx_fm[i] << (8 + i);
+        if (on > 0 && getenv("GV_SND_LOG")[0] == '2') {   /* GV_SND_LOG=2: every change of any structure */
+            static uint8_t prev[10][3]; static unsigned fr;
+            fr++;
+            for (int n = 0; n < 10; n++) { uint16_t b = (uint16_t)(0xC64B + 0x26 * n);
+                uint8_t v[3] = { sms_read8(b), sms_read8((uint16_t)(b + 0x14)), sms_read8((uint16_t)(b + 6)) };
+                if (memcmp(v, prev[n], 3)) { fprintf(stderr, "[snd2] %u s%d act %02X snd %02X out %d (C802 %02X)\n", fr, n, v[0], v[1], v[2], sms_read8(0xC802)); memcpy(prev[n], v, 3); } }
+            return;
+        }
         if (on && m != last) {
             fprintf(stderr, "[snd] effects on psg %X fm %03X:", m & 15, m >> 8);
             for (int n = 0; n < 10; n++) { uint16_t b = (uint16_t)(0xC64B + 0x26 * n);
@@ -251,7 +272,9 @@ static void sound_frame(void)
     }
 }
 static void on_volume_changed(void) { sound_frame(); }
+static const char *k_chip[] = { "PSG (ORIGINAL)", "FM" };
 static HudOption k_sound_opts[] = {
+    { "SOUND CHIP",      k_chip, 2,   &s_fm_i,    NULL },          /* switched in gv_snd_update */
     { "OVERWORLD MUSIC", k_music, 6, &s_music_i, on_music },
     { "MUSIC",           k_pct, 101, &s_bgm_i,   on_volume_changed },
     { "SOUND EFFECTS",   k_pct, 101, &s_sfx_i,   on_volume_changed },
@@ -410,6 +433,46 @@ static void play_song(int song)
     call_game(0x77A6);
     sms_write8(0xFFFF, (uint8_t)old);
 }
+/* [insn_hooks] $6DEF (the sound driver's frame update, called from the frame interrupt $079B with
+   bank 2 mapped; observe only): SOUND CHIP switched in the HUD -> the game's own init for the other
+   chip, then the playing song again (effects in progress are dropped). */
+int gv_snd_update(void)
+{
+    bool want = s_fm_i != 0, cur = (sms_read8(0xC646) & 0x80) != 0;
+    if (want == cur && fm_attached() == want) return 0;
+    Z80State keep = g_z80;                                   /* our calls must not disturb the driver */
+    uint8_t song = sms_read8(0xC64B) && sms_read8(0xC64B + 0x14) <= 0x20 ? sms_read8(0xC64B + 0x14) : 0;
+    fm_set_attached(want);
+    sms_write8(0xC004, (uint8_t)((sms_read8(0xC004) & 0xFE) | want));   /* as the boot code's result */
+    g_z80.a = want ? 0x80 : 0x00;
+    call_game(0x770D);                                       /* init: $C646, chip, all channels off */
+    if (song) { g_z80.a = song; call_game(0x77B6); }         /* $77A6 without its di / ei */
+    if (qlog()) fprintf(stderr, "[gv] sound chip -> %s, song %02X restarted\n", want ? "FM" : "PSG", song);
+    uint64_t cyc = g_z80.cyc;
+    g_z80 = keep;                                            /* registers (and IFF: $770D ends with ei) back */
+    g_z80.cyc = cyc;
+    return 0;
+}
+/* test: GV_SND_TEST=<frame>:<sound>,... starts each sound at the first game-context hook (main loop
+   head, sword swing) on or after that frame */
+static void snd_test_poll(void)
+{
+    static const char *e; static int init; static unsigned done;
+    if (!init) { init = 1; e = getenv("GV_SND_TEST"); }
+    unsigned i = 0;
+    for (const char *p = e; p && *p; i++) {
+        unsigned n = (unsigned)strtoul(p, (char **)&p, 10), s = 0;
+        if (*p == ':') s = (unsigned)strtoul(p + 1, (char **)&p, 16);
+        if (i < 32 && !(done >> i & 1) && s_snd_frames >= n) {
+            done |= 1u << i;
+            uint8_t a = g_z80.a;
+            fprintf(stderr, "[snd] test: frame %u starts sound %02X\n", s_snd_frames, s);
+            play_song((int)s);
+            g_z80.a = a;
+        }
+        while (*p == ',') p++;
+    }
+}
 /* The game's own load sequence (display off, area id $C819, its metatiles $CC00 / terrain $D000, the
    screen $CA00, display on, fade-in) runs inside the teleport's call_game($0D1A / $1978) and takes
    ~110 frames. The frame hook places the hero the frame the display comes back (else he is seen at
@@ -427,6 +490,7 @@ static void tp_place_tick(void)                             /* every frame (gv_o
 }
 int gv_frame_top(void)
 {
+    snd_test_poll();
     if (s_tp_req < 0 && !s_music_dirty) return 0;
     if (!on_overworld()) { if (sms_read8(0xC802) < 5) s_tp_req = -1; return 0; }   /* wait; drop it on the title */
     Z80State keep = g_z80;
@@ -511,6 +575,7 @@ int gv_sword_swing(void)
     }
     if (s_hitfix_i)
         for (int n = 0; n < 13; n++) sms_write8((uint16_t)(0xC17F + 32 * n), 0);
+    snd_test_poll();
     return 0;
 }
 
@@ -611,6 +676,13 @@ static void ram_use_frame(void)
 
 void gv_on_frame_post(uint64_t frame)
 {
+    {   /* test: GV_FM_SWITCH=<frame>:<0|1>,... sets SOUND CHIP at that frame (as the HUD would) */
+        static const char *e = (const char *)1; if (e == (const char *)1) e = getenv("GV_FM_SWITCH");
+        for (const char *q = e; q && *q; ) {
+            unsigned long at = strtoul(q, (char **)&q, 10); int v = *q == ':' ? atoi(q + 1) : 0;
+            if (at == frame) s_fm_i = v != 0;
+            q = strchr(q, ','); if (q) q++;
+        } }
     if (frame % 30 == 0) music_names();              /* THEME n (LOCKED) follows the equipment */
     tp_place_tick();
     { extern void gv_slots_frame(uint64_t); gv_slots_frame(frame); }
@@ -674,6 +746,7 @@ void gv_on_post_reset(void)
         s_rom_ok = rom[k_map_fix[i].off] == k_map_fix[i].orig || rom[k_map_fix[i].off] == k_map_fix[i].fixed;
     if (!s_rom_ok) fprintf(stderr, "[gv_qol] room table bytes not as expected: MAP FIXES disabled\n");
     load_config();
+    fm_set_attached(s_fm_i);                          /* before the boot code looks for the unit */
     pw_load();
     {   const char *t = getenv("GV_PASSWORD");            /* test: 64 hex digits = a password to pre-fill */
         if (t && strlen(t) >= 64) { for (int i = 0; i < 32; i++) { unsigned v; sscanf(t + 2 * i, "%2x", &v); s_pw[i] = (uint8_t)v; } s_pw_have = true; } }

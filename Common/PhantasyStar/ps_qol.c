@@ -116,16 +116,18 @@ static const char *const k_flycost_names[] = { "SPELL (8 MP)", "FREE" };
 int ps_fly_opt_all(void)  { return s_flyall_i; }
 int ps_fly_opt_free(void) { return s_flyfree_i; }
 static int s_bgm_i = 100, s_sfx_i = 100;       /* music / sound effects volume, percent */
-/* SOUND CHIP (ps_sound.c): ini key sound_chip = fm | psg | psg_western (absent = the ROM's own) */
+/* SOUND CHIP (ps_sound.c): ini key sound_chip = fm | psg | psg_western (absent = PSG: PSG WEST on the
+   Western ROMs, the Japanese driver's PSG on Japanese ROMs and AGES En; user decision 2026-11-17) */
 extern void        ps_sound_init(void);
 extern int         ps_sound_mode_from_key(const char *k);
 extern const char *ps_sound_mode_key(int m);
 extern const char *ps_sound_mode_name(int m);
 extern bool        ps_sound_mode_available(int m);
 extern int         ps_sound_native_mode(void);
+extern int         ps_sound_default_mode(void);
 extern int         ps_sound_mode(void);
 extern void        ps_sound_select(int m);
-static int s_chip_pref = -1;                   /* mode from the ini, -1 = native */
+static int s_chip_pref = -1;                   /* mode from the ini, -1 = the default (PSG) */
 static const double k_ff_vals[] = { 0.5, 1, 2, 4 };   /* fast-forward speed while TAB / pad RT is held */
 static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
 #define N_FF 4
@@ -720,7 +722,7 @@ static void sound_frame(void)
 }
 static void on_volume_changed(void) { sound_frame(); }
 /* SOUND CHIP choices: the modes available for this ROM (its own driver bank(s) + other PS ROMs in
-   the ROM folder), the ROM's own mode marked ORIGINAL; the option exists only with 2+ modes */
+   the ROM folder), PSG WEST marked ORIGINAL on the Western ROMs; the option exists only with 2+ modes */
 static int  s_chip_i, s_chip_n, s_chip_modes[3];
 static char s_chip_buf[3][32];
 static const char *s_chip_names[3];
@@ -738,7 +740,7 @@ static void build_sound_opts(void)
         s_chip_modes[s_chip_n++] = m;
     }
     int want = s_chip_pref >= 0 && ps_sound_mode_available(s_chip_pref) ? s_chip_pref
-             : ps_sound_mode() >= 0 ? ps_sound_mode() : ps_sound_native_mode();
+             : ps_sound_mode() >= 0 ? ps_sound_mode() : ps_sound_default_mode();
     s_chip_i = 0;
     for (int i = 0; i < s_chip_n; i++) if (s_chip_modes[i] == want) s_chip_i = i;
     if (s_chip_n) ps_sound_select(s_chip_modes[s_chip_i]);

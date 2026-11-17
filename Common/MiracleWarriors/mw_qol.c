@@ -3,14 +3,23 @@
  * $MW_QOL_INI). Every option defaults to the original game.
  *
  *  OPTIONS tab: FAST FORWARD = speed while TAB / pad RT is held (engine hud_set_turbo_speed; LT = x0.5).
- *  SOUND tab  : MUSIC / SOUND EFFECTS volume (host mixing only, the game's sound data is untouched).
+ *  SOUND tab  : MUSIC / SOUND EFFECTS volume (host mixing only, the game's sound data is untouched),
+ *               SOUND CHIP PSG (original: Western consoles have no FM unit) / FM (Japanese FM unit).
+ *
+ * SOUND CHIP: the boot code ($3D00) detects the unit through port $F2 and keeps the result in $DD00
+ * (1 = FM), which the driver reads at every frame update and when a sound starts (FM / PSG record
+ * tables $8BED / $8B53). The engine's unit is attached before the boot (mw_on_post_reset); a change
+ * in the HUD is done at the driver's frame update (mw_snd_update at bank 15 $89AF, called from the
+ * frame interrupt $013B with bank 15 mapped): attach / detach, $DD00, stop all ($9294: every channel
+ * slot cleared, PSG + FM silent), then the last song command again through $DD02, which the same
+ * update processes ($8AC6).
  *
  * Sound driver (bank 15; the same 32-byte channel slot scheme as Phantasy Star's Sega driver, found
  * 2026-11-15 with SMS_PSGLOG_IX): slots at $DD0E + $20 n; +0 bit 7 = playing ($C0 = the rhythm
  * slot), +1 = the output: PSG $80 / $A0 / $C0 / $E0 (tone 0-2, noise) or FM $10 + n (FM channel n).
  * Music: $DD0E..$DD8E = FM 0-4, $DDAE = rhythm; sound effects: the three slots $DDCE, $DDEE, $DE0E
  * (random play: effects in $DE0E on FM 5, sometimes 3 / 4). The game plays FM when the FM unit
- * answers on port $F2 (the runner always reports it). Every frame the outputs used by a playing
+ * answers on port $F2 (SOUND CHIP = FM). Every frame the outputs used by a playing
  * effect slot get the effect volume, all others the music volume.
  */
 #include <stdint.h>
@@ -28,6 +37,7 @@
 static const double k_ff_vals[] = { 0.5, 1, 2, 4 };
 static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
 static int s_ff_i = 3, s_bgm_i = 100, s_sfx_i = 100;
+static int s_fm_i;                                    /* SOUND CHIP: 0 PSG (original), 1 FM */
 static char s_pct_buf[101][6];
 static const char *k_pct[101];
 
@@ -41,6 +51,7 @@ static void load_config(void)
         char key[64]; double v;
         if (line[0] == ';' || line[0] == '#' || sscanf(line, " %63[a-z_0-9] = %lf", key, &v) != 2) continue;
         if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fast_forward") && v > 0) {
             s_ff_i = 0; for (int i = 1; i < 4; i++) if (fabs(k_ff_vals[i] - v) < fabs(k_ff_vals[s_ff_i] - v)) s_ff_i = i;
@@ -53,6 +64,7 @@ static void save_config(void)
     if (getenv("SMS_NO_SAVE")) return;
     FILE *f = safe_fopen_w(s_ini, "w"); if (!f) return;   /* "<ini>.tmp", swapped in when complete */
     fprintf(f, "; Miracle Warriors options (also in game: F1 / gamepad Start).\n");
+    fprintf(f, "fm_sound       = %d     ; sound chip: 0 = PSG (original: Western consoles have no FM unit), 1 = FM (Japanese FM Sound Unit)\n", s_fm_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
     fprintf(f, "sfx_volume     = %-5d ; sound effects volume in percent (0..100)\n", s_sfx_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
@@ -89,14 +101,51 @@ static void on_close(void) { save_config(); }
 static const HudOption k_opts[] = {
     { "FAST FORWARD", k_ff_names, 4, &s_ff_i, on_ff },
 };
+static const char *k_chip[] = { "PSG (ORIGINAL)", "FM" };
 static HudOption k_sound_opts[] = {
+    { "SOUND CHIP",    k_chip, 2,   &s_fm_i,  NULL },               /* switched in mw_snd_update */
     { "MUSIC",         k_pct, 101, &s_bgm_i, on_volume_changed },
     { "SOUND EFFECTS", k_pct, 101, &s_sfx_i, on_volume_changed },
 };
 
+/* [insn_hooks] bank 15 $89AF (the sound driver's frame update; observe only) */
+static uint8_t s_last_song;                           /* last song command seen in $DD02 */
+static bool is_song(uint8_t c) { return c >= 0x81 && c <= 0x88; }   /* priority $80 in $8B2C ($A7 too: not a song) */
+int mw_snd_update(void)
+{
+    uint8_t c = sms_read8(0xDD03);                           /* the game's request ($8A2E moves it to $DD02) */
+    if (is_song(c)) s_last_song = c;
+    else if (c >= 0xA8) s_last_song = 0;                     /* $8AC6: >= $A8 = stop all */
+    {   /* test: MW_SND_LOG=2 prints every command and which channel slots play afterwards */
+        static int on = -1; if (on < 0) { const char *e = getenv("MW_SND_LOG"); on = e && e[0] == '2'; }
+        static uint8_t pend; static unsigned long fr; fr++;
+        if (on && pend) {
+            fprintf(stderr, "[snd2] %lu cmd %02X -> slots:", fr, pend);
+            for (int k = 0; k < 9; k++) if (sms_read8((uint16_t)(0xDD0E + 0x20 * k)) & 0x80) fprintf(stderr, " %04X", 0xDD0E + 0x20 * k);
+            fprintf(stderr, "\n"); pend = 0;
+        }
+        if (on && c != 0x80) pend = c;
+    }
+    bool want = s_fm_i != 0, cur = sms_read8(0xDD00) != 0;
+    if (want == cur && fm_attached() == want) return 0;
+    Z80State keep = g_z80;                                   /* our call must not disturb the driver */
+    fm_set_attached(want);
+    sms_write8(0xDD00, want ? 1 : 0);                        /* as the boot code's result */
+    sms_io_out(0xF2, want ? 1 : 0);                          /* FM output on / off, as the boot code ($3D22) */
+    g_z80.sp = (uint16_t)(g_z80.sp - 2); sms_write16(g_z80.sp, 0x0000);
+    call_by_address(0x9294);                                 /* stop all (bank 15 is mapped) */
+    uint64_t cyc = g_z80.cyc;
+    g_z80 = keep;
+    g_z80.cyc = cyc;
+    if (s_last_song) sms_write8(0xDD02, s_last_song);        /* started by this update ($8AC6) */
+    if (getenv("MW_LOG")) fprintf(stderr, "[mw] sound chip -> %s, song %02X restarted\n", want ? "FM" : "PSG", s_last_song);
+    return 0;
+}
+
 void mw_on_post_reset(void)
 {
     load_config();
+    fm_set_attached(s_fm_i);                          /* before the boot code looks for the unit */
     hud_set_turbo_speed(k_ff_vals[s_ff_i]);
     hud_set_title("MIRACLE WARRIORS - OPTIONS");
     hud_set_options(k_opts, (int)(sizeof k_opts / sizeof k_opts[0]));
@@ -110,6 +159,12 @@ void mw_on_post_reset(void)
 }
 void mw_on_frame_post(uint64_t frame)
 {
-    (void)frame;
+    {   /* test: MW_FM_SWITCH=<frame>:<0|1>,... sets SOUND CHIP at that frame (as the HUD would) */
+        const char *e = getenv("MW_FM_SWITCH");
+        for (const char *q = e; q && *q; ) {
+            unsigned long at = strtoul(q, (char **)&q, 10); int v = *q == ':' ? atoi(q + 1) : 0;
+            if (at == frame) s_fm_i = v != 0;
+            q = strchr(q, ','); if (q) q++;
+        } }
     sound_frame();
 }
