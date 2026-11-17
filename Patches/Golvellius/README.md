@@ -21,7 +21,7 @@ into `External/build/wla-dx`. Output (git-ignored):
 - `Patches/Golvellius/build/Golvellius Plus.ips` and `.bps` (the BPS refuses a wrong source ROM)
 - `ROMs/Patched/Golvellius - Valley of Doom (USA, Europe, Brazil) (En) [Golvellius Plus].sms`
   (used by `Games/golvellius-plus`; rebuild that game after a new patch: `Games/golvellius-plus/build.ps1`)
-- `ROMs/Patches/Golvellius - Valley of Doom/Golvellius Plus (this project)/`: the same `.ips` / `.bps` +
+- `ROMs/Patches/Golvellius - Valley of Doom/Golvellius Plus/`: the same `.ips` / `.bps` +
   `Golvellius Plus.txt` (what the patch does, how to apply it), ready for other emulators / flash carts
 
 Apply the patch to the **original, unpatched** ROM (one patch, no order to follow). Check any ROM's

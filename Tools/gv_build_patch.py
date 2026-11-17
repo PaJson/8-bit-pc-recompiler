@@ -13,7 +13,7 @@ patched ROM (header + checksum by .SMSHEADER). Then:
   - writes the patched ROM to ROMs/Patched/ (not with --no-rom), for the recompiled build
     Games/golvellius-plus
   - copies the .ips / .bps + a player's readme (.txt) to ROMs/Patches/Golvellius - Valley of Doom/
-    Golvellius Plus (this project)/ (git-ignored), for other emulators and flash carts
+    Golvellius Plus/ (git-ignored), for other emulators and flash carts
 WLA-DX is the git submodule External/wla-dx (the user's fork); it is built on first use into
 External/build/wla-dx with the MSYS2 tool chain (C:/msys64/mingw64).
 """
@@ -33,7 +33,7 @@ SIZE = 0x80000
 WLA_SRC = os.path.join(ROOT, 'External', 'wla-dx')
 WLA_BUILD = os.path.join(ROOT, 'External', 'build', 'wla-dx')
 MSYS = r'C:\msys64\mingw64\bin'
-REL_DIR = 'Golvellius Plus (this project)'
+REL_DIR = 'Golvellius Plus'
 README = """GOLVELLIUS PLUS
 ===============
 
