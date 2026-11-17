@@ -30,6 +30,12 @@
 ;   KEEP GOLD, GOLD DROPS / DAMAGE DEALT / DAMAGE RECEIVED x0-x10, RESET TO DEFAULTS. Kept in battery
 ;   RAM (not shown as a slot), loaded into RAM at the first frame wait after power-on, so everything,
 ;   the intro demo included, uses them; saved when the page is left. Every default = the original game.
+;   What each does (hooks below): TEXT FIXES = the 5 typos of the English ROM (PASSWARD, 3 x GOLD for
+;   FIND, DESGINED in the credits), MAP FIXES = the SMS Power bug fix (screen C5's own room, screen H4's
+;   cave graphic), SWORD HIT FIX = every swing can hit (stale hit marks cleared at each swing, as
+;   Alianger's fix), SWORD REACH = the sword's hit area 4 / 8 pixels wider on every side, CAVE DOWN
+;   SPEED = the hero walks down faster in top-down caves, KEEP GOLD = a continue does not halve the
+;   gold, multipliers = gold dropped by enemies, sword damage, damage taken (healing unchanged).
 ;
 ; Memory: banks 0 and 1 are always in slots 0/1 ($0000-$7FFF; the game never remaps them),
 ; slot 2 ($8000-$BFFF) is switched by the game (register $FFFF) and also shows the battery RAM
@@ -46,7 +52,7 @@
 ;
 ; Battery RAM (8 KB is enough; a real board needs battery RAM, emulators and flash carts have it):
 ;   $8000 "GVPLUS", format 1, slot loaded last
-;   $8010 the options (OptVals, 8 bytes: the index of each chosen value), $8018 their check byte
+;   $8010 the options (OptVals, 9 bytes: the index of each chosen value), $8019 their check byte
 ;     (sum xor $5A); missing / damaged / out of range = the defaults
 ;   $8100 + 64 * n  slot n (0 = AUTO, 1-5): +0 $A5 = used, +1 screen, +2 hero y, +3 hero x,
 ;     +4 play time (frames, seconds, minutes BCD, hours BCD), +8 $C84C (screen tile-set flag),
@@ -122,18 +128,20 @@ MAP "/" = $6E
 .DEFINE UpCnt       $C0CC        ; 2
 .DEFINE UpDst       $C0CE        ; 2: ... and writes them to VRAM from UpDst
 .DEFINE SavedBank   $C0D0        ; Enter16 / Leave16: the slot-2 bank of the game code a hook came from
-.DEFINE OptVals     $C0D1        ; 8: the options (index of the chosen value; OptDefaults = the original game)
+.DEFINE OptVals     $C0D1        ; 9: the options (index of the chosen value; OptDefaults = the original game)
 .DEFINE OptText     OptVals+0    ; TEXT FIXES       0 off, 1 on
 .DEFINE OptMap      OptVals+1    ; MAP FIXES        0 off, 1 on
 .DEFINE OptSword    OptVals+2    ; SWORD HIT FIX    0 off, 1 on
-.DEFINE OptCave     OptVals+3    ; CAVE DOWN SPEED  0 = speed 2 (original), 1 = 3, 2 = 4
-.DEFINE OptKeepGold OptVals+4    ; KEEP GOLD        0 off (a continue halves the gold), 1 on
-.DEFINE OptGold     OptVals+5    ; GOLD DROPS       x0..x10 (1 = original)
-.DEFINE OptDealt    OptVals+6    ; DAMAGE DEALT     x0..x10
-.DEFINE OptRecv     OptVals+7    ; DAMAGE RECEIVED  x0..x10
-.DEFINE OPT_N       8
-.DEFINE OptLoaded   $C0D9        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
-.DEFINE OptCur      $C0DA        ; OPTIONS page: the row under the cursor (OPT_N = RESET TO DEFAULTS)
+.DEFINE OptReach    OptVals+3    ; SWORD REACH      0 off, 1 = 4 pixels, 2 = 8 pixels wider
+.DEFINE OptCave     OptVals+4    ; CAVE DOWN SPEED  0 = speed 2 (original), 1 = 3, 2 = 4
+.DEFINE OptKeepGold OptVals+5    ; KEEP GOLD        0 off (a continue halves the gold), 1 on
+.DEFINE OptGold     OptVals+6    ; GOLD DROPS       x0..x10 (1 = original)
+.DEFINE OptDealt    OptVals+7    ; DAMAGE DEALT     x0..x10
+.DEFINE OptRecv     OptVals+8    ; DAMAGE RECEIVED  x0..x10
+.DEFINE OPT_N       9
+.DEFINE OptLoaded   $C0DA        ; 1 = OptVals came from the battery RAM (or the defaults) since power-on
+.DEFINE OptCur      $C0DB        ; OPTIONS page: the row under the cursor (OPT_N = RESET TO DEFAULTS)
+.DEFINE ReachBox    $C0DC        ; 8: SWORD REACH: the box last widened, per sword object ($C120, $C140)
 
 ; the game's routines and RAM (bank 0)
 .DEFINE WaitFrame   $07C3        ; wait one frame
@@ -205,7 +213,77 @@ MAP "/" = $6E
 .SECTION "hook_game_over" OVERWRITE
     jp Stub_GameOver
 .ENDS
+.ORGA $1334                      ; LAST GAME CONTINUE: was ld a,$79 / call $0E0B / ld de,$1377 / push de /
+.SECTION "keep_gold_last" OVERWRITE  ;   push hl / ret (asset $79 = bank 7 $8014 halves the gold, returns to $1377)
+    ld a,(OptKeepGold)            ; KEEP GOLD: the same call, skipped when on ($2996 = call $0E0B / jp (hl))
+    or a
+    ld a,$79
+    call z,$2996
+    .DB $18, $1377-$133F          ; jr $1377 (from $133D)
+.ENDS
+.ORGA $136D                      ; PASSWORD CONTINUE: was ld a,$79 / call $0E0B / ld bc,$1377 / push bc / jp (hl)
+.SECTION "keep_gold_password" OVERWRITE
+    ld a,(OptKeepGold)
+    or a
+    ld a,$79
+    call z,$2996
+    nop                           ; -> $1377
+.ENDS
+.ORGA $193D                      ; a screen's room record was copied to $CAD0: was ld a,($CAD0)
+.SECTION "hook_map_fix" OVERWRITE
+    call Hook_Map
+.ENDS
+.ORGA $33EE                      ; sword damage A to the enemy at IX: was ld e,a / ld a,(ix+$15)
+.SECTION "hook_damage_dealt" OVERWRITE
+    call Hook_Dealt
+    nop
+.ENDS
+.ORGA $35EA                      ; gold drop E (BCD tens): was the 3-byte BCD add $35EA-$3603, then the cap
+.SECTION "hook_gold_drop" OVERWRITE
+    call Hook_Gold                ; (returns carry = overflow, as the add)
+    .DB $18, $3604-$35EF          ; jr $3604 (from $35ED): the cap
+.ENDS
+.ORGA $37D8                      ; the hero touched something: was ld a,(hl) / ld hl,$C81A (damage < 0, healing > 0)
+.SECTION "hook_damage_received" OVERWRITE
+    call Hook_Recv
+    nop
+.ENDS
+.ORGA $3509                      ; an enemy tests its box against the sword objects: was ld a,($C120)
+.SECTION "hook_sword_reach" OVERWRITE
+    call Hook_Reach
+.ENDS
+.ORGA $3F45                      ; the three sword swing starts: was ld a,4 / ld ($C120),a
+.SECTION "hook_swing_1" OVERWRITE
+    call Hook_Swing
+    nop
+    nop
+.ENDS
+.ORGA $0306                      ; DrawString's character fetch: was ld a,(hl) / inc hl / or a (credits: bank 15)
+.SECTION "hook_draw_string" OVERWRITE
+    call Hook_Str
+.ENDS
+.BANK 1 SLOT 1
+.ORGA $4646                      ; top-down cave hero: was call $2F34 (velocity = direction x speed (ix+4))
+.SECTION "hook_cave_down" OVERWRITE
+    call Hook_Cave
+.ENDS
+.ORGA $43AC
+.SECTION "hook_swing_2" OVERWRITE
+    call Hook_Swing
+    nop
+    nop
+.ENDS
+.ORGA $4678
+.SECTION "hook_swing_3" OVERWRITE
+    call Hook_Swing
+    nop
+    nop
+.ENDS
 .BANK 7 SLOT 2
+.ORGA $8EC8                      ; the cave-text interpreter's character fetch: was ld a,(hl) / cp $F0
+.SECTION "hook_text" OVERWRITE
+    call Hook_Text
+.ENDS
 .ORGA $9138                      ; Winkle (text command $FA): was call $8336 (make + draw the password)
 .SECTION "hook_winkle" OVERWRITE
     call Stub_Winkle
@@ -221,9 +299,14 @@ MAP "/" = $6E
 ; `Hook_X: call Enter16 ; jp X` (bank 16), X ends `jp Leave16` (the game's bank back, AF kept).
 ; SavedBank is one byte: a handler must not pass through another Enter16 hook (Stub_Wait, which
 ; every frame wait goes through, keeps its bank on the stack instead).
-Enter16:
+Enter16:                         ; (AF kept: the hooks below run in the middle of the game's code)
+    push af
     ld a,($FFFF)
     ld (SavedBank),a
+    ld a,16
+    ld ($FFFF),a
+    pop af
+    ret
 Map16:
     ld a,16
     ld ($FFFF),a
@@ -248,6 +331,38 @@ Hook_StartScreen:                ; from $13E3
 Hook_StartPos:                   ; from $1391
     call Enter16
     jp StartPosH
+Hook_Map:                        ; from $193D
+    call Enter16
+    jp MapH
+Hook_Dealt:                      ; from $33EE
+    call Enter16
+    jp DealtH
+Hook_Gold:                       ; from $35EA
+    call Enter16
+    jp GoldH
+Hook_Recv:                       ; from $37D8
+    call Enter16
+    jp RecvH
+Hook_Reach:                      ; from $3509
+    call Enter16
+    jp ReachH
+Hook_Swing:                      ; from $3F45, $43AC, $4678
+    call Enter16
+    jp SwingH
+Hook_Cave:                       ; from bank 1 $4646: the speed, then the original call in the game's bank
+    call Enter16
+    call CaveH
+    call Leave16
+    jp $2F34
+Hook_Text:                       ; from bank 7 $8EC8: the character is read in bank 7, checked in bank 16
+    ld a,(hl)
+    call Enter16
+    jp TextH
+Hook_Str:                        ; from $0306 (DrawString): the same for the credits (bank 15)
+    ld a,(hl)
+    inc hl
+    call Enter16
+    jp StrH
 
 Stub_TitleButton:                ; from $27F8
     call Map16
@@ -934,9 +1049,10 @@ SaveSlot:                        ; A = slot, B = hero y, C = x, D = start screen
     jp Stub_Sram
 
 ; --- OPTIONS: battery RAM $8010-$8017 = OptVals, $8018 = check byte ---
-OptDefaults: .DB 0, 0, 0, 0, 0, 1, 1, 1     ; the original game
-OptCount:    .DB 2, 2, 2, 3, 2, 11, 11, 11  ; number of values
-OptKinds:    .DB 0, 0, 0, 1, 0, 2, 2, 2     ; 0 OFF / ON, 1 a speed name, 2 X0..X10
+OptDefaults: .DB 0, 0, 0, 0, 0, 0, 1, 1, 1     ; the original game
+OptCount:    .DB 2, 2, 2, 3, 3, 2, 11, 11, 11  ; number of values
+OptKinds:    .DB 0, 0, 0, 1, 1, 0, 2, 2, 2     ; 0 OFF / ON, 1 a name from OptNames, 2 X0..X10
+OptNames:    .DW 0, 0, 0, ReachNames, SpeedNames, 0, 0, 0, 0
 
 OptSum:                          ; HL -> OPT_N bytes: A = their check byte
     ld b,OPT_N
@@ -996,14 +1112,14 @@ OptSave:                         ; OptVals -> battery RAM (with our header when 
     ld bc,OPT_N+1
     jp Stub_Sram
 
-; the page: title row 1, option n on row 3 + 2n (label column 3, value column 22, arrow column 1),
+; the page: title row 0, option n on row 2 + 2n (label column 3, value column 22, arrow column 1),
 ; RESET TO DEFAULTS last, help on row 22. Up / down = row, left = previous value, right / button 1 =
 ; next value, button 1 on RESET = asks NO / YES, button 2 = save and back.
 OptionsPage:
     call PageOpen
     xor a
     ld (OptCur),a
-    ld bc,12+256*1
+    ld bc,12+256*0
     call NtAt
     ld hl,StrOptTitle
     call NtPrint
@@ -1114,7 +1230,7 @@ OptCursors:                      ; the arrow at the row under the cursor, spaces
 @each:
     push af
     add a,a
-    add a,3
+    add a,2
     ld b,a
     ld c,1
     call NtAt
@@ -1135,7 +1251,7 @@ OptCursors:                      ; the arrow at the row under the cursor, spaces
 OptDrawRow:                      ; A = row (0..OPT_N): its label and value
     ld (Tmp+15),a
     add a,a
-    add a,3
+    add a,2
     ld b,a
     ld c,3
     call NtAt
@@ -1154,7 +1270,7 @@ OptDrawRow:                      ; A = row (0..OPT_N): its label and value
     cp OPT_N
     ret z                        ; RESET TO DEFAULTS: no value
     add a,a
-    add a,3
+    add a,2
     ld b,a
     ld c,22
     call NtAt
@@ -1191,11 +1307,22 @@ OptDrawRow:                      ; A = row (0..OPT_N): its label and value
     jp z,NtPrint
     ld hl,StrOn
     jp NtPrint
-@speed:
+@speed:                          ; a name: OptNames[option][value]
+    push af
+    ld a,(Tmp+15)
     add a,a
     ld e,a
     ld d,0
-    ld hl,SpeedNames
+    ld hl,OptNames
+    add hl,de
+    ld a,(hl)
+    inc hl
+    ld h,(hl)
+    ld l,a
+    pop af
+    add a,a
+    ld e,a
+    ld d,0
     add hl,de
     ld a,(hl)
     inc hl
@@ -1203,24 +1330,31 @@ OptDrawRow:                      ; A = row (0..OPT_N): its label and value
     ld l,a
     jp NtPrint
 
-OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8
+OptLabels:   .DW @l0, @l1, @l2, @l3, @l4, @l5, @l6, @l7, @l8, @l9
 @l0: .ASC "TEXT FIXES"
      .DB 0
 @l1: .ASC "MAP FIXES"
      .DB 0
 @l2: .ASC "SWORD HIT FIX"
      .DB 0
-@l3: .ASC "CAVE DOWN SPEED"
+@l3: .ASC "SWORD REACH"
      .DB 0
-@l4: .ASC "KEEP GOLD"
+@l4: .ASC "CAVE DOWN SPEED"
      .DB 0
-@l5: .ASC "GOLD DROPS"
+@l5: .ASC "KEEP GOLD"
      .DB 0
-@l6: .ASC "DAMAGE DEALT"
+@l6: .ASC "GOLD DROPS"
      .DB 0
-@l7: .ASC "DAMAGE RECEIVED"
+@l7: .ASC "DAMAGE DEALT"
      .DB 0
-@l8: .ASC "RESET TO DEFAULTS"
+@l8: .ASC "DAMAGE RECEIVED"
+     .DB 0
+@l9: .ASC "RESET TO DEFAULTS"
+     .DB 0
+ReachNames:  .DW StrOff, @r1, @r2
+@r1: .ASC "4 PIXELS"
+     .DB 0
+@r2: .ASC "8 PIXELS"
      .DB 0
 SpeedNames:  .DW @s0, @s1, @s2
 @s0: .ASC "1X"
@@ -1804,6 +1938,334 @@ StartPosH:                       ; $1391: the hero's start position (and the loa
 @set:
     ld ($C101),hl                ; $C101 = y, $C102 = x
     jp Leave16                   ; (-> 7 x nop, $139B)
+
+; --- option hooks (Hook_* in bank 1: entered with Enter16, back with Leave16 = the game's bank, AF kept) ---
+MapH:                            ; $193D MAP FIXES: the room record of the screen just loaded is at $CAD0
+    ld a,(OptMap)
+    or a
+    jr z,@done
+    ld a,($C80D)
+    cp 54                        ; C5 (room record 126): its own layout $7E, not E1's $8E
+    jr nz,@h4
+    ld a,($CAD0)
+    cp $8E
+    jr nz,@done
+    ld a,$7E
+    ld ($CAD0),a
+    jr @done
+@h4:
+    cp 46                        ; H4 (room record 175): the cave entrance graphic $2B, not $94
+    jr nz,@done
+    ld a,($CAD6)
+    cp $94
+    jr nz,@done
+    ld a,$2B
+    ld ($CAD6),a
+@done:
+    ld a,($CAD0)                 ; the original instruction
+    jp Leave16
+
+DealtH:                          ; $33EE DAMAGE DEALT: A = sword damage -> E, capped at the enemy's HP (IX+$15)
+    ld e,a
+    ld a,(OptDealt)
+    cp 1
+    jr z,@done                   ; x1: the original
+    push bc
+    ld b,a
+    xor a
+    inc b
+    dec b
+    jr z,@got                    ; x0: no damage
+@mul:
+    add a,e
+    jr c,@sat
+    djnz @mul
+    jr @got
+@sat:
+    ld a,$FF
+@got:
+    ld e,a
+    ld a,(ix+$15)
+    cp e
+    jr nc,@fits
+    ld e,a                       ; no more than its HP (= exactly dead)
+@fits:
+    pop bc
+@done:
+    ld a,(ix+$15)                ; the original second instruction
+    jp Leave16
+
+GoldH:                           ; $35EA GOLD DROPS: E (BCD tens) added OptGold times; carry = overflow (-> GOLD MAX)
+    push bc
+    ld a,(OptGold)
+    ld b,a
+    or a
+    jr z,@none                   ; x0: nothing
+@add:
+    ld a,($C841)                 ; the original add, once per x
+    add a,e
+    daa
+    ld ($C841),a
+    ld a,($C840)
+    adc a,0
+    daa
+    ld ($C840),a
+    ld a,($C83F)
+    adc a,0
+    daa
+    ld ($C83F),a
+    jr c,@over
+    djnz @add
+@none:
+    pop bc
+    or a                         ; no overflow
+    jp Leave16
+@over:
+    pop bc
+    scf
+    jp Leave16
+
+RecvH:                           ; $37D8 DAMAGE RECEIVED: A = (HL) (< 0 = power lost), HL = $C81A as the original
+    ld a,(hl)
+    ld hl,$C81A
+    bit 7,a
+    jp z,Leave16                 ; healing / nothing: unchanged
+    push bc
+    ld c,a
+    ld a,(OptRecv)
+    cp 1
+    jr z,@keep                   ; x1: the original
+    ld b,a
+    ld a,c
+    neg
+    ld c,a                       ; the damage (1..128)
+    xor a
+    inc b
+    dec b
+    jr z,@keep0                  ; x0: no damage
+@mul:
+    add a,c
+    jr c,@sat
+    cp $80
+    jr nc,@sat
+    djnz @mul
+    jr @neg
+@sat:
+    ld a,$7F
+@neg:
+    neg
+    pop bc
+    jp Leave16
+@keep0:
+    pop bc
+    jp Leave16                   ; A = 0
+@keep:
+    ld a,c
+    pop bc
+    jp Leave16
+
+ReachH:                          ; $3509 SWORD REACH: widen the box of a hitting sword ($84) once the game wrote it
+    ld a,(OptReach)
+    or a
+    jr z,@done
+    push hl
+    push de
+    push bc
+    add a,a
+    add a,a
+    ld c,a                       ; 4 / 8 pixels
+    ld hl,$C120
+    ld de,ReachBox
+    call @one
+    ld hl,$C140
+    ld de,ReachBox+4
+    call @one
+    pop bc
+    pop de
+    pop hl
+@done:
+    ld a,($C120)                 ; the original instruction
+    jp Leave16
+@one:                            ; HL = sword object, DE -> the box we wrote last, C = pixels
+    ld a,(hl)
+    cp $84
+    ret nz
+    ld a,l
+    add a,$16
+    ld l,a                       ; +$16..+$19: low / high x, low / high y
+    push hl
+    push de
+    ld b,4
+@cmp:
+    ld a,(de)
+    cp (hl)
+    jr nz,@new
+    inc hl
+    inc de
+    djnz @cmp
+    pop de                       ; still our widened box
+    pop hl
+    ret
+@new:
+    pop de
+    pop hl
+    ld b,2
+@axis:
+    ld a,(hl)
+    sub c
+    jr nc,@lo
+    xor a
+@lo:
+    ld (hl),a
+    ld (de),a
+    inc hl
+    inc de
+    ld a,(hl)
+    add a,c
+    jr nc,@hi
+    ld a,$FF
+@hi:
+    ld (hl),a
+    ld (de),a
+    inc hl
+    inc de
+    djnz @axis
+    ret
+
+SwingH:                          ; $3F45 / $43AC / $4678 SWORD HIT FIX: every object's hit mark (+$1F) cleared
+    ld a,(OptSword)
+    or a
+    jr z,@swing
+    push hl
+    push de
+    push bc
+    ld hl,$C17F                  ; objects $C160 + 32 n, n = 0..12
+    ld de,32
+    ld b,13
+    xor a
+@clear:
+    ld (hl),a
+    add hl,de
+    djnz @clear
+    pop bc
+    pop de
+    pop hl
+@swing:
+    ld a,4                       ; the original: sound / swing state 4
+    ld ($C120),a
+    jp Leave16
+
+CaveH:                           ; bank 1 $4646 CAVE DOWN SPEED: the hero's speed (IX+4 = $C104) by direction
+    push af
+    ld a,(OptCave)
+    or a
+    jr z,@done                   ; off: the game's own speed, untouched
+    push bc
+    add a,2
+    ld b,a                       ; down: 3 or 4
+    ld a,($C801)                 ; direction: 0 down-left, 3 down, 6 down-right
+    or a
+    jr z,@down
+    cp 3
+    jr z,@down
+    cp 6
+    jr z,@down
+    ld b,2                       ; any other: the original 2
+@down:
+    ld a,b
+    ld ($C104),a
+    pop bc
+@done:
+    pop af
+    ret
+
+TextH:                           ; bank 7 $8EC8 TEXT FIXES: A = the character at HL; then the original cp $F0
+    push hl
+    push de
+    push bc
+    ld c,a
+    ld a,(OptText)
+    or a
+    jr z,@done
+    ex de,hl
+    ld hl,TypoTable
+    ld b,(TypoEnd-TypoTable)/3
+@scan:
+    ld a,(hl)
+    inc hl
+    cp e
+    jr nz,@skip
+    ld a,(hl)
+    cp d
+    jr nz,@skip
+    inc hl
+    ld c,(hl)
+    jr @done
+@skip:
+    inc hl
+    inc hl
+    djnz @scan
+@done:
+    ld a,c
+    pop bc
+    pop de
+    pop hl
+    cp $F0
+    jp Leave16
+TypoTable:                       ; bank 7 address, the right letter
+    .DW $99AF
+    .DB 'O'                      ; PASSWARD -> PASSWORD (text $03, Winkle)
+    .DW $A1E6
+    .DB 'F'                      ; "DIDST THOU GOLD THE RING" -> FIND (text $24)
+    .DW $A1E7
+    .DB 'I'
+    .DW $A1E8
+    .DB 'N'
+    .DW $A665
+    .DB 'F'                      ; "GO GOLD MORE" -> FIND (text $2B)
+    .DW $A666
+    .DB 'I'
+    .DW $A667
+    .DB 'N'
+    .DW $AA24
+    .DB 'F'                      ; "HELP THEE GOLD MANY UNUSUAL OBJECTS" -> FIND (text $2F)
+    .DW $AA25
+    .DB 'I'
+    .DW $AA26
+    .DB 'N'
+TypoEnd:
+
+StrH:                            ; $0306 TEXT FIXES in the credits: A = the character, HL past it; then or a
+    or a
+    jp z,Leave16                 ; the end of the string
+    push hl
+    push bc
+    ld c,a
+    ld a,(OptText)
+    or a
+    jr z,@done
+    ld a,(SavedBank)
+    cp 15                        ; the credits strings are in bank 15
+    jr nz,@done
+    dec hl
+    ld a,h
+    cp $BC
+    jr nz,@done
+    ld a,l
+    cp $5B                       ; "DESGINED" at $BC58: G I -> I G
+    jr nz,@i
+    ld c,'I'
+    jr @done
+@i:
+    cp $5C
+    jr nz,@done
+    ld c,'G'
+@done:
+    ld a,c
+    pop bc
+    pop hl
+    or a
+    jp Leave16
 
 ; the overworld's Pause screen, button 1 (from Stub_PauseWait)
 PauseSave:
