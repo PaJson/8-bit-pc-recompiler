@@ -162,6 +162,7 @@ MAP ":" = $BB                    ; our own tile (GlyphUp ColonBits): see ColonTi
 .DEFINE HelpRow     $C0F4        ; the row of DrawHelp / SubDraw (22)
 .DEFINE StepLeft    $C0F6        ; OVERWORLD SPEED: extra steps left in this frame
 .DEFINE StepFlags   $C0F7        ; bit 0 = an extra step is running, bit 1 = 1.5X: this frame has one
+.DEFINE StepFace    $C0FF        ; the hero's facing before the frame's first step (for the tail's turn test)
 .DEFINE StarTile    $BA          ; OPTIONS page: our '*' (title tiles 256+$BA, VRAM $3740)
 .DEFINE ColonTile   $BB          ; ':' (character $BB): title pages 256+$BB ($3760), Pause pages $7B ($0F60),
                                  ; the Game Over screen $BB ($1760, a kana of the game's font: not shown there)
@@ -1296,6 +1297,8 @@ StepH:                           ; (only A and the flags change: the tail may us
     jr nz,@more                  ; an extra step of this frame
     xor 2                        ; the frame's own step: this frame's extra steps (2X: 1, 1.5X: 1 every
     ld (StepFlags),a             ; other frame)
+    ld a,(ix+5)                  ; the facing before this frame's steps ($3D64 stores it before every step)
+    ld (StepFace),a
     ld a,(OptWalk)
     cp 2
     ld a,1
@@ -1325,7 +1328,10 @@ StepH:                           ; (only A and the flags change: the tail may us
     ld a,(StepFlags)
     and $FE
     ld (StepFlags),a
-@tail:
+    ld a,(StepFace)              ; the tail compares the facing with the one before the frame's FIRST step:
+    ld (ix+5),a                  ; a turn made in an earlier step of this frame still restarts the animation
+@tail:                           ; and sets the sprite frame $C103, which the sword takes its direction from
+
     ld a,(ix+$10)                ; the original instruction
     jp Leave16
 

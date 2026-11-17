@@ -768,8 +768,36 @@ static void ram_use_frame(void)
     if (on) for (int i = 0; i < 0x2000; i++) s_ram_use[i] |= sms_read8((uint16_t)(0xC000 + i));
 }
 
+/* test: GV_RAM_TRACE=<from>-<to>:<hex addr>+<len>,... prints those RAM bytes after every frame in the range */
+static void ram_trace_frame(uint64_t frame)
+{
+    static const char *e = (const char *)1;
+    static long lo, hi;
+    static const char *list;
+    if (e == (const char *)1) {
+        e = getenv("GV_RAM_TRACE");
+        if (e && sscanf(e, "%ld-%ld:", &lo, &hi) == 2) list = strchr(e, ':') + 1; else e = NULL;
+    }
+    if (!e || (long)frame < lo || (long)frame > hi) return;
+    fprintf(stderr, "[trace] %5ld", (long)frame);
+    for (const char *p = list; *p; ) {
+        unsigned a = 0, n = 1;
+        int used = 0;
+        if (sscanf(p, "%x+%u%n", &a, &n, &used) < 1 || !used) {
+            if (sscanf(p, "%x%n", &a, &used) < 1 || !used) break;
+            n = 1;
+        }
+        fprintf(stderr, " %04X:", a);
+        for (unsigned i = 0; i < n; i++) fprintf(stderr, "%02X", sms_read8((uint16_t)(a + i)));
+        p += used;
+        if (*p == ',') p++;
+    }
+    fputc('\n', stderr);
+}
+
 void gv_on_frame_post(uint64_t frame)
 {
+    ram_trace_frame(frame);
     if (s_plus && !hud_is_open()) ropt_read();       /* the HUD shows what the ROM's OPTIONS page set */
     if (s_plus) {   /* test: GV_ROPT_SET=<frame>:<option 0..8>=<value>,... = a HUD change of a ROM option */
         static const char *e = (const char *)1; if (e == (const char *)1) e = getenv("GV_ROPT_SET");
