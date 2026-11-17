@@ -8,13 +8,30 @@
  *    in the in-memory ROM image and can be switched live:
  *      $15CB9 $8E -> $7E  screen C5 used room 142 (a duplicate of E1) instead of its own room 126
  *      $15E16 $94 -> $2B  wrong cave graphic on screen H5
- *  SWORD HIT FIX (Alianger's Improvement Hack v1.1 "sword hit detection fix", own code): original:
- *    every other sword hit only stuns unless the sword is held out. Object field +$1F: bit 7 =
- *    stunned / hit, low bits = countdown (code at $4520). The three swing starts `ld a,4 ; ld ($C120),a`
- *    ($C120 = sound effect 4 = the swing; a test fired it on every sword press) at $3F45, $43AC, $4678 get an observing
- *    [insn_hooks] hook that clears +$1F of the 13 objects at $C160 + 32*n ($C17F + 32*n), exactly
- *    what that IPS's new routine ($90B9 in bank 12) does at the same three spots. Not yet confirmed
- *    by playing: 30000 frames of random input (71 swings) never found a stale flag at those spots.
+ *  SWORD HIT FIX (the same fix as Golvellius Plus, ContactH): the sword contact routine $33BC deals damage
+ *    only when the enemy's +$1F is 0, then sets 11 and counts it down only while the sword touches; a
+ *    swing touches a few frames, so a leftover count swallowed the next swing ("every other hit only
+ *    stuns"). The swing starts `ld a,4 ; ld ($C120),a` ($3F45, $43AC, $4678) count swings; at $33D1
+ *    (`ld a,(ix+$1F)`) the first contact of a new swing with enemy slot n ($C160 + 32 n) starts with the
+ *    count at 0; later contacts and the held sword keep the original 12-frame rhythm; nothing else is
+ *    touched (until 2026-11-17: all 13 counts cleared at every swing, Alianger's way; other objects use
+ *    +$1F as their own timers).
+ *  OVERWORLD SPEED 1X / 1.5X / 2X (Golvellius Plus StepH): $3ED3 = the shared tail after the hero's 1-pixel
+ *    step ($3D8F / $3E06 / $3E49 / $3E8E, each with the game's wall, turning, cave and screen-edge checks).
+ *    In mode 6 without a scroll the hook runs the step dispatch again (as $3D40..$3D6A in mode 6: handler
+ *    = table $3D6B[$C801], (ix+5) = (ix+$10), jp) and ends func_3ED3 (hook result 2): the handler jumps to
+ *    $3ED3 again, whose RET is the real return. 2X = 1 extra step per frame, 1.5X = 1 every other frame;
+ *    the tail runs once, with (ix+5) = the facing before the frame's first step (else a turn in the first
+ *    step was never seen and the sword, which takes its direction from the sprite frame $C103, swung the
+ *    old way for up to 8 frames).
+ *  EASY CAVE ENTRY (Plus CaveEasy, from the same hook after every step): the game enters a cave only on
+ *    the entrance cell's exact point (x 16 n, y 16 n + 8, $3DC7) with terrain 0 ($2D06); here also when the
+ *    hero is near it: the nearest point (+ the other one when exactly 8 px off on an axis), only if this
+ *    step brought him closer and the previous step was within 16 px on both axes (reset when the mode
+ *    leaves 6, on a scroll, a teleport); then the hero is put on the point and the game's entry writes
+ *    follow ($C813 = 1, mode $11, +$1D = $FF, +$1E = 0).
+ *  KEEP GOLD: a continue halves the gold (asset $79, bank 7 $8014) at $1334 (LAST GAME CONTINUE) and
+ *    $136D (PASSWORD CONTINUE); the hooks skip it (-> $1377).
  *  FAST FORWARD: speed while TAB / pad RT is held (engine hud_set_turbo_speed; LT = x0.5).
  *  MULTIPLIERS tab (x0..x10): DAMAGE DEALT ($33EE), DAMAGE RECEIVED ($37D8, healing unchanged),
  *    GOLD DROPS ($35EA, 6-digit BCD add, the game's GOLD MAX cap still applies).
@@ -37,11 +54,11 @@
  *    Each sound has an FM and a PSG version with their own flags: e.g. the big enemies' death sound
  *    $35 protects the effect channel in FM only, so pickups are not heard for ~2 s (CLAUDE.md).
  *  GOLVELLIUS PLUS (our ROM patch, found by its ID block at bank 16 $8000): the ROM does TEXT FIXES, MAP
- *    FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, KEEP GOLD and the multipliers itself (its title ->
- *    OPTIONS page); the HUD shows those 9 instead of ours, read from / written to the ROM's own storage, and
- *    our versions (ROM-image patches, hooks, ini keys) are off. Its save slots replace PASSWORD SAVE SLOTS;
- *    gv_slots.c makes the maps follow them. Test env: GV_ROPT_SET=<frame>:<option>=<value>,...,
- *    GV_HUD_PAGE=<tab> (the tab the HUD opens on).
+ *    FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, OVERWORLD SPEED, EASY CAVE ENTRY, KEEP GOLD and
+ *    the multipliers itself (title -> OPTIONS), so the HUD leaves them out (no MULTIPLIERS tab; user
+ *    2026-11-17: no duplicate settings) and our versions (ROM-image patches, hooks, ini keys) are off. Its
+ *    save slots replace PASSWORD SAVE SLOTS; gv_slots.c makes the maps follow them.
+ *    Test env GV_HUD_PAGE=<tab> (the tab the HUD opens on), GV_HUD_OPEN=<frame> + GV_HUD_OPTKEYS=<U D ...>.
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -57,9 +74,6 @@
 #include "video/sms_vdp.h"
 
 extern uint8_t *glue_rom_image(size_t *size);
-extern const uint8_t *glue_sram_image(size_t *size);
-extern void glue_sram_poke(size_t off, uint8_t v);
-extern void glue_sram_flush(void);
 
 #define ROM_CRC_SIZE 0x40000
 static const struct { uint32_t off; uint8_t orig, fixed; } k_map_fix[2] = {
@@ -75,68 +89,25 @@ static int s_mapfix_i, s_hitfix_i, s_ff_i = 3, s_pw_i, s_tfix_i;
 static int s_bgm_i = 100, s_sfx_i = 100;            /* SOUND tab: music / effects volume, percent */
 static int s_fm_i;                                    /* SOUND CHIP: 0 PSG (original), 1 FM */
 static int s_dealt_i = 1, s_recv_i = 1, s_gold_i = 1, s_dina_i, s_tp_i, s_music_i, s_panel_i, s_reach_i, s_down_i;
+static int s_walk_i, s_easy_i, s_keep_i;            /* OVERWORLD SPEED 0..2, EASY CAVE ENTRY, KEEP GOLD */
+static uint8_t s_cave_ly;                           /* (EASY CAVE ENTRY, defined below; the teleport resets it) */
 extern int gv_cave_reveal;                         /* gv_cave.c: DUNGEON MAP option */
 extern int gv_cave_info_all;                       /* gv_info.c: CAVE INFO option */
 static const char *const k_cinfo[] = { "ENTERED CAVES", "ALL CAVES (SPOILER)" };
 static const char *const k_dmap[] = { "EXPLORED PART", "WHOLE DUNGEON" };
-static const char *const k_reach[] = { "ORIGINAL", "+4 PIXELS", "+8 PIXELS" };
+/* value names as on the Golvellius Plus OPTIONS page */
+static const char *const k_reach[] = { "OFF (ORIGINAL)", "4 PIXELS", "8 PIXELS" };
+static const char *const k_speed[] = { "1X (ORIGINAL)", "1.5X", "2X" };   /* CAVE DOWN SPEED, OVERWORLD SPEED */
 static const char *const k_mult[] = { "0X", "1X (ORIGINAL)", "2X", "3X", "4X", "5X", "6X", "7X", "8X", "9X", "10X" };
 static const char *const k_dina[] = { "150 GOLD (ORIGINAL)", "2600 GOLD (ALIANGER)" };
-static const char *const k_downspd[] = { "X1 (ORIGINAL)", "X1.5 (ALIANGER)" };
 static const char *const k_tp[]   = { "OFF (ORIGINAL)", "VISITED SCREENS", "PASSWORD CAVES" };
-/* Golvellius Plus (our ROM patch, Patches/Golvellius): its own OPTIONS page (title -> OPTIONS) does
-   TEXT FIXES, MAP FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, KEEP GOLD, the three multipliers
-   OVERWORLD SPEED and EASY CAVE ENTRY in the ROM. The HUD shows those same 11 options instead of our C
-   versions: read from the ROM's RAM (OptVals $C0D1, once OptLoaded $C0F5) or its battery RAM ($8010 +
-   check byte $801B = sum xor $5A; a block saved by an older patch = 10 / 9 options + check byte, the
-   newer options at their defaults),
-   written to both, so the HUD and the ROM's page are one setting. The ROM's save slots replace the
-   PASSWORD SAVE SLOTS (gv_slots.c makes the maps follow the ROM's slots). */
+/* Golvellius Plus (our ROM patch, Patches/Golvellius) does its options in the ROM: they are left out of
+   the HUD (see the header) */
 static bool s_plus;
-#define PLUS_OPTS    0xC0D1
-#define PLUS_LOADED  0xC0F5
-#define PLUS_SRAM    0x10
-#define PLUS_N       11
-static int s_ropt[PLUS_N];                         /* text, map, sword, reach, cave, keep gold, gold, dealt, recv, walk, easy cave */
-static const uint8_t k_ropt_def[PLUS_N] = { 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0 }, k_ropt_cnt[PLUS_N] = { 2, 2, 2, 3, 3, 2, 11, 11, 11, 3, 2 };
-static const char *const k_r_reach[] = { "OFF (ORIGINAL)", "4 PIXELS", "8 PIXELS" };
-static const char *const k_r_cave[]  = { "1X (ORIGINAL)", "1.5X", "2X" };
-static const char *const k_r_walk[]  = { "1X (ORIGINAL)", "1.5X", "2X" };
 static bool plus_rom(void)
 {
     size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
-    return rom && n >= 0x40012 && !memcmp(rom + 0x40000, "GOLVELLIUS PLUS\0", 16) && rom[0x40010] == 1
-        && rom[0x40011] >= 7;                         /* level 7: 11 options (older patches: 10 / 9; the build is tied to one ROM) */
-}
-/* the ROM's current values -> s_ropt (RAM once loaded, else the battery RAM, else the defaults) */
-static void ropt_read(void)
-{
-    uint8_t v[PLUS_N];
-    if (sms_read8(PLUS_LOADED) == 1) for (int i = 0; i < PLUS_N; i++) v[i] = sms_read8((uint16_t)(PLUS_OPTS + i));
-    else {
-        size_t n = 0; const uint8_t *sr = glue_sram_image(&n);
-        int have = 0;                                  /* as OptLoad: 10 options, else an older block of 9 */
-        for (int k = PLUS_N; k >= PLUS_N - 2 && !have; k--) {   /* 11, or an older block of 10 / 9 */
-            uint8_t sum = 0; bool ok = sr && n > (size_t)(PLUS_SRAM + k);
-            for (int i = 0; i < k && ok; i++) sum = (uint8_t)(sum + sr[PLUS_SRAM + i]);
-            if (ok && (uint8_t)(sum ^ 0x5A) == sr[PLUS_SRAM + k]) have = k;
-        }
-        for (int i = 0; i < PLUS_N; i++) v[i] = i < have ? sr[PLUS_SRAM + i] : k_ropt_def[i];
-    }
-    for (int i = 0; i < PLUS_N; i++) s_ropt[i] = v[i] < k_ropt_cnt[i] ? v[i] : k_ropt_def[i];   /* out of range: as OptLoad */
-}
-static bool s_ropt_dirty;                          /* (on_close writes the .sav) */
-static void ropt_changed(void)                    /* a HUD change -> the ROM's RAM + battery RAM (as OptSave) */
-{
-    uint8_t sum = 0;
-    for (int i = 0; i < PLUS_N; i++) {
-        uint8_t v = (uint8_t)s_ropt[i];
-        sms_write8((uint16_t)(PLUS_OPTS + i), v);          /* in force at once (before OptLoad: it reads the battery RAM) */
-        glue_sram_poke(PLUS_SRAM + i, v);
-        sum = (uint8_t)(sum + v);
-    }
-    glue_sram_poke(PLUS_SRAM + PLUS_N, (uint8_t)(sum ^ 0x5A));
-    s_ropt_dirty = true;
+    return rom && n >= 0x40012 && !memcmp(rom + 0x40000, "GOLVELLIUS PLUS\0", 16) && rom[0x40010] == 1;
 }
 static char s_music_names[6][24] = { "AUTO (ORIGINAL)" };
 static const char *k_music[6] = { s_music_names[0], s_music_names[1], s_music_names[2], s_music_names[3], s_music_names[4], s_music_names[5] };
@@ -213,7 +184,10 @@ static void load_config(void)
         else if (!strcmp(key, "cave_info_all")) gv_cave_info_all = v != 0;
         else if (!strcmp(key, "teleport")) s_tp_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
         else if (!strcmp(key, "sword_reach")) s_reach_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
-        else if (!strcmp(key, "cave_down_fast")) s_down_i = v != 0;
+        else if (!strcmp(key, "cave_down_fast")) s_down_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;   /* 1 = 1.5X (older inis: 0 / 1) */
+        else if (!strcmp(key, "overworld_speed")) s_walk_i = v < 0 ? 0 : v > 2 ? 2 : (int)v;
+        else if (!strcmp(key, "easy_cave_entry")) s_easy_i = v != 0;
+        else if (!strcmp(key, "keep_gold")) s_keep_i = v != 0;
         else if (!strcmp(key, "overworld_music")) s_music_i = v < 0 ? 0 : v > 5 ? 5 : (int)v;
         else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
@@ -228,8 +202,8 @@ static void save_config(void)
 {
     FILE *f = safe_fopen_w(s_ini, "w"); if (!f) return;   /* "<ini>.tmp", swapped in when complete */
     fprintf(f, "; Golvellius options (also in game: F1 / gamepad Start). 0 = original game.\n");
-    if (s_plus) fprintf(f, "; Golvellius Plus: TEXT FIXES, MAP FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, KEEP GOLD and the\n"
-                       ";   multipliers are the ROM's own options (title -> OPTIONS, or the HUD): kept in the battery save\n");
+    if (s_plus) fprintf(f, "; Golvellius Plus: TEXT FIXES, MAP FIXES, SWORD HIT FIX, SWORD REACH, CAVE DOWN SPEED, OVERWORLD SPEED,\n"
+                       ";   EASY CAVE ENTRY, KEEP GOLD and the multipliers are the ROM's own options (title -> OPTIONS), kept in the battery save\n");
     if (!s_plus) fprintf(f, "map_fixes      = %d     ; 1 = screen C5 gets its own room, screen H5 the right cave graphic (SMS Power bug fix)\n", s_mapfix_i);
     if (!s_plus) fprintf(f, "sword_hit_fix  = %d     ; 1 = every sword swing can hit (original: every other swing only stuns)\n", s_hitfix_i);
     if (!s_plus) fprintf(f, "remember_password = %d  ; 1 = passwords are saved with their maps: slot 0 = autosave, 1-5 = LB/RB in Winkle's cave and on the password screen\n", s_pw_i);
@@ -243,7 +217,10 @@ static void save_config(void)
     fprintf(f, "dina_2600      = %d    ; 1 = Dina pays 2600 gold instead of 150 (amount from Alianger's hack)\n", s_dina_i);
     fprintf(f, "teleport       = %d     ; MAP tab teleport: 0 off, 1 to visited screens, 2 to visited password caves\n", s_tp_i);
     if (!s_plus) fprintf(f, "sword_reach    = %d     ; sword hit area: 0 original, 1 = 4 pixels wider on every side, 2 = 8 pixels\n", s_reach_i);
-    if (!s_plus) fprintf(f, "cave_down_fast = %d     ; 1 = in top-down caves the hero moves down 1.5x as fast (speed 3 instead of 2, Alianger's idea)\n", s_down_i);
+    if (!s_plus) fprintf(f, "cave_down_fast = %d     ; top-down caves, moving down: 0 = original, 1 = 1.5x as fast (Alianger's idea), 2 = 2x\n", s_down_i);
+    if (!s_plus) fprintf(f, "overworld_speed = %d    ; walking on the overworld: 0 = original, 1 = 1.5x, 2 = 2x\n", s_walk_i);
+    if (!s_plus) fprintf(f, "easy_cave_entry = %d    ; 1 = walking at a cave entrance from close by enters it (original: only exactly in line)\n", s_easy_i);
+    if (!s_plus) fprintf(f, "keep_gold      = %d     ; 1 = a continue keeps all the gold (original: halved)\n", s_keep_i);
     fprintf(f, "overworld_music = %d    ; 0 = the game's choice (by sword + shield), 1..5 = that theme once unlocked\n", s_music_i);
     fprintf(f, "fm_sound       = %d     ; sound chip: 0 = PSG (original: Western consoles have no FM unit), 1 = FM (Japanese FM Sound Unit)\n", s_fm_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
@@ -268,7 +245,6 @@ extern void gv_cave_test(uint64_t frame);
 static void on_close(void)
 {
     save_config(); gv_map_save(); gv_cave_save(); gv_map_hud_closed();
-    if (s_ropt_dirty) { s_ropt_dirty = false; glue_sram_flush(); }   /* Plus: the ROM's options into the .sav now */
 }
 static int open_page(void)
 {
@@ -276,47 +252,37 @@ static int open_page(void)
     return hud_page_index(t ? t : "MAP");
 }
 static void on_ff(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
+/* the game options first, in the order of the Golvellius Plus OPTIONS page, then the PC-only ones */
 static HudOption k_opts[] = {          /* not const: TEXT FIXES gets k_notfound on another ROM */
+    { "TEXT FIXES",     k_onoff,    2, &s_tfix_i,   on_typo },
     { "MAP FIXES",      k_onoff,    2, &s_mapfix_i, on_map_fix },
     { "SWORD HIT FIX",  k_onoff,    2, &s_hitfix_i, NULL },
+    { "SWORD REACH",    k_reach,    3, &s_reach_i,  NULL },
+    { "CAVE DOWN SPEED", k_speed,   3, &s_down_i,   NULL },
+    { "OVERWORLD SPEED", k_speed,   3, &s_walk_i,   NULL },
+    { "EASY CAVE ENTRY", k_onoff,   2, &s_easy_i,   NULL },
+    { "KEEP GOLD",      k_onoff,    2, &s_keep_i,   NULL },
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
     { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },
     { "DUNGEON MAP",    k_dmap,     2, &gv_cave_reveal, NULL },
     { "CAVE INFO",      k_cinfo,    2, &gv_cave_info_all, NULL },
     { "PASSWORD SAVE SLOTS", k_onoff, 2, &s_pw_i,   NULL },
-    { "TEXT FIXES",     k_onoff,    2, &s_tfix_i,   on_typo },
     { "DINA'S PAYOUT",  k_dina,     2, &s_dina_i,   NULL },
     { "MAP TELEPORT",   k_tp,       3, &s_tp_i,     NULL },
-    { "SWORD REACH",    k_reach,    3, &s_reach_i,  NULL },
-    { "CAVE DOWN SPEED", k_downspd, 2, &s_down_i,   NULL },
 };
 static const HudOption k_mult_opts[] = {
+    { "GOLD DROPS",      k_mult, 11, &s_gold_i,  NULL },
     { "DAMAGE DEALT",    k_mult, 11, &s_dealt_i, NULL },
     { "DAMAGE RECEIVED", k_mult, 11, &s_recv_i,  NULL },
-    { "GOLD DROPS",      k_mult, 11, &s_gold_i,  NULL },
 };
-/* Golvellius Plus: the ROM's 10 options first (its OPTIONS page order; MULTIPLIERS tab = its last three),
-   then our PC-only options */
+/* Golvellius Plus: only what the ROM cannot do (the rest is on its title -> OPTIONS page) */
 static HudOption k_opts_plus[] = {
-    { "TEXT FIXES",     k_onoff,    2, &s_ropt[0],  ropt_changed },
-    { "MAP FIXES",      k_onoff,    2, &s_ropt[1],  ropt_changed },
-    { "SWORD HIT FIX",  k_onoff,    2, &s_ropt[2],  ropt_changed },
-    { "SWORD REACH",    k_r_reach,  3, &s_ropt[3],  ropt_changed },
-    { "CAVE DOWN SPEED", k_r_cave,  3, &s_ropt[4],  ropt_changed },
-    { "OVERWORLD SPEED", k_r_walk,  3, &s_ropt[9],  ropt_changed },
-    { "EASY CAVE ENTRY", k_onoff,   2, &s_ropt[10], ropt_changed },
-    { "KEEP GOLD",      k_onoff,    2, &s_ropt[5],  ropt_changed },
     { "FAST FORWARD",   k_ff_names, 4, &s_ff_i,     on_ff },
     { "SIDE PANEL",     k_onoff,    2, &s_panel_i,  on_panel },
     { "DUNGEON MAP",    k_dmap,     2, &gv_cave_reveal, NULL },
     { "CAVE INFO",      k_cinfo,    2, &gv_cave_info_all, NULL },
     { "DINA'S PAYOUT",  k_dina,     2, &s_dina_i,   NULL },
     { "MAP TELEPORT",   k_tp,       3, &s_tp_i,     NULL },
-};
-static const HudOption k_mult_plus[] = {
-    { "GOLD DROPS",      k_mult, 11, &s_ropt[6], ropt_changed },
-    { "DAMAGE DEALT",    k_mult, 11, &s_ropt[7], ropt_changed },
-    { "DAMAGE RECEIVED", k_mult, 11, &s_ropt[8], ropt_changed },
 };
 static bool s_music_dirty;
 static void on_music(void) { s_music_dirty = true; }
@@ -601,6 +567,7 @@ int gv_frame_top(void)
         {   size_t n; const uint8_t *rom = glue_rom_image(&n);
             if (rom && n >= 0x16000) sms_write8(0xC84C, rom[0x15947 + rom[0x15890 + to] * 7] >= 0x53); }
         s_tp_place = 1;                                     /* the hero: when the display is back on */
+        s_cave_ly = 0xFF;                                   /* EASY CAVE ENTRY: a new start */
         call_game(0x0D1A);
         call_game(0x1978);                                   /* its music pick goes through gv_ow_music */
         s_tp_place = 0;
@@ -622,14 +589,14 @@ int gv_frame_top(void)
  * $4646 call $2F34`: E = the pad direction $C801 (0 DL, 1 L, 2 UL, 3 D, 5 U, 6 DR, 7 R, 8 UR; 4 = none is
  * handled before), $466B = the game's direction per input, $2F34 = velocity (ix+6..9) = the direction's
  * unit vector ($2F93) times the speed byte (ix+4) & $3F. The hero is created with speed 2 ($45CF).
- * Hook $4646 (observe): speed 3 for the three downward inputs, 2 for the others (his patch does the same
- * with a flag bit in the table: down = 1.5x; the boss arena, mode $0A, uses another handler there too). */
+ * Hook $4646 (observe): speed 3 (1.5X) / 4 (2X) for the three downward inputs, 2 for the others (his patch
+ * does 1.5X with a flag bit in the table; the boss arena, mode $0A, uses another handler there too). */
 static bool s_down_set;
 int gv_cave_down(void)
 {
     if (s_down_i) {
         uint8_t d = sms_read8(0xC801);
-        sms_write8(0xC104, (uint8_t)((d == 0 || d == 3 || d == 6) ? 3 : 2));
+        sms_write8(0xC104, (uint8_t)((d == 0 || d == 3 || d == 6) ? 2 + s_down_i : 2));
         s_down_set = true;
     } else if (s_down_set) { sms_write8(0xC104, 2); s_down_set = false; }   /* switched off: the original speed */
     return 0;
@@ -659,20 +626,102 @@ int gv_sword_reach(void)
     return 0;
 }
 
+/* ==== SWORD HIT FIX (see the header) ==== */
+static uint8_t s_swing_no, s_swing_seen[13];     /* swing counter (1..255), per enemy slot: the swing that touched it last */
 /* [insn_hooks] gv_sword_swing at the three swing starts `ld a,4 ; ld ($C120),a`: observe only */
 int gv_sword_swing(void)
 {
-    static int log = -1; if (log < 0) log = getenv("GV_LOG") != NULL;     /* test */
-    if (log) {
-        int stale = 0; for (int n = 0; n < 13; n++) stale += sms_read8((uint16_t)(0xC17F + 32 * n)) != 0;
-        static unsigned long swings, with_stale; swings++; with_stale += stale > 0;
-        fprintf(stderr, "[gv] swing %lu: %d object(s) with a stale hit flag (%lu of %lu swings so far)%s\n",
-                swings, stale, with_stale, swings, s_hitfix_i ? " -> cleared" : "");
-    }
-    if (s_hitfix_i)
-        for (int n = 0; n < 13; n++) sms_write8((uint16_t)(0xC17F + 32 * n), 0);
+    if (++s_swing_no == 0) s_swing_no = 1;
+    if (qlog()) fprintf(stderr, "[gv] swing %u\n", s_swing_no);
     snd_test_poll();
     return 0;
+}
+/* [insn_hooks] gv_contact at $33D1 `ld a,(ix+$1F)` (the sword touches the enemy at IX): observe */
+int gv_contact(void)
+{
+    if (!s_hitfix_i || g_z80.ix < 0xC160) return 0;
+    unsigned n = (unsigned)(g_z80.ix - 0xC160) >> 5;
+    if (n >= 13 || s_swing_seen[n] == s_swing_no) return 0;     /* not an enemy slot / touched by this swing before */
+    s_swing_seen[n] = s_swing_no;                                 /* the first contact of a new swing: */
+    if (qlog()) fprintf(stderr, "[gv] contact: slot %u, count %u -> 0\n", n, sms_read8((uint16_t)(g_z80.ix + 0x1F)));
+    sms_write8((uint16_t)(g_z80.ix + 0x1F), 0);                   /* the cooldown starts at 0 */
+    return 0;
+}
+
+/* ==== OVERWORLD SPEED + EASY CAVE ENTRY (see the header) ==== */
+static uint8_t s_step_left, s_step_flags, s_step_face;   /* extra steps left; bit 0 = extra step running, bit 1 = 1.5X phase */
+static uint8_t s_cave_lx, s_cave_ly = 0xFF;              /* the hero's position after the previous step (y $FF = none) */
+static uint8_t absd(uint8_t a, uint8_t b) { return (uint8_t)(a >= b ? a - b : b - a); }
+/* an entrance point (y, x): entered = true (the hero is put there and the game's entry writes are done) */
+static bool cave_try(uint16_t ix, uint8_t y, uint8_t x)
+{
+    if ((uint8_t)(x - 16) >= 225 || (uint8_t)(y - 8) >= 177) return false;   /* inside the playfield */
+    uint8_t dx = absd(s_cave_lx, x), dy = absd(s_cave_ly, y);
+    if (dx >= 17 || dy >= 17) return false;                  /* the previous step was within 16 px */
+    uint8_t hy = sms_read8((uint16_t)(ix + 1)), hx = sms_read8((uint16_t)(ix + 2));
+    if ((uint8_t)(absd(hx, x) + absd(hy, y)) >= (uint8_t)(dx + dy)) return false;   /* not closer */
+    sms_write8((uint16_t)(ix + 1), y); sms_write8((uint16_t)(ix + 2), x);
+    Z80State keep = g_z80;
+    g_z80.a = 0;
+    call_game(0x2D06);                                       /* the terrain at the point (the game's test) */
+    uint8_t t = g_z80.a;
+    uint64_t cyc = g_z80.cyc; g_z80 = keep; g_z80.cyc = cyc;
+    if (t) { sms_write8((uint16_t)(ix + 1), hy); sms_write8((uint16_t)(ix + 2), hx); return false; }   /* not an opening */
+    sms_write8(0xC813, 1);                                   /* the game's entry, as at $3DE9 */
+    sms_write8(0xC802, 0x11);
+    sms_write8((uint16_t)(ix + 0x1D), 0xFF);
+    sms_write8((uint16_t)(ix + 0x1E), 0);
+    if (qlog()) fprintf(stderr, "[gv] easy cave entry at y %d x %d (hero was y %d x %d)\n", y, x, hy, hx);
+    return true;
+}
+static void cave_easy(uint16_t ix)
+{
+    if (sms_read8(0xC802) != 6 || sms_read8(0xC814)) return;
+    uint8_t hy = sms_read8((uint16_t)(ix + 1)), hx = sms_read8((uint16_t)(ix + 2));
+    uint8_t x = (uint8_t)((hx + 8) & 0xF0), y = (uint8_t)((hy & 0xF0) + 8);
+    bool in = cave_try(ix, y, x);                                            /* the nearest point */
+    if (!in && (hx & 15) == 8) in = cave_try(ix, y, (uint8_t)(x - 16));      /* half-way across: the one to the left */
+    if (!in && (hy & 15) == 0) {                                             /* half-way down: the one above */
+        in = cave_try(ix, (uint8_t)(y - 16), x);
+        if (!in && (hx & 15) == 8) in = cave_try(ix, (uint8_t)(y - 16), (uint8_t)(x - 16));
+    }
+    s_cave_lx = sms_read8((uint16_t)(ix + 2)); s_cave_ly = sms_read8((uint16_t)(ix + 1));
+}
+/* [insn_hooks] gv_step at $3ED3 (`ld a,(ix+$10)`, the tail after a 1-pixel step): 0 = the tail, 2 = an
+   extra step was run (its own pass through $3ED3 ended with the real RET) */
+int gv_step(void)
+{
+    uint16_t ix = g_z80.ix;
+    if (s_easy_i) cave_easy(ix);
+    if (!s_walk_i) return 0;
+    if (!(s_step_flags & 1)) {                               /* the frame's own step: its extra steps */
+        s_step_flags ^= 2;
+        s_step_face = sms_read8((uint16_t)(ix + 5));         /* the facing before this frame's steps */
+        s_step_left = s_walk_i == 2 ? 1 : (uint8_t)((s_step_flags & 2) >> 1);
+    }
+    if (sms_read8(0xC802) == 6 && !sms_read8(0xC814) && s_step_left) {
+        s_step_left--;
+        s_step_flags |= 1;
+        /* the dispatch again, as $3D40..$3D6A does in mode 6 (no continuation pushed there) */
+        uint8_t d = sms_read8(0xC801);
+        uint16_t tbl = (uint16_t)(0x3D6B + 2 * d), h = sms_read16(tbl);
+        uint8_t f = sms_read8((uint16_t)(ix + 0x10));
+        sms_write8((uint16_t)(ix + 5), f);
+        g_z80.a = f; g_z80.f = 0x42;                          /* Z N: `cp $06` with A = 6 */
+        g_z80.b = 0x3D; g_z80.c = 0x6B; g_z80.h = (uint8_t)(h >> 8); g_z80.l = (uint8_t)h;
+        call_by_address(h);                                   /* the handler jumps to $3ED3 (this hook) again */
+        return 2;
+    }
+    s_step_flags &= (uint8_t)~1;
+    sms_write8((uint16_t)(ix + 5), s_step_face);             /* the tail sees a turn made in any step of the frame */
+    return 0;
+}
+
+/* KEEP GOLD: [insn_hooks] gv_keep_gold at $1334 and $136D (`ld a,$79`): 1 = skip the halving -> $1377 */
+int gv_keep_gold(void)
+{
+    if (qlog()) fprintf(stderr, "[gv] continue: gold %02X%02X%02X %s\n", sms_read8(0xC83F), sms_read8(0xC840), sms_read8(0xC841), s_keep_i ? "kept" : "halved");
+    return s_keep_i != 0;
 }
 
 /* ---- REMEMBER PASSWORD (a battery save that keeps the password system) ----
@@ -800,18 +849,8 @@ static void ram_trace_frame(uint64_t frame)
 void gv_on_frame_post(uint64_t frame)
 {
     ram_trace_frame(frame);
-    if (s_plus && !hud_is_open()) ropt_read();       /* the HUD shows what the ROM's OPTIONS page set */
-    if (s_plus) {   /* test: GV_ROPT_SET=<frame>:<option 0..8>=<value>,... = a HUD change of a ROM option */
-        static const char *e = (const char *)1; if (e == (const char *)1) e = getenv("GV_ROPT_SET");
-        for (const char *q = e; q && *q; ) {
-            unsigned long at = strtoul(q, (char **)&q, 10); int i = -1, v = 0;
-            if (*q == ':') { i = (int)strtol(q + 1, (char **)&q, 10); if (*q == '=') v = (int)strtol(q + 1, (char **)&q, 10); }
-            if (at == frame && i >= 0 && i < PLUS_N && v >= 0 && v < k_ropt_cnt[i]) {
-                s_ropt[i] = v; ropt_changed(); on_close();
-                fprintf(stderr, "[gv] test: ROM option %d = %d (frame %lu)\n", i, v, at);
-            }
-            q = strchr(q, ','); if (q) q++;
-        } }
+    if (sms_read8(0xC802) != 6 || sms_read8(0xC814)) s_cave_ly = 0xFF;   /* EASY CAVE ENTRY: no previous step after a
+                                                        mode change (cave, title, load) or a scroll */
     {   /* test: GV_FM_SWITCH=<frame>:<0|1>,... sets SOUND CHIP at that frame (as the HUD would) */
         static const char *e = (const char *)1; if (e == (const char *)1) e = getenv("GV_FM_SWITCH");
         for (const char *q = e; q && *q; ) {
@@ -856,10 +895,15 @@ void gv_on_frame_post(uint64_t frame)
     {   static long mf = -2; static int mv;              /* test: GV_MUSIC_TEST=<frame>:<option 0..5> */
         if (mf == -2) { const char *e = getenv("GV_MUSIC_TEST"); mf = -1; if (e) sscanf(e, "%ld:%d", &mf, &mv); }
         if (mf >= 0 && frame == (uint64_t)mf) { s_music_i = mv; s_music_dirty = true; } }
-    {   /* test: GV_HUD_OPEN=<frame> opens the HUD (window tests: SMS_WINDOW_SHOT + _EXIT) */
+    {   /* test: GV_HUD_OPEN=<frame> opens the HUD (window tests: SMS_WINDOW_SHOT + _EXIT); GV_HUD_OPTKEYS=<U D ...>
+           = keys sent right after (option pages) */
         static long ho = -2;
         if (ho == -2) { const char *e = getenv("GV_HUD_OPEN"); ho = e ? atol(e) : -1; }
-        if (ho >= 0 && frame == (uint64_t)ho && !hud_is_open()) hud_key(HUD_KEY_TOGGLE);
+        if (ho >= 0 && frame == (uint64_t)ho && !hud_is_open()) {
+            hud_key(HUD_KEY_TOGGLE);
+            for (const char *k = getenv("GV_HUD_OPTKEYS"); k && *k; k++)
+                if (*k == 'U' || *k == 'D') hud_key(*k == 'U' ? HUD_KEY_UP : HUD_KEY_DOWN);
+        }
     }
     static long at = -2;
     if (at == -2) { const char *e = getenv("GV_TEST_GENPW"); at = e ? atol(e) : -1; }
@@ -885,8 +929,8 @@ void gv_on_post_reset(void)
     load_config();
     if (s_plus) {                                     /* the ROM does these (its OPTIONS page) and has its own save slots */
         s_mapfix_i = s_hitfix_i = s_tfix_i = s_reach_i = s_down_i = s_pw_i = 0;
+        s_walk_i = s_easy_i = s_keep_i = 0;
         s_dealt_i = s_recv_i = s_gold_i = 1;
-        ropt_read();
     }
     { extern void gv_slots_set_plus(bool on); gv_slots_set_plus(s_plus); }
     fm_set_attached(s_fm_i);                          /* before the boot code looks for the unit */
@@ -913,8 +957,7 @@ void gv_on_post_reset(void)
         extern void gv_slots_init(void); extern void gv_slots_exit(void); gv_slots_init(); atexit(gv_slots_exit); } }
     {   static bool pages;
         if (!pages) { pages = true;
-            if (s_plus) hud_add_option_page("MULTIPLIERS", k_mult_plus, (int)(sizeof k_mult_plus / sizeof k_mult_plus[0]));
-            else hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
+            if (!s_plus) hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
             for (int i = 0; i <= 100; i++) { snprintf(s_pct_buf[i], sizeof s_pct_buf[i], "%d%%", i); k_pct[i] = s_pct_buf[i]; }
             hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0])); } }
     {   static const char *const order[] = { "MAP", "OPTIONS", "MULTIPLIERS", "SOUND" };
