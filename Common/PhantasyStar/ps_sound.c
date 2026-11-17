@@ -205,12 +205,20 @@ void ps_sound_init(void)
                        s_drv[DRV_JP].bank >= 0 ? s_src[DRV_JP] : "none");
 }
 
-/* run a driver entry in its bank; with `dummy` a return address is pushed first (our own calls) */
+/* run a driver entry in its bank; with `dummy` a return address is pushed first (our own calls).
+   Interrupts are held off meanwhile (2026-11-17): a borrowed bank runs in the hybrid interpreter, and a
+   frame interrupt taken inside it (init / mute are called from the main program with interrupts on)
+   broke the call-stack bookkeeping: [stack] warnings, then "reset routine returned" (Rev A with FM or
+   the Japanese PSG driver, scenarios with map changes). The VDP keeps its interrupt flag set, so the
+   interrupt is taken right after the call; the update runs inside the frame interrupt anyway. */
 static void run_entry(int drv, uint16_t entry, bool dummy)
 {
     if (dummy) { g_z80.sp = (uint16_t)(g_z80.sp - 2); sms_write16(g_z80.sp, 0x0000); }
     sms_write8(0xFFFF, (uint8_t)s_drv[drv].bank);
+    uint8_t i1 = g_z80.iff1, i2 = g_z80.iff2;
+    g_z80.iff1 = g_z80.iff2 = 0;
     call_by_address(entry);
+    g_z80.iff1 = i1; g_z80.iff2 = i2;
 }
 static void set_f2(int v) { if (v != s_f2) { sms_io_out(0xF2, (uint8_t)v); s_f2 = v; } }
 static void chip_regs(int m)
