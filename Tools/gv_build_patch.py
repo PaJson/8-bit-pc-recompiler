@@ -12,6 +12,8 @@ patched ROM (header + checksum by .SMSHEADER). Then:
     source ROM's CRC32 when applied), and verifies both by applying them with Tools/apply_patch.py
   - writes the patched ROM to ROMs/Patched/ (not with --no-rom), for the recompiled build
     Games/golvellius-plus
+  - copies the .ips / .bps + a player's readme (.txt) to ROMs/Patches/Golvellius - Valley of Doom/
+    Golvellius Plus (this project)/ (git-ignored), for other emulators and flash carts
 WLA-DX is the git submodule External/wla-dx (the user's fork); it is built on first use into
 External/build/wla-dx with the MSYS2 tool chain (C:/msys64/mingw64).
 """
@@ -31,6 +33,45 @@ SIZE = 0x80000
 WLA_SRC = os.path.join(ROOT, 'External', 'wla-dx')
 WLA_BUILD = os.path.join(ROOT, 'External', 'build', 'wla-dx')
 MSYS = r'C:\msys64\mingw64\bin'
+REL_DIR = 'Golvellius Plus (this project)'
+README = """GOLVELLIUS PLUS
+===============
+
+A patch for "Golvellius - Valley of Doom" (Sega Master System): save slots, a title menu and an
+OPTIONS page. Every option starts at the original game's behaviour, and passwords still work.
+
+Base ROM:   Golvellius - Valley of Doom (USA, Europe, Brazil) (En).sms
+            256 KB, CRC32 %(crc_src)08X (No-Intro). Use the original, unpatched ROM.
+Result:     512 KB, CRC32 %(crc_dst)08X, header checksum $%(sum)04X (valid for the real BIOS).
+
+Apply "Golvellius Plus.bps" (it refuses a wrong base ROM) or "Golvellius Plus.ips" with any
+IPS / BPS patcher (for example Flips). Only one patch, nothing else to apply first.
+
+Needs battery-backed cartridge RAM (every emulator has it; on hardware a flash cart or board
+with 512 KB ROM, the Sega mapper and battery RAM).
+
+WHAT IS NEW
+-----------
+Title screen: button 1 shows START / OPTIONS. Button 1 = select, button 2 = back.
+  START    -> the original NEW GAME / CONTINUE.
+  CONTINUE -> PASSWORD (the original password continues) / SAVE (the save slots).
+Save slots: AUTO + 5.
+  - AUTO is written whenever Winkle tells you the password ("GAME SAVED TO AUTO.").
+  - Pause on the overworld (status screen), then button 1: SAVE GAME into slot 1-5.
+  - Game Over asks "SAVE THIS GAME?" under the password (you continue at the start house).
+  - SAVE page: button 1 on a slot = LOAD / DELETE. A loaded game starts where it was saved.
+  - Each slot shows its screen, play time, gold, power and crystals.
+OPTIONS page (stored in the battery RAM; RESET TO DEFAULTS at the bottom):
+  TEXT FIXES        PASSWARD, three "GOLD" that should be "FIND", DESGINED in the credits
+  MAP FIXES         screen C5 gets its own room, H4 the right cave picture (SMS Power fix)
+  SWORD HIT FIX     every new swing can hurt (original: often only knocks back)
+  SWORD REACH       the sword's hit area 4 or 8 pixels larger
+  CAVE DOWN SPEED   walking down in top-down caves 1.5x / 2x as fast
+  KEEP GOLD         continuing no longer halves your gold
+  GOLD DROPS, DAMAGE DEALT, DAMAGE RECEIVED   x0 .. x10 (x1 = original)
+
+Passwords work as before (passwords from the original game too).
+"""
 
 
 def crc(b): return zlib.crc32(b) & 0xFFFFFFFF
@@ -182,6 +223,14 @@ def main(argv):
         d = os.path.join(ROOT, 'ROMs', 'Patched'); os.makedirs(d, exist_ok=True)
         p = os.path.join(d, ROM_NAME); open(p, 'wb').write(dst)
         print('wrote %s' % os.path.relpath(p, ROOT))
+
+    # ready-to-use copy for other emulators / flash carts (git-ignored like all of ROMs/)
+    rel = os.path.join(ROOT, 'ROMs', 'Patches', 'Golvellius - Valley of Doom', REL_DIR)
+    os.makedirs(rel, exist_ok=True)
+    shutil.copyfile(pi, os.path.join(rel, NAME + '.ips')); shutil.copyfile(pb, os.path.join(rel, NAME + '.bps'))
+    with open(os.path.join(rel, NAME + '.txt'), 'w', encoding='utf-8', newline='\r\n') as f:
+        f.write(README % {'crc_src': CRC_ORIG, 'crc_dst': crc(dst), 'sum': c})
+    print('wrote %s (.ips, .bps, .txt)' % os.path.relpath(rel, ROOT))
     return 0
 
 
