@@ -112,6 +112,7 @@ static bool plus_rom(void)
     size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
     return rom && n >= 0x40012 && !memcmp(rom + 0x40000, "GOLVELLIUS PLUS\0", 16) && rom[0x40010] == 1;
 }
+bool gv_is_plus(void) { return s_plus; }
 static char s_music_names[6][24] = { "AUTO (ORIGINAL)" };
 static const char *k_music[6] = { s_music_names[0], s_music_names[1], s_music_names[2], s_music_names[3], s_music_names[4], s_music_names[5] };
 /* TEXT FIXES: see the header; same table in Tools/gv_make_ips.py */

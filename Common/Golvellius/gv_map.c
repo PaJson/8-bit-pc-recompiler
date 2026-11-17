@@ -105,11 +105,31 @@ static bool unpack(const uint8_t *src, size_t len, uint8_t *dst, size_t out_len)
     return o == out_len;
 }
 
+/* Cave entrances: a capture shows the screen as it was; a hidden cave (under a bush, rock, tree ...)
+   is closed again on every visit, so its entrance is drawn over the picture (zoom and overview)
+   once the cave is known (option CAVE INFO: entered, or all). gv_panel_entrance() renders it from
+   the ROM (room record byte 6 at the cell of byte 2). s_ent = what the overview cell has. */
+extern bool gv_panel_entrance(int s, int *cell, uint8_t px[256]);
+extern bool gv_cave_known(int scr);
+static uint8_t s_ent[NSCR];
+static bool entrance_wanted(int idx) { int c; uint8_t px[256]; return gv_cave_known(idx) && gv_panel_entrance(idx, &c, px); }
+static const uint8_t *with_entrance(int idx, const uint8_t *src)
+{
+    static uint8_t buf[FW * FH];
+    int cell; uint8_t px[256];
+    if (!gv_cave_known(idx) || !gv_panel_entrance(idx, &cell, px)) return src;
+    memcpy(buf, src, sizeof buf);
+    int ox = (cell % 15) * 16, oy = (cell / 15) * 16;   /* metatile column c is at screen x 8 + 16 c = picture x 16 c */
+    for (int y = 0; y < 16; y++) memcpy(buf + (oy + y) * FW + ox, px + y * 16, 16);
+    return buf;
+}
+
 /* overview cell from the full picture (4 x 4 area average) */
 static void make_cell(int idx)
 {
     int cx = (idx % COLS) * CW, cy = (idx / COLS) * CH;
-    const uint8_t *f = s_full[idx];
+    const uint8_t *f = with_entrance(idx, s_full[idx]);
+    s_ent[idx] = f != s_full[idx];
     for (int y = 0; y < CH; y++)
         for (int x = 0; x < CW; x++) {
             unsigned r = 0, g = 0, b = 0;
@@ -280,6 +300,14 @@ static void capture(uint32_t *fb, int w, int h)
                 fclose(pf); } } }
     int ndiff = 0;
     if (map_log() && s_has_full[idx]) for (int i = 0; i < FW * FH; i++) ndiff += s_full[idx][i] != pic[i];
+    if (map_log()) {                                   /* test: the ROM-drawn entrance vs the captured cell */
+        int cell; uint8_t px[256];
+        if (gv_panel_entrance(idx, &cell, px)) {
+            int eq = 0, ox = (cell % 15) * 16, oy = (cell / 15) * 16;
+            for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) eq += pic[(oy + y) * FW + ox + x] == px[y * 16 + x];
+            fprintf(stderr, "[gv_map] screen %d entrance cell %d: %d/256 pixels = the ROM-drawn entrance\n", idx, cell, eq);
+        }
+    }
     memcpy(s_full[idx], pic, sizeof pic);
     s_seen[idx] = s_has_full[idx] = 1;
     make_cell(idx);
@@ -309,7 +337,19 @@ extern bool gv_pw_cave(int idx);
 static bool s_tp_ask;
 bool gv_map_seen(int idx) { return idx >= 0 && idx < NSCR && s_seen[idx]; }
 /* the overview of visited screens (13 x 14 cells of CW x CH, transparent = not visited), for the side panel */
-const uint32_t *gv_map_overview(int *w, int *h, uint32_t *gen) { *w = MW; *h = MH; *gen = s_gen; return s_map; }
+static void entrances_update(void)
+{
+    {   static int done; if (!done && getenv("GV_MAP_ENTCHECK")) { done = 1;   /* test: saved pictures vs the ROM-drawn entrances */
+            for (int i = 0; i < NSCR; i++) { int cell; uint8_t px[256];
+                if (!s_has_full[i] || !gv_panel_entrance(i, &cell, px)) continue;
+                int eq = 0, ox = (cell % 15) * 16, oy = (cell / 15) * 16;
+                for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) eq += s_full[i][(oy + y) * FW + ox + x] == px[y * 16 + x];
+                char nm[8]; screen_name(i, nm, sizeof nm);
+                fprintf(stderr, "[gv_map] %s entrance cell %d: %d/256 equal, known %d\n", nm, cell, eq, gv_cave_known(i)); } } }
+    for (int i = 0; i < NSCR; i++)
+        if (s_seen[i] && s_has_full[i] && entrance_wanted(i) != (s_ent[i] != 0)) { make_cell(i); s_gen++; }
+}
+const uint32_t *gv_map_overview(int *w, int *h, uint32_t *gen) { entrances_update(); *w = MW; *h = MH; *gen = s_gen; return s_map; }
 static void map_key(int key)
 {
     if (s_cur < 0) { int h = hero_screen(); s_cur = h >= 0 ? h : 180; }      /* L14 = the password start */
@@ -327,6 +367,15 @@ static void map_key(int key)
 }
 void gv_map_hud_closed(void) { s_cur = -1; s_zoom = false; s_tp_ask = false; }
 
+/* black backdrop 1 frame px around a picture, the same on all four sides: the picture's position is
+   fractional, so the whole-pixel fill of the frame had up to 2 px on the left / top and as little as
+   0 on the right / bottom (user report: the cursor at A1 had a black gap, at M14 none) */
+static void backdrop(uint32_t *fb, int fw, int fh, float dx, float dy, float dw, float dh)
+{
+    static const uint32_t black = 0xFF000000u;          /* an image, not hud_rect: the host draws rectangles after the images */
+    if (hud_hires()) hud_image(HUD_SPACE_GAME, dx - 1, dy - 1, dw + 2, dh + 2, &black, 1, 1, 0, 0, 1, 1, false, 1);
+    else hud_fill(fb, fw, fh, (int)(dx + 0.5f) - 1, (int)(dy + 0.5f) - 1, (int)(dx + dw + 0.5f) + 1, (int)(dy + dh + 0.5f) + 1, 0xFF000000u, false);
+}
 static void frame_rect(float x, float y, float w, float h, float lw, uint32_t col, uint32_t *fb, int fw, int fh)
 {
     if (hud_hires()) {
@@ -356,15 +405,17 @@ static void draw_zoom(uint32_t *fb, int w, int h, float bx, float by, float bw, 
     }
     float s = bw / FW < bh / FH ? bw / FW : bh / FH;
     float dw = FW * s, dh = FH * s, dx = bx + (bw - dw) / 2, dy = by + (bh - dh) / 2;
-    hud_fill(fb, w, h, (int)dx - 1, (int)dy - 1, (int)(dx + dw) + 1, (int)(dy + dh) + 1, 0xFF000000u, false);
+    backdrop(fb, w, h, dx, dy, dw, dh);
     if (!s_seen[idx]) {
         const char *t = "NOT VISITED";
         hud_text(fb, w, h, (int)(dx + dw / 2) - 3 * (int)strlen(t), (int)(dy + dh / 2) - 4, t, 0xFFA0A0B0);
         return;
     }
     if (img_idx != idx || img_src_gen != s_gen) {
-        if (s_has_full[idx])
-            for (int i = 0; i < FW * FH; i++) img[i] = sms_argb(s_full[idx][i]);
+        if (s_has_full[idx]) {
+            const uint8_t *f = with_entrance(idx, s_full[idx]);
+            for (int i = 0; i < FW * FH; i++) img[i] = sms_argb(f[i]);
+        }
         else {                                          /* old file: only the small cell, enlarged */
             int cx = (idx % COLS) * CW, cy = (idx / COLS) * CH;
             for (int y = 0; y < FH; y++)
@@ -391,6 +442,7 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
             if (f) { fprintf(f, "P6\n%d %d\n255\n", MW, MH);
                 for (int i = 0; i < MW * MH; i++) { uint8_t c[3] = { (uint8_t)(s_map[i] >> 16), (uint8_t)(s_map[i] >> 8), (uint8_t)s_map[i] }; fwrite(c, 1, 3, f); }
                 fclose(f); } } }
+    entrances_update();
     int hero = hero_screen();
     if (s_cur < 0) s_cur = hero >= 0 ? hero : 180;
     {   static int sent; const char *k = getenv("GV_HUD_KEYS");        /* test: keys for this page */
@@ -438,7 +490,7 @@ static void map_draw(uint32_t *fb, int w, int h, int x0, int y0, int x1, int y1)
 
     float s = (float)bw / MW < (float)bh / MH ? (float)bw / MW : (float)bh / MH;
     float dw = MW * s, dh = MH * s, dx = x0 + 4 + (bw - dw) / 2, dy = by0 + (bh - dh) / 2;
-    hud_fill(fb, w, h, (int)dx - 1, (int)dy - 1, (int)(dx + dw) + 1, (int)(dy + dh) + 1, 0xFF000000u, false);
+    backdrop(fb, w, h, dx, dy, dw, dh);
     if (hud_hires()) {
         hud_image_alpha(HUD_SPACE_GAME, dx, dy, dw, dh, s_map, MW, MH, s_gen);
         for (int c = 1; c < COLS; c++) hud_rect(HUD_SPACE_GAME, dx + c * CW * s, dy, 0.25f, dh, 0x40FFFFFFu);

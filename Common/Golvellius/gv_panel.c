@@ -40,6 +40,7 @@ extern const char *gv_area_name(int scr);
 extern bool gv_cave_label(int scr, char *out, size_t n, int *done);
 extern bool gv_cave_known(int scr);
 extern bool gv_map_seen(int idx);
+extern bool gv_is_plus(void);
 extern const uint32_t *gv_map_overview(int *w, int *h, uint32_t *gen);
 
 #define COLS 13
@@ -192,6 +193,38 @@ static const Set *area_set(int id, int fl)
 }
 static int scr_flag(int s) { return s_rom[0x15947 + s_rom[0x15890 + s] * 7] >= 0x53; }   /* $C84C ($1BC5) */
 
+/* The cave entrance of screen s as the game draws it once the entrance is open: the room record's
+   byte 6 (metatile) at its byte 2 (cell = row * 15 + col); hidden caves have a bush / rock / tree
+   there in the layout until they are revealed ($1E3B), and a revisit hides them again. Out: the
+   16 x 16 metatile as SMS colour bytes (the screen's area set and palette, the same rules as the
+   panel) and its cell. False when the screen has no entrance (L14) or no ROM. MAP FIXES (screen H4's
+   entrance $94 -> $2B): the original build patches the ROM image itself; Golvellius Plus does it in
+   its own code at $193D when its option (RAM $C0D2) is on. */
+bool gv_panel_entrance(int s, int *cell, uint8_t px[256])
+{
+    if (!s_rom) s_rom = glue_rom_image(&s_rom_n);
+    if (!s_rom || s_rom_n < 0x20000 || s < 0 || s >= NSCR) return false;
+    int room = s_rom[0x15890 + s];
+    const uint8_t *r = s_rom + 0x15947 + room * 7;
+    uint8_t m = r[6];
+    if (room == 175 && m == 0x94 && gv_is_plus() && sms_read8(0xC0D2)) m = 0x2B;
+    if (!m || r[2] >= 180) return false;
+    int id = pal_id(s);
+    const Set *S = area_set(id, scr_flag(s));
+    const uint8_t *pal = palette(id);
+    for (int q = 0; q < 4; q++) {
+        const uint8_t *tile = S->vram + S->mt[m * 4 + q] * 32;
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++) {
+                int b = 7 - x, row = y * 4;
+                int c = ((tile[row] >> b) & 1) | ((tile[row + 1] >> b) & 1) << 1 | ((tile[row + 2] >> b) & 1) << 2 | ((tile[row + 3] >> b) & 1) << 3;
+                px[((q >> 1) * 8 + y) * 16 + (q & 1) * 8 + x] = (pal ? pal[c] : g_vdp.cram[c]) & 0x3F;
+            }
+    }
+    *cell = r[2];
+    return true;
+}
+
 /* the cells of screen s as the game shows them: the hero's screen live ($CA00: opened caves, cut
    bushes), others from the ROM + the progress patches of $1AC4 (high nibble of $15E48[s] -> table
    $1B03: a mask of $C845, then (cell, metatile) pairs up to $FF; 4 screens, e.g. bridges) */
@@ -270,6 +303,12 @@ static void draw_screen(int s, int ox, int oy, int hero)
         for (int i = 0; i < 16; i++) col[i] = argb(pal ? pal[i] : g_vdp.cram[i]);
     }
     uint8_t cl[180]; cells(s, hero, cl);
+    if (s != hero && gv_cave_known(s)) {           /* a known cave: its entrance, also when hidden (as the MAP tab) */
+        int room = s_rom[0x15890 + s]; const uint8_t *r = s_rom + 0x15947 + room * 7;
+        uint8_t m = r[6];
+        if (room == 175 && m == 0x94 && gv_is_plus() && sms_read8(0xC0D2)) m = 0x2B;
+        if (m && r[2] < 180) cl[r[2]] = m;
+    }
     for (int cell = 0; cell < 180; cell++) {
         uint8_t m = cl[cell];
         for (int q = 0; q < 4; q++) {
