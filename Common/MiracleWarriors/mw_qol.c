@@ -3,7 +3,7 @@
  * $MW_QOL_INI). Every option defaults to the original game.
  *
  *  OPTIONS tab: FAST FORWARD = speed while TAB / pad RT is held (engine hud_set_turbo_speed; LT = x0.5).
- *  MULTIPLIERS: EXP (the level bar, per hit) / GUILDERS / FANGS / +/- POINTS x0..x100 (x1 = original).
+ *  MULTIPLIERS: EXP (the level bar, per hit) / GUILDERS / FANGS / CHARACTER POINTS x0..x100 (x1 = original).
  *  SOUND tab  : MUSIC / SOUND EFFECTS volume (host mixing only, the game's sound data is untouched),
  *               SOUND CHIP PSG (original: Western consoles have no FM unit) / FM (Japanese FM unit).
  *
@@ -17,7 +17,7 @@
  *
  * Battle rewards (found 2026-11-18 from the ROM): the status panel's four numbers are 16-bit words
  * $C430 guilders (cap 60000, add $4A41 / sub $4A4F), $C432 (cap 50), $C434 fangs (cap 60000, add $4A81;
- * the shop at $59D0 turns fangs into 5 guilders each), $C436 "+/- points" (NOT the experience; NPC code at
+ * the shop at $59D0 turns fangs into 5 guilders each), $C436 character points ("C" on the panel, NOT the experience; NPC code at
  * $0F73.. compares it with 32000; cap 64000, shown as the value
  * - 32000 with a sign: add $4AA1 / sub $4AAF); each add = `add hl,bc` then the cap ($494E) and the
  * panel digits. After a won battle ($039A) the game adds the enemy record: `ld bc,($C14D) ; ld b,0 ;
@@ -77,7 +77,7 @@ static void load_config(void)
         else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
         else if (!strcmp(key, "exp_multiplier"))      s_exp_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "guilders_multiplier")) s_gld_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
-        else if (!strcmp(key, "points_multiplier"))   s_pts_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "char_points_multiplier")) s_pts_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fangs_multiplier"))    s_fang_i = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fast_forward") && v > 0) {
@@ -97,7 +97,7 @@ static void save_config(void)
     fprintf(f, "exp_multiplier      = %-5d ; EXP per hit (the level bar) x N (0..100, 1 = original)\n", s_exp_i);
     fprintf(f, "guilders_multiplier = %-5d ; battle guilders reward x N (0..100, 1 = original)\n", s_gld_i);
     fprintf(f, "fangs_multiplier    = %-5d ; battle fangs reward x N (0..100, 1 = original)\n", s_fang_i);
-    fprintf(f, "points_multiplier   = %-5d ; battle +/- points reward x N (0..100, 1 = original; losses unchanged)\n", s_pts_i);
+    fprintf(f, "char_points_multiplier = %-2d ; character points gained in a battle x N (0..100, 1 = original; losses unchanged)\n", s_pts_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
     safe_fclose(f, s_ini);
 }
@@ -136,7 +136,7 @@ static const HudOption k_mult_opts[] = {
     { "EXP",      k_mult, N_MULT, &s_exp_i,  NULL },
     { "GUILDERS", k_mult, N_MULT, &s_gld_i,  NULL },
     { "FANGS",    k_mult, N_MULT, &s_fang_i, NULL },
-    { "+/- POINTS", k_mult, N_MULT, &s_pts_i, NULL },
+    { "CHARACTER POINTS", k_mult, N_MULT, &s_pts_i, NULL },
 };
 static const char *k_chip[] = { "PSG (ORIGINAL)", "FM" };
 static HudOption k_sound_opts[] = {
@@ -155,7 +155,7 @@ static void scale_bc(int mult, uint16_t stat, const char *what)
 }
 int mw_fangs(void)    { if (s_fang_i != 1) scale_bc(s_fang_i, 0xC434, "fangs");    return 0; }
 int mw_guilders(void) { if (s_gld_i != 1)  scale_bc(s_gld_i,  0xC430, "guilders"); return 0; }
-int mw_points(void)   { if (s_pts_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_pts_i, 0xC436, "points"); return 0; }
+int mw_points(void)   { if (s_pts_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_pts_i, 0xC436, "character points"); return 0; }
 /* [insn_hooks] $45CA / $4632 / $469A / $4702: BC = the bar gain of this hit, HL = the bar (observe: 0) */
 int mw_exp_bar(void)
 {
