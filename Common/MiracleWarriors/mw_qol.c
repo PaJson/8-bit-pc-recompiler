@@ -3,6 +3,7 @@
  * $MW_QOL_INI). Every option defaults to the original game.
  *
  *  OPTIONS tab: FAST FORWARD = speed while TAB / pad RT is held (engine hud_set_turbo_speed; LT = x0.5).
+ *  MULTIPLIERS: EXP / GUILDERS / FANGS won in a battle x0..x100 (x1 = original).
  *  SOUND tab  : MUSIC / SOUND EFFECTS volume (host mixing only, the game's sound data is untouched),
  *               SOUND CHIP PSG (original: Western consoles have no FM unit) / FM (Japanese FM unit).
  *
@@ -13,6 +14,15 @@
  * frame interrupt $013B with bank 15 mapped): attach / detach, $DD00, stop all ($9294: every channel
  * slot cleared, PSG + FM silent), then the last song command again through $DD02, which the same
  * update processes ($8AC6).
+ *
+ * Battle rewards (found 2026-11-18 from the ROM): the status panel's four numbers are 16-bit words
+ * $C430 guilders (cap 60000, add $4A41 / sub $4A4F), $C432 (cap 50), $C434 fangs (cap 60000, add $4A81;
+ * the shop at $59D0 turns fangs into 5 guilders each), $C436 experience (cap 64000, shown as the value
+ * - 32000 with a sign: add $4AA1 / sub $4AAF); each add = `add hl,bc` then the cap ($494E) and the
+ * panel digits. After a won battle ($039A) the game adds the enemy record: `ld bc,($C14D) ; ld b,0 ;
+ * call $4A81` (fangs), `ld bc,($C14A) ; call $4A41` (guilders), `ld bc,($C148)`, `bit 7` of $C140
+ * -> `call z,$4AA1` (gain) / `call nz,$4AAF` (loss). Observing [insn_hooks] at the three calls scale
+ * BC (gains only; losses stay original), clamped so the game's 16-bit add cannot wrap past its cap.
  *
  * Sound driver (bank 15; the same 32-byte channel slot scheme as Phantasy Star's Sega driver, found
  * 2026-11-15 with SMS_PSGLOG_IX): slots at $DD0E + $20 n; +0 bit 7 = playing ($C0 = the rhythm
@@ -38,6 +48,10 @@ static const double k_ff_vals[] = { 0.5, 1, 2, 4 };
 static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAULT)" };
 static int s_ff_i = 3, s_bgm_i = 100, s_sfx_i = 100;
 static int s_fm_i;                                    /* SOUND CHIP: 0 PSG (original), 1 FM */
+#define N_MULT 101                                    /* multipliers x0 .. x100 (= index) */
+static int s_exp_i = 1, s_gld_i = 1, s_fang_i = 1;
+static char s_mult_buf[N_MULT][16];
+static const char *k_mult[N_MULT];
 static char s_pct_buf[101][6];
 static const char *k_pct[101];
 
@@ -52,6 +66,9 @@ static void load_config(void)
         if (line[0] == ';' || line[0] == '#' || sscanf(line, " %63[a-z_0-9] = %lf", key, &v) != 2) continue;
         if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
+        else if (!strcmp(key, "exp_multiplier"))      s_exp_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "guilders_multiplier")) s_gld_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "fangs_multiplier"))    s_fang_i = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fast_forward") && v > 0) {
             s_ff_i = 0; for (int i = 1; i < 4; i++) if (fabs(k_ff_vals[i] - v) < fabs(k_ff_vals[s_ff_i] - v)) s_ff_i = i;
@@ -67,6 +84,9 @@ static void save_config(void)
     fprintf(f, "fm_sound       = %d     ; sound chip: 0 = PSG (original: Western consoles have no FM unit), 1 = FM (Japanese FM Sound Unit)\n", s_fm_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
     fprintf(f, "sfx_volume     = %-5d ; sound effects volume in percent (0..100)\n", s_sfx_i);
+    fprintf(f, "exp_multiplier      = %-5d ; battle EXP reward x N (0..100, 1 = original; losses unchanged)\n", s_exp_i);
+    fprintf(f, "guilders_multiplier = %-5d ; battle guilders reward x N (0..100, 1 = original)\n", s_gld_i);
+    fprintf(f, "fangs_multiplier    = %-5d ; battle fangs reward x N (0..100, 1 = original)\n", s_fang_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
     safe_fclose(f, s_ini);
 }
@@ -101,12 +121,29 @@ static void on_close(void) { save_config(); }
 static const HudOption k_opts[] = {
     { "FAST FORWARD", k_ff_names, 4, &s_ff_i, on_ff },
 };
+static const HudOption k_mult_opts[] = {
+    { "EXP",      k_mult, N_MULT, &s_exp_i,  NULL },
+    { "GUILDERS", k_mult, N_MULT, &s_gld_i,  NULL },
+    { "FANGS",    k_mult, N_MULT, &s_fang_i, NULL },
+};
 static const char *k_chip[] = { "PSG (ORIGINAL)", "FM" };
 static HudOption k_sound_opts[] = {
     { "SOUND CHIP",    k_chip, 2,   &s_fm_i,  NULL },               /* switched in mw_snd_update */
     { "MUSIC",         k_pct, 101, &s_bgm_i, on_volume_changed },
     { "SOUND EFFECTS", k_pct, 101, &s_sfx_i, on_volume_changed },
 };
+
+/* [insn_hooks] $03A0 / $03A7 / $03B3: BC = the reward, right before the game's own add (observe: 0) */
+static void scale_bc(int mult, uint16_t stat, const char *what)
+{
+    unsigned bc = (unsigned)g_z80.b << 8 | g_z80.c, cur = sms_read16(stat), v = bc * (unsigned)mult;
+    if (cur + v > 0xFFFF) v = 0xFFFF - cur;             /* the add must not wrap: the game caps it below */
+    if (getenv("MW_LOG")) fprintf(stderr, "[mw] %s %u x%d -> %u (was %u)\n", what, bc, mult, v, cur);
+    g_z80.b = (uint8_t)(v >> 8); g_z80.c = (uint8_t)v;
+}
+int mw_fangs(void)    { if (s_fang_i != 1) scale_bc(s_fang_i, 0xC434, "fangs");    return 0; }
+int mw_guilders(void) { if (s_gld_i != 1)  scale_bc(s_gld_i,  0xC430, "guilders"); return 0; }
+int mw_exp(void)      { if (s_exp_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_exp_i, 0xC436, "exp"); return 0; }
 
 /* [insn_hooks] bank 15 $89AF (the sound driver's frame update; observe only) */
 static uint8_t s_last_song;                           /* last song command seen in $DD02 */
@@ -153,9 +190,13 @@ void mw_on_post_reset(void)
     {   static bool pages;
         if (!pages) { pages = true;
             for (int i = 0; i <= 100; i++) { snprintf(s_pct_buf[i], sizeof s_pct_buf[i], "%d%%", i); k_pct[i] = s_pct_buf[i]; }
+            for (int i = 0; i < N_MULT; i++) {
+                snprintf(s_mult_buf[i], sizeof s_mult_buf[i], i == 0 ? "X0 (NONE)" : i == 1 ? "X1 (ORIGINAL)" : "X%d", i);
+                k_mult[i] = s_mult_buf[i]; }
+            hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
             hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0])); } }
-    {   static const char *const order[] = { "OPTIONS", "SOUND" };
-        hud_set_page_order(order, 2); }
+    {   static const char *const order[] = { "OPTIONS", "MULTIPLIERS", "SOUND" };
+        hud_set_page_order(order, 3); }
 }
 void mw_on_frame_post(uint64_t frame)
 {
@@ -165,6 +206,14 @@ void mw_on_frame_post(uint64_t frame)
             unsigned long at = strtoul(q, (char **)&q, 10); int v = *q == ':' ? atoi(q + 1) : 0;
             if (at == frame) s_fm_i = v != 0;
             q = strchr(q, ','); if (q) q++;
+        } }
+    {   /* test: MW_RAM_DUMP=<file> + MW_RAM_EVERY=n appends the 8 KB of RAM every n frames */
+        static FILE *f; static int on = -1, every = 60;
+        if (on < 0) { const char *e = getenv("MW_RAM_DUMP"), *n = getenv("MW_RAM_EVERY");
+            on = e && (f = fopen(e, "wb")) != NULL; if (n) every = atoi(n); if (every < 1) every = 1; }
+        if (on && frame % (unsigned)every == 0) {
+            for (unsigned a = 0xC000; a < 0xE000; a++) fputc(sms_read8((uint16_t)a), f);
+            fflush(f);
         } }
     sound_frame();
 }
