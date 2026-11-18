@@ -3,7 +3,7 @@
  * $MW_QOL_INI). Every option defaults to the original game.
  *
  *  OPTIONS tab: FAST FORWARD = speed while TAB / pad RT is held (engine hud_set_turbo_speed; LT = x0.5).
- *  MULTIPLIERS: EXP / GUILDERS / FANGS won in a battle x0..x100 (x1 = original).
+ *  MULTIPLIERS: EXP (the level bar, per hit) / GUILDERS / FANGS / +/- POINTS x0..x100 (x1 = original).
  *  SOUND tab  : MUSIC / SOUND EFFECTS volume (host mixing only, the game's sound data is untouched),
  *               SOUND CHIP PSG (original: Western consoles have no FM unit) / FM (Japanese FM unit).
  *
@@ -17,12 +17,21 @@
  *
  * Battle rewards (found 2026-11-18 from the ROM): the status panel's four numbers are 16-bit words
  * $C430 guilders (cap 60000, add $4A41 / sub $4A4F), $C432 (cap 50), $C434 fangs (cap 60000, add $4A81;
- * the shop at $59D0 turns fangs into 5 guilders each), $C436 experience (cap 64000, shown as the value
+ * the shop at $59D0 turns fangs into 5 guilders each), $C436 "+/- points" (NOT the experience; NPC code at
+ * $0F73.. compares it with 32000; cap 64000, shown as the value
  * - 32000 with a sign: add $4AA1 / sub $4AAF); each add = `add hl,bc` then the cap ($494E) and the
  * panel digits. After a won battle ($039A) the game adds the enemy record: `ld bc,($C14D) ; ld b,0 ;
  * call $4A81` (fangs), `ld bc,($C14A) ; call $4A41` (guilders), `ld bc,($C148)`, `bit 7` of $C140
  * -> `call z,$4AA1` (gain) / `call nz,$4AAF` (loss). Observing [insn_hooks] at the three calls scale
  * BC (gains only; losses stay original), clamped so the game's 16-bit add cannot wrap past its cap.
+ *
+ * Experience = the level bar of each of the 4 party members (block $C500 + $40 n: +1 level (max 15),
+ * +6 bar, +8 bar limit). On every hit ($45B9 / $4621 / $4689 / $46F1, from the battle code $1144 /
+ * $1366) the gain = table $4769[level * 16 + enemy class $C14C] ($4759) is added to the bar ($495D:
+ * `add hl,bc`, compared with the limit); at the limit the level goes up AT ONCE, mid-battle
+ * ($4971 / $49A5 / $49D9 / $4A0D: level + 1, new stats, new limit), the rest stays in the bar (one
+ * level per hit at most; the rest can level again on the next hit). EXP hooks at the four
+ * `call $495D` ($45CA $4632 $469A $4702): BC = the gain, HL = the bar.
  *
  * Sound driver (bank 15; the same 32-byte channel slot scheme as Phantasy Star's Sega driver, found
  * 2026-11-15 with SMS_PSGLOG_IX): slots at $DD0E + $20 n; +0 bit 7 = playing ($C0 = the rhythm
@@ -49,7 +58,7 @@ static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAUL
 static int s_ff_i = 3, s_bgm_i = 100, s_sfx_i = 100;
 static int s_fm_i;                                    /* SOUND CHIP: 0 PSG (original), 1 FM */
 #define N_MULT 101                                    /* multipliers x0 .. x100 (= index) */
-static int s_exp_i = 1, s_gld_i = 1, s_fang_i = 1;
+static int s_exp_i = 1, s_gld_i = 1, s_fang_i = 1, s_pts_i = 1;
 static char s_mult_buf[N_MULT][16];
 static const char *k_mult[N_MULT];
 static char s_pct_buf[101][6];
@@ -68,6 +77,7 @@ static void load_config(void)
         else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
         else if (!strcmp(key, "exp_multiplier"))      s_exp_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "guilders_multiplier")) s_gld_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "points_multiplier"))   s_pts_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fangs_multiplier"))    s_fang_i = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fast_forward") && v > 0) {
@@ -84,9 +94,10 @@ static void save_config(void)
     fprintf(f, "fm_sound       = %d     ; sound chip: 0 = PSG (original: Western consoles have no FM unit), 1 = FM (Japanese FM Sound Unit)\n", s_fm_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
     fprintf(f, "sfx_volume     = %-5d ; sound effects volume in percent (0..100)\n", s_sfx_i);
-    fprintf(f, "exp_multiplier      = %-5d ; battle EXP reward x N (0..100, 1 = original; losses unchanged)\n", s_exp_i);
+    fprintf(f, "exp_multiplier      = %-5d ; EXP per hit (the level bar) x N (0..100, 1 = original)\n", s_exp_i);
     fprintf(f, "guilders_multiplier = %-5d ; battle guilders reward x N (0..100, 1 = original)\n", s_gld_i);
     fprintf(f, "fangs_multiplier    = %-5d ; battle fangs reward x N (0..100, 1 = original)\n", s_fang_i);
+    fprintf(f, "points_multiplier   = %-5d ; battle +/- points reward x N (0..100, 1 = original; losses unchanged)\n", s_pts_i);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
     safe_fclose(f, s_ini);
 }
@@ -125,6 +136,7 @@ static const HudOption k_mult_opts[] = {
     { "EXP",      k_mult, N_MULT, &s_exp_i,  NULL },
     { "GUILDERS", k_mult, N_MULT, &s_gld_i,  NULL },
     { "FANGS",    k_mult, N_MULT, &s_fang_i, NULL },
+    { "+/- POINTS", k_mult, N_MULT, &s_pts_i, NULL },
 };
 static const char *k_chip[] = { "PSG (ORIGINAL)", "FM" };
 static HudOption k_sound_opts[] = {
@@ -143,7 +155,17 @@ static void scale_bc(int mult, uint16_t stat, const char *what)
 }
 int mw_fangs(void)    { if (s_fang_i != 1) scale_bc(s_fang_i, 0xC434, "fangs");    return 0; }
 int mw_guilders(void) { if (s_gld_i != 1)  scale_bc(s_gld_i,  0xC430, "guilders"); return 0; }
-int mw_exp(void)      { if (s_exp_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_exp_i, 0xC436, "exp"); return 0; }
+int mw_points(void)   { if (s_pts_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_pts_i, 0xC436, "points"); return 0; }
+/* [insn_hooks] $45CA / $4632 / $469A / $4702: BC = the bar gain of this hit, HL = the bar (observe: 0) */
+int mw_exp_bar(void)
+{
+    if (s_exp_i == 1) return 0;
+    unsigned bc = (unsigned)g_z80.b << 8 | g_z80.c, hl = (unsigned)g_z80.h << 8 | g_z80.l, v = bc * (unsigned)s_exp_i;
+    if (hl + v > 0xFFFF) v = 0xFFFF - hl;               /* `add hl,bc` must not wrap */
+    if (getenv("MW_LOG")) fprintf(stderr, "[mw] exp bar %u + %u x%d -> %u\n", hl, bc, s_exp_i, v);
+    g_z80.b = (uint8_t)(v >> 8); g_z80.c = (uint8_t)v;
+    return 0;
+}
 
 /* [insn_hooks] bank 15 $89AF (the sound driver's frame update; observe only) */
 static uint8_t s_last_song;                           /* last song command seen in $DD02 */

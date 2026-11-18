@@ -21,14 +21,14 @@ on_post_reset = "mw_on_post_reset"   # Common/MiracleWarriors/mw_qol.c: options 
 on_frame_post = "mw_on_frame_post"   # mw_qol.c: music / sound effects volume
 
 [insn_hooks]
-addr   = [0x89AF, 0x03A0, 0x03A7, 0x03B3]
-func   = ["mw_snd_update", "mw_fangs", "mw_guilders", "mw_exp"]
-resume = [0x89AF, 0x03A0, 0x03A7, 0x03B3]
-bank   = [15, -1, -1, -1]
+addr   = [0x89AF, 0x03A0, 0x03A7, 0x03B3, 0x45CA, 0x4632, 0x469A, 0x4702]
+func   = ["mw_snd_update", "mw_fangs", "mw_guilders", "mw_points", "mw_exp_bar", "mw_exp_bar", "mw_exp_bar", "mw_exp_bar"]
+resume = [0x89AF, 0x03A0, 0x03A7, 0x03B3, 0x45CA, 0x4632, 0x469A, 0x4702]
+bank   = [15, -1, -1, -1, -1, -1, -1, -1]
 # 2026-11-17: bank 15 $89AF = the sound driver's frame update (`ld a,($DD00)`, from the frame interrupt $013B):
 # SOUND CHIP PSG / FM switched live (mw_qol.c)
-# 2026-11-18: $03A0 / $03A7 / $03B3 = the battle reward adds (fangs / guilders / EXP gain), BC scaled by the
-# MULTIPLIERS tab (mw_qol.c)
+# 2026-11-18: $03A0 / $03A7 / $03B3 = the battle reward adds (fangs / guilders / +/- points gain), BC scaled by
+# the MULTIPLIERS tab (mw_qol.c); $45CA / $4632 / $469A / $4702 = the per-hit EXP bar add of party members 1-4
 
 [mapper]
 kind = "sega"   # frame regs $FFFC-$FFFF; reset banks 0/1/2; first 1KB fixed
