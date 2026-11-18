@@ -2,7 +2,8 @@
  * mw_qol.c - Miracle Warriors options (HUD: F1 / gamepad Start; mw_qol.ini in the game folder or
  * $MW_QOL_INI). Every option defaults to the original game.
  *
- *  OPTIONS tab: FAST FORWARD = speed while TAB / pad RT is held (engine hud_set_turbo_speed; LT = x0.5).
+ *  OPTIONS tab: WALK SPEED 1X (original) / 2X / 4X; FAST FORWARD = speed while TAB / pad RT is held
+ *               (engine hud_set_turbo_speed; LT = x0.5).
  *  MULTIPLIERS: EXP (the level bar, per hit) / GUILDERS / FANGS / CHARACTER POINTS x0..x100 (x1 = original).
  *  SOUND tab  : MUSIC / SOUND EFFECTS volume (host mixing only, the game's sound data is untouched),
  *               SOUND CHIP PSG (original: Western consoles have no FM unit) / FM (Japanese FM unit).
@@ -33,6 +34,12 @@
  * level per hit at most; the rest can level again on the next hit). EXP hooks at the four
  * `call $495D` ($45CA $4632 $469A $4702): BC = the gain, HL = the bar.
  *
+ * WALK SPEED (found 2026-11-18): the frame interrupt counts $C44B 0..15 ($00E7); the three move handlers
+ * (map modes $C440 via table $2C28: 1 = $2E24 -> $2F29, 2 = $4F14 -> $5007, 3 = $65D3 -> $682B) start
+ * with `ld a,($C44B) ; or a ; ret nz`, i.e. one step (one map cell) every 16 frames. Hook mw_step_gate
+ * on those 5 bytes: a step whenever ($C44B & 7) / ($C44B & 3) == 0 (2X / 4X), else the RET (result 2).
+ * The other user of $C44B ($020F: something at counts 4 and 12) is unchanged.
+ *
  * Sound driver (bank 15; the same 32-byte channel slot scheme as Phantasy Star's Sega driver, found
  * 2026-11-15 with SMS_PSGLOG_IX): slots at $DD0E + $20 n; +0 bit 7 = playing ($C0 = the rhythm
  * slot), +1 = the output: PSG $80 / $A0 / $C0 / $E0 (tone 0-2, noise) or FM $10 + n (FM channel n).
@@ -58,6 +65,7 @@ static const char *const k_ff_names[] = { "X0.5 (SLOW)", "X1", "X2", "X4 (DEFAUL
 static int s_ff_i = 3, s_bgm_i = 100, s_sfx_i = 100;
 static int s_fm_i;                                    /* SOUND CHIP: 0 PSG (original), 1 FM */
 #define N_MULT 101                                    /* multipliers x0 .. x100 (= index) */
+static int s_walk_i;                                  /* WALK SPEED: 0 1X (original), 1 2X, 2 4X */
 static int s_exp_i = 1, s_gld_i = 1, s_fang_i = 1, s_pts_i = 1;
 static char s_mult_buf[N_MULT][16];
 static const char *k_mult[N_MULT];
@@ -75,6 +83,7 @@ static void load_config(void)
         if (line[0] == ';' || line[0] == '#' || sscanf(line, " %63[a-z_0-9] = %lf", key, &v) != 2) continue;
         if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
+        else if (!strcmp(key, "walk_speed")) s_walk_i = v >= 3 ? 2 : v >= 1.5 ? 1 : 0;
         else if (!strcmp(key, "exp_multiplier"))      s_exp_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "guilders_multiplier")) s_gld_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "char_points_multiplier")) s_pts_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
@@ -94,6 +103,7 @@ static void save_config(void)
     fprintf(f, "fm_sound       = %d     ; sound chip: 0 = PSG (original: Western consoles have no FM unit), 1 = FM (Japanese FM Sound Unit)\n", s_fm_i);
     fprintf(f, "music_volume   = %-5d ; music volume in percent (0..100)\n", s_bgm_i);
     fprintf(f, "sfx_volume     = %-5d ; sound effects volume in percent (0..100)\n", s_sfx_i);
+    fprintf(f, "walk_speed     = %-5d ; walking speed on the map / in towns: 1 (original), 2 or 4\n", 1 << s_walk_i);
     fprintf(f, "exp_multiplier      = %-5d ; EXP per hit (the level bar) x N (0..100, 1 = original)\n", s_exp_i);
     fprintf(f, "guilders_multiplier = %-5d ; battle guilders reward x N (0..100, 1 = original)\n", s_gld_i);
     fprintf(f, "fangs_multiplier    = %-5d ; battle fangs reward x N (0..100, 1 = original)\n", s_fang_i);
@@ -129,7 +139,9 @@ static void on_volume_changed(void) { sound_frame(); }
 static void on_ff(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
 static void on_close(void) { save_config(); }
 
+static const char *const k_walk[] = { "1X (ORIGINAL)", "2X", "4X" };
 static const HudOption k_opts[] = {
+    { "WALK SPEED",   k_walk, 3, &s_walk_i, NULL },
     { "FAST FORWARD", k_ff_names, 4, &s_ff_i, on_ff },
 };
 static const HudOption k_mult_opts[] = {
@@ -156,6 +168,18 @@ static void scale_bc(int mult, uint16_t stat, const char *what)
 int mw_fangs(void)    { if (s_fang_i != 1) scale_bc(s_fang_i, 0xC434, "fangs");    return 0; }
 int mw_guilders(void) { if (s_gld_i != 1)  scale_bc(s_gld_i,  0xC430, "guilders"); return 0; }
 int mw_points(void)   { if (s_pts_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_pts_i, 0xC436, "character points"); return 0; }
+/* [insn_hooks] $2F29 / $5007 / $682B: the move handlers' `ld a,($C44B) ; or a ; ret nz` (resume +5) */
+int mw_step_gate(void)
+{
+    static const uint8_t mask[3] = { 15, 7, 3 };
+    if (!s_walk_i) return 0;                                 /* 1X: the original instructions */
+    if (sms_read8(0xC44B) & mask[s_walk_i]) {                /* the RET: result 2 only leaves the C function, */
+        g_z80.sp = (uint16_t)(g_z80.sp + 2);                 /* so pop the return address as the RET would */
+        return 2;
+    }
+    return 1;                                                /* step (A is not used after the gate) */
+}
+
 /* [insn_hooks] $45CA / $4632 / $469A / $4702: BC = the bar gain of this hit, HL = the bar (observe: 0) */
 int mw_exp_bar(void)
 {
