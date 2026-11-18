@@ -62,3 +62,6 @@ External/build/
 
 # the user's reference emulator (cega, GPL; a program, not part of the project)
 cega/
+
+# Tools/make_release.py output: the stand-alone running environment (game exes are derived from the ROMs)
+Release/

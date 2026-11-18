@@ -1,4 +1,4 @@
-; Copy to "launcher.ini" in the project root (next to Launcher.cmd). All keys are optional.
+; Copy to "launcher.ini" next to the launcher (project root: next to Launcher.cmd; Release folder: next to Launcher.exe). All keys are optional.
 ; background   = Images\MyPicture.jpg   ; default: the first .jpg/.png/.bmp in Images\, else a generic background
 ; panel        = right                  ; game list on the right or left
 ; window_scale = 3                      ; window size of the games (x 256 x 192)
