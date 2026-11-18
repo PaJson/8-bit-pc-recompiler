@@ -178,6 +178,21 @@ static void scale_hl(int mult)
 }
 int mw_msg_fangs(void)    { if (s_fang_i != 1) scale_hl(s_fang_i); return 0; }
 int mw_msg_guilders(void) { if (s_gld_i != 1)  scale_hl(s_gld_i);  return 0; }
+/* [insn_hooks] $4E19 (`ld hl,$4EE3 ; ld bc,12 ; ldir`, resume $4E21 = the ret): the text box is 15 characters
+ * wide and the guilders line is the digits + "0 GUILDERS." ($4EE3: 10 characters, '.', end mark): 4 digits
+ * fill it exactly, 5 digits (only with a multiplier) are one too many -> then the line is copied without the
+ * '.' ("300000 GUILDERS"). Fewer digits = the original copy. */
+int mw_msg_guilders_end(void)
+{
+    if (!sms_read8(0xC305)) return 0;                        /* no ten-thousands digit: original */
+    uint16_t de = (uint16_t)(g_z80.d << 8 | g_z80.e);
+    for (int i = 0; i < 10; i++) sms_write8((uint16_t)(de + i), sms_read8((uint16_t)(0x4EE3 + i)));
+    sms_write8((uint16_t)(de + 10), sms_read8(0x4EEE));      /* the end mark */
+    de = (uint16_t)(de + 11);
+    g_z80.d = (uint8_t)(de >> 8); g_z80.e = (uint8_t)de;     /* registers as after the ldir */
+    g_z80.h = 0x4E; g_z80.l = 0xEF; g_z80.b = 0; g_z80.c = 0;
+    return 1;
+}
 int mw_points(void)   { if (s_pts_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_pts_i, 0xC436, "character points"); return 0; }
 /* [insn_hooks] $2F29 / $5007 / $682B: the move handlers' `ld a,($C44B) ; or a ; ret nz` (resume +5) */
 int mw_step_gate(void)
