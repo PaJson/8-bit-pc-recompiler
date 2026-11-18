@@ -59,6 +59,7 @@ static int      s_cur = -1, s_want = -1;    /* mode running / chosen */
 static bool     s_started;                  /* the game has called a shim (booted) */
 static int      s_f2 = -1;                  /* last value we wrote to port $F2 (-1 = unknown) */
 static uint8_t  s_last_music;               /* last song command seen ($81-$94), 0 = none */
+static uint8_t  s_prev_music;               /* the song before it (what $D9 resumes) */
 static bool     s_ok;                       /* shims found */
 static int      s_debug = -1;
 static char     s_src[2][160];              /* where each driver came from (debug) */
@@ -216,8 +217,13 @@ static void run_entry(int drv, uint16_t entry, bool dummy)
     if (dummy) { g_z80.sp = (uint16_t)(g_z80.sp - 2); sms_write16(g_z80.sp, 0x0000); }
     sms_write8(0xFFFF, (uint8_t)s_drv[drv].bank);
     uint8_t i1 = g_z80.iff1, i2 = g_z80.iff2;
+    uint16_t sp0 = g_z80.sp;
     g_z80.iff1 = g_z80.iff2 = 0;
     call_by_address(entry);
+    static int warned;
+    if (g_z80.sp != (uint16_t)(sp0 + 2) && warned++ < 5)  /* the entry must return exactly once (engine hybrid_interpret) */
+        fprintf(stderr, "[snd] driver entry %04X (bank %d) returned with SP %04X, expected %04X\n",
+                entry, s_drv[drv].bank, g_z80.sp, (uint16_t)(sp0 + 2));
     g_z80.iff1 = i1; g_z80.iff2 = i2;
 }
 static void set_f2(int v) { if (v != s_f2) { sms_io_out(0xF2, (uint8_t)v); s_f2 = v; } }
@@ -243,9 +249,18 @@ static void switch_now(void)
 }
 static void note_command(void)
 {
+    static uint8_t last_cmd;
     uint8_t c = sms_read8(0xC004);
-    if (c >= 0x81 && c <= 0x94) s_last_music = c;
-    else if (!(c & 0x80) || (c >= 0x95 && c <= 0x9F) || (c >= 0xD5 && c <= 0xD9)) { if (c != 0x80) s_last_music = 0; }
+    /* the driver's command dispatch (sound_driver.asm LABEL_B12_82EF): $81-$94 start a song (the one
+       playing is saved for $D9), $D5 / $D6 only stop sound effects (the music goes on: the towns send
+       $D6 all the time; the first version forgot the song there, so a switch restarted nothing),
+       $D7 / $D8 fade the music out, $D9 resumes the saved song, no bit 7 / $95-$9F / $DA+ = reset */
+    if (c == last_cmd) return;
+    last_cmd = c;
+    if (c >= 0x81 && c <= 0x94) { if (c != s_last_music) { s_prev_music = s_last_music; s_last_music = c; } }
+    else if (c == 0xD9) { uint8_t t = s_last_music; s_last_music = s_prev_music; s_prev_music = t; }
+    else if (c == 0x80 || (c >= 0xA0 && c <= 0xD6)) { }                  /* idle / effects */
+    else s_last_music = 0;
 }
 
 /* [insn_hooks] at the three shims: 0 = original shim, 2 = done (returned from the shim) */
