@@ -9,7 +9,8 @@ The result is the intended running environment, without sources or a compiler:
       Games/<slug>/   <Name>Recomp.exe, SDL2.dll, game.toml (only what the launcher needs: name, ROM
                       CRC32, exe, how to make a patched ROM); saves/ and the game's .ini appear when played
       ROMs/           the user's ROMs, any file names (the launcher matches them by CRC32)
-      ROMs/Patches/   patch files (IPS / BPS, loose or in the author's .zip); ours: Golvellius Plus
+      ROMs/Patches/   patch files (IPS / BPS, loose or in the author's .zip): ours (Golvellius Plus) and
+                      the PSRP 2.6.1 zips (their terms allow passing them on unchanged, free of charge)
       ROMs/Patched/   ROMs the launcher makes from a base ROM + a patch
       Images/         optional art: background, "<title> (front).jpg", "<title> (logo).png"
 
@@ -18,8 +19,8 @@ is made by a patch gets a recipe in its game.toml: every .bps in ROMs/Patches (l
 read, and a BPS whose target CRC32 is that game's ROM gives the base ROM's CRC32 and the patch's CRC32
 (the launcher finds both by CRC32, so renamed files work too).
 
-NEVER copied: ROMs, saves, the user's .ini settings, third-party patch files (the user downloads them;
-CREDITS.md has the links). --with-images copies the user's own Images/ (personal use only: SEGA artwork).
+NEVER copied: ROMs, saves, the user's .ini settings, third-party patch files other than those in
+REDISTRIBUTABLE (whole zips, byte-identical; CREDITS.md has the official pages). --with-images copies the user's own Images/ (personal use only: SEGA artwork).
 Existing files in the output folder (saves, settings, ROMs) are kept; exes are replaced when they changed.
 The Games/*/ exes contain the game's program translated to PC code (derived from the ROM): the Release
 folder is for this PC, not for sharing (it is git-ignored).
@@ -95,8 +96,13 @@ Patched games (translations, Golvellius Plus)
   author's .zip as downloaded). The launcher lists such a game once the base ROM is there; on Play it
   makes the patched ROM (into ROMs\\Patched\\) and starts it. If the patch file is missing, the entry
   says which file to get. CREDITS.md has the official download pages.
-  Golvellius Plus is our own patch and is already in ROMs\\Patches\\Golvellius Plus\\ (it needs the
-  original "Golvellius - Valley of Doom" ROM).
+  Already included:
+  - Golvellius Plus, our own patch (ROMs\\Patches\\Golvellius Plus\\; needs the original
+    "Golvellius - Valley of Doom" ROM).
+  - Phantasy Star Retranslation 2.6.1 by SMS Power! in 7 languages, the zips exactly as released
+    (ROMs\\Patches\\Phantasy Star\\...; needs the original Japanese "Phantasy Star" ROM). Their
+    README.md names the team and the terms: free of charge, distributed together in original
+    condition, no commercial sale. Please keep the zips unchanged.
 
 Saves and settings
   Each game keeps its saves in Games\\<game>\\saves\\ and its options (the in-game HUD: F1 or pad Start)
@@ -109,6 +115,13 @@ Pictures (optional)
 
 Keys in the launcher: Up / Down select, Enter / pad A play, Esc / pad B back, F11 fullscreen.
 """
+
+# Folders under ROMs/Patches whose zips may be passed on unchanged. PSRP 2.6.1 README ("Disclaimer"):
+# "Any enclosed files are offered at no charge and must be distributed together in original condition.
+#  These files may not be released for commercial sales without explicit authorisation ..."
+REDISTRIBUTABLE = [
+    os.path.join("Phantasy Star", "Retranslation 2.6.1 (PSRP, SMS Power)"),
+]
 
 ROMS_README = """Your ROMs go here (any file names; the launcher matches them by CRC32).
 Patches\\ : patch files (IPS / BPS, loose or in the author's .zip).
@@ -145,6 +158,17 @@ def main():
         for f in os.listdir(gp):
             if f.lower().endswith((".bps", ".ips", ".txt")):
                 copy_if_changed(os.path.join(gp, f), os.path.join(dst, f))
+
+    # third-party patches whose terms allow passing them on: copied as downloaded (the whole zip, unchanged)
+    for rel in REDISTRIBUTABLE:
+        src = os.path.join(roms, "Patches", rel)
+        if not os.path.isdir(src):
+            continue
+        dst = os.path.join(out, "ROMs", "Patches", rel)
+        os.makedirs(dst, exist_ok=True)
+        for f in os.listdir(src):
+            if f.lower().endswith(".zip"):
+                copy_if_changed(os.path.join(src, f), os.path.join(dst, f))
 
     if with_images and os.path.isdir(os.path.join(ROOT, "Images")):
         for f in os.listdir(os.path.join(ROOT, "Images")):
