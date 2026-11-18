@@ -167,6 +167,17 @@ static void scale_bc(int mult, uint16_t stat, const char *what)
 }
 int mw_fangs(void)    { if (s_fang_i != 1) scale_bc(s_fang_i, 0xC434, "fangs");    return 0; }
 int mw_guilders(void) { if (s_gld_i != 1)  scale_bc(s_gld_i,  0xC430, "guilders"); return 0; }
+/* [insn_hooks] $4DF6 / $4E12: the victory text ("THY FOE HAD n FANGS, n GUILDERS", $4DC0) prints the
+ * enemy record with `call $4E78` (5 digits): HL = the reward, scaled like the adds (before the caps,
+ * as the original text shows the full reward too) */
+static void scale_hl(int mult)
+{
+    unsigned v = ((unsigned)g_z80.h << 8 | g_z80.l) * (unsigned)mult;
+    if (v > 0xFFFF) v = 0xFFFF;
+    g_z80.h = (uint8_t)(v >> 8); g_z80.l = (uint8_t)v;
+}
+int mw_msg_fangs(void)    { if (s_fang_i != 1) scale_hl(s_fang_i); return 0; }
+int mw_msg_guilders(void) { if (s_gld_i != 1)  scale_hl(s_gld_i);  return 0; }
 int mw_points(void)   { if (s_pts_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_pts_i, 0xC436, "character points"); return 0; }
 /* [insn_hooks] $2F29 / $5007 / $682B: the move handlers' `ld a,($C44B) ; or a ; ret nz` (resume +5) */
 int mw_step_gate(void)
