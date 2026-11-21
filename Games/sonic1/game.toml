@@ -1,7 +1,7 @@
-# game.toml — Sonic the Hedgehog (Sega Master System, 1991)
-# Z80, 256 KB ROM (16 x 16KB banks), Sega mapper, no battery RAM.
-# Verified by rom_parser: platform=SMS region=SMS-Export crc32=0xB519E833
-# Primary bring-up target.
+# game.toml - Sonic The Hedgehog (USA, Europe, Brazil) (En)
+# ROM: ROMs/Sonic The Hedgehog (USA, Europe, Brazil) (En).sms
+#      256 KB (16 x 16 KB banks), CRC32 B519E833 (the build refuses any other ROM)
+# Made by Tools/mkgame.py from Tools/templates/sonic1.game.toml.
 
 [game]
 output_prefix = "sonic1"

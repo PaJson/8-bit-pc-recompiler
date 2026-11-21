@@ -1,11 +1,13 @@
-# game.toml - Phantasy Star (Sega Master System, 1987), USA/Europe
-# 512 KB ROM, Sega mapper, battery-backed save RAM (to be confirmed).
+# game.toml - Phantasy Star (SEGA AGES, En)
+# ROM: ROMs/Phantasy Star (World) (En) (Sega Ages).sms
+#      528 KB (33 x 16 KB banks), CRC32 A1E090B9 (the build refuses any other ROM)
+# Made by Tools/mkgame.py from Tools/templates/ps_reva.game.toml.
+
 [game]
 output_prefix = "psagesen"
 display_name  = "Phantasy Star (SEGA AGES, En)"
 platform      = "sms"
 rom           = "../../ROMs/Phantasy Star (World) (En) (Sega Ages).sms"
-# crc32 = 0x________   # fill in after first run
 
 [ram_layout]
 # dungeon_id = 0x____

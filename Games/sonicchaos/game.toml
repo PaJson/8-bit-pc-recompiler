@@ -1,7 +1,7 @@
-# game.toml — generic SMS game (no known jump tables)
-# Z80, 256 KB ROM (16 x 16KB banks), Sega mapper, no battery RAM.
-# Verified by rom_parser: platform=SMS region=SMS-Export crc32=0xB519E833
-# Primary bring-up target.
+# game.toml - Sonic Chaos (Europe, Brazil) (En)
+# ROM: ROMs/Sonic Chaos (Europe, Brazil) (En).sms
+#      512 KB (32 x 16 KB banks), CRC32 AEDF3BDF (the build refuses any other ROM)
+# Made by Tools/mkgame.py from Tools/templates/sms_generic.game.toml.
 
 [game]
 output_prefix = "sonicchaos"

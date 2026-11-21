@@ -54,6 +54,23 @@ $env:SMS_SAVE_DIR = (Resolve-Path saves).Path
 & .\build\%(proj)s.exe (Resolve-Path '%(rompath)s').Path --window $Scale --speed $Speed
 '''
 
+def toml_header(name, rom_file, rom_bytes, template):
+    """The comment block at the top of game.toml, made from the ROM itself (not copied from the template)."""
+    size = len(rom_bytes)
+    banks = "%d x 16 KB banks" % (size // 0x4000) if size % 0x4000 == 0 else "%d x 16 KB banks + %d bytes" % (size // 0x4000, size % 0x4000)
+    return ("# game.toml - %s\n# ROM: ROMs/%s\n#      %d KB (%s), CRC32 %08X (the build refuses any other ROM)\n"
+            "# Made by Tools/mkgame.py from Tools/templates/%s.game.toml.\n"
+            % (name, rom_file, size // 1024, banks, zlib.crc32(rom_bytes) & 0xFFFFFFFF, template))
+
+def set_toml_header(toml, header):
+    """Replace the leading comment lines of a game.toml with header; drop the templates' crc32 placeholder."""
+    lines = toml.split("\n")
+    i = 0
+    while i < len(lines) and (lines[i].startswith("#") or not lines[i].strip()): i += 1
+    body = "\n".join(lines[i:])
+    body = re.sub(r"\n# crc32 = 0x_+[^\n]*", "", body)
+    return header + "\n" + body
+
 def qol_hooks_block(rom_bytes):
     """[insn_hooks] for the PS QoL features this ROM's code allows (Tools/ps_find_hooks.py)."""
     import importlib.util
@@ -84,6 +101,7 @@ def main():
     prefix = re.sub(r"[^a-z0-9]", "", a.slug.lower())
     rel = "../../ROMs/" + a.rom
     toml = open(os.path.join(ROOT, "Tools", "templates", a.template + ".game.toml"), encoding="utf-8").read()
+    toml = set_toml_header(toml, toml_header(a.name, a.rom.replace("\\", "/"), open(rom_path, "rb").read(), a.template))
     toml = re.sub(r'output_prefix\s*=\s*"[^"]*"', 'output_prefix = "%s"' % prefix, toml)
     if re.search(r'display_name\s*=', toml):
         toml = re.sub(r'display_name\s*=\s*"[^"]*"', 'display_name  = "%s"' % a.name, toml)
@@ -139,4 +157,5 @@ def main():
     w("CMakeLists.txt", CMAKE % v); w("build.ps1", BUILD % v); w("check.ps1", CHECK % v); w("play.ps1", PLAY % v)
     print("created", d, "project", proj, "prefix", prefix)
 
-main()
+if __name__ == "__main__":
+    main()

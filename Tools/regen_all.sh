@@ -14,7 +14,7 @@ one() {
   [ -f "$P/Games/$g/dispatch_manifest.txt" ] && cp "$P/Games/$g/dispatch_manifest.txt" "$d/"
   [ -f "$P/Games/$g/build/dispatch_manifest.txt" ] && cp "$P/Games/$g/build/dispatch_manifest.txt" "$d/build/"
   rel=$(grep '^rom' "$P/Games/$g/game.toml" | sed 's/^[^"]*"\(.*\)".*/\1/')
-  rom="$P/Games/$g/$rel"
+  rom=$(cygpath -m "$P/Games/$g/$rel")   # a Windows path: MSYS does not convert /d/... args with [ ] (the patched ROMs)
   ( cd "$d" && "$EXE" "$rom" --game game.toml > recomp.log 2>&1 )
   echo "$g: $(grep -c . "$d/recomp.log") log lines, $(grep -h 'cg_emit' "$d/recomp.log" | tail -1)"
 }
