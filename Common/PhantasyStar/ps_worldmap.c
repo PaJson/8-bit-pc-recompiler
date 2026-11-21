@@ -182,8 +182,9 @@ void ps_worldmap_frame(void)
     /* Spaceship flights (GameMode_LoadShip $04 / GameMode_Ship $05): take-off on the departure
        planet, the space scene ($C308 switches to the arrival planet near its end, for the palette),
        landing on the arrival planet, then LoadMap of the town. $C308 = the planet (LABEL_787B stores
-       the map number 0..3 there); the camera is meaningless in the space scene, so the marker is the
-       route's take-off / landing point (LABEL_ABF via ps_fly_ship_pos). */
+       the map number 0..3 there); the camera is meaningless in the space scene and the take-off /
+       landing cutscenes play at a backdrop spot, so the marker is the spaceport's gate on that planet
+       (ps_fly_ship_pos). */
     if (g_df1 >= 0 && (mode == 0x04 || mode == 0x05) && sms_read8(0xC308) < 4 && (sms_read8(0xC2E9) & 0x80)) {
         int planet = sms_read8(0xC308), px, py;
         if (ps_fly_ship_pos(planet, &px, &py)) {

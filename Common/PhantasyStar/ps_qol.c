@@ -517,16 +517,32 @@ int ps_exp_add(void)
  * Test env PS_VEH_PRESS (1 = LB, 2 = RB), PS_BATTLE_LOG=1. */
 static bool s_in_battle, s_auto, s_battle_won;   /* won: all enemies down, victory texts follow */
 static uint16_t s_cmd_ret;                     /* return address of the battle menu's CheckOptionSelect */
+/* Round windows (user report 2026-11-21: with auto attack the command window still flashed up between
+ * the rounds): each round LABEL_1055 opens the command window (LABEL_30C3: saves the name table under
+ * it to $D8A4, draws it) and the party window (LABEL_2ED9: saves to $D724, draws it) before asking the
+ * characters, and LABEL_10B7 puts both areas back (LABEL_30B7, LABEL_30E1) when all have chosen. With
+ * auto attack nobody is asked, so ps_battle_round_open skips that pair and ps_battle_round_close the
+ * matching restore (restoring buffers that were not saved this round would draw stale tiles). If auto
+ * attack is switched off in such a round, ps_battle_cmd opens both windows before the next menu. */
+static bool s_round_skipped;
+static uint16_t s_win_open[2];                 /* LABEL_30C3, LABEL_2ED9 (from the round-start calls) */
 static void battle_init(void)
 {
     long m = find_rom("11 0c 00 19 7e b7 20 .. cd .. .. cd .. .. cd .. .. 21 82 78 22 69 c2 3e 04 32 6e c2 cd .. .. cb 61 c2 .. .. 21 .. .. cd .. .. cd .. .. 3a 67 c2 fe 04");
     s_cmd_ret = m > 0 ? (uint16_t)(m + 31) : 0;
-    s_in_battle = s_auto = s_battle_won = false;
+    s_in_battle = s_auto = s_battle_won = s_round_skipped = false;
+    size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
+    long r = find_rom("af 32 67 c2 32 d4 c2 cd .. .. cd .. ..");
+    s_win_open[0] = s_win_open[1] = 0;
+    if (r > 0 && rom && (size_t)r + 13 <= n) {
+        s_win_open[0] = (uint16_t)(rom[r + 8] | (rom[r + 9] << 8));
+        s_win_open[1] = (uint16_t)(rom[r + 11] | (rom[r + 12] << 8));
+    }
 }
 static int battle_log(void) { static int on = -1; if (on < 0) on = getenv("PS_BATTLE_LOG") != NULL; return on; }
 int ps_battle_begin(void)
 {
-    s_in_battle = true; s_auto = s_battle_won = false;
+    s_in_battle = true; s_auto = s_battle_won = s_round_skipped = false;
     if (battle_log()) fprintf(stderr, "[battle] begin\n");
     return 0;
 }
@@ -535,8 +551,30 @@ void ps_battle_walking(void)                   /* ps_items_walk_mark: walking ag
     if (s_in_battle && battle_log()) fprintf(stderr, "[battle] end (walking)\n");
     s_in_battle = s_auto = s_battle_won = false;
 }
+/* [insn_hooks] LABEL_1055's `call LABEL_30C3 ; call LABEL_2ED9` (resume after both) */
+int ps_battle_round_open(void)
+{
+    s_round_skipped = s_auto && s_win_open[0] && s_win_open[1];
+    if (s_round_skipped && battle_log()) fprintf(stderr, "[battle] auto attack: round windows skipped\n");
+    return s_round_skipped ? 1 : 0;
+}
+/* [insn_hooks] LABEL_10B7's `call LABEL_30B7 ; call LABEL_30E1` (resume after both) */
+int ps_battle_round_close(void)
+{
+    bool skip = s_round_skipped;
+    s_round_skipped = false;
+    return skip ? 1 : 0;
+}
 int ps_battle_cmd(void)
 {
+    if (!s_auto && s_round_skipped) {          /* switched off in a round without windows: open them now */
+        Z80State keep = g_z80;
+        for (int i = 0; i < 2; i++) game_call(s_win_open[i]);
+        uint64_t cyc = g_z80.cyc;
+        g_z80 = keep; g_z80.cyc = cyc;
+        s_round_skipped = false;
+        if (battle_log()) fprintf(stderr, "[battle] auto attack off: round windows opened\n");
+    }
     if (!s_auto) return 0;
     uint8_t ch = sms_read8(0xC267);
     uint16_t p = (uint16_t)(0xC2AC + 4 * ch);

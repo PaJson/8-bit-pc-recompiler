@@ -98,10 +98,15 @@ GROUPS = [
     #   -> ps_battle_cmd at the first window call, resume = LABEL_10B7 (no menu drawn at all).
     # CheckOptionSelect's button read (LABEL_2D8B: ld a,(Ctrl_1_pressed) ; and $30 ; jp z,loop ;
     #   ld c,a ; xor a ; ld ($C26D),a) -> ps_battle_select (observe; answers an open battle menu).
+    # Round windows (LABEL_1055: xor a ; ld ($C267),a ; ld ($C2D4),a ; call LABEL_30C3 ; call LABEL_2ED9) ->
+    #   ps_battle_round_open (skips both with auto attack); LABEL_10B7: xor a ; ld ($C267),a ; call LABEL_30B7 ;
+    #   call LABEL_30E1 ; call LABEL_18F2 ; ld hl,$C2A0 ; ld b,$0C -> ps_battle_round_close (skips the restore).
     ("battle", [
         ("ps_battle_begin", "3a e6 c2 fe 48 0e 92 28 .. fe 49", 0, 3),
         ("ps_battle_cmd", "11 0c 00 19 7e b7 20 .. cd .. .. cd .. .. cd .. .. 21 82 78 22 69 c2 3e 04 32 6e c2 cd .. .. cb 61 c2 .. .. 21 .. .. cd .. .. cd .. .. 3a 67 c2 fe 04", 8, 37),
         ("ps_battle_select", "3a 05 c2 e6 30 ca .. .. 4f af 32 6d c2", 0, 3),
+        ("ps_battle_round_open", "af 32 67 c2 32 d4 c2 cd .. .. cd .. ..", 7, 6),
+        ("ps_battle_round_close", "af 32 67 c2 cd .. .. cd .. .. cd .. .. 21 a0 c2 06 0c", 4, 6),
     ]),
     # The 2.5 retranslation reads the buttons through its own `call $3F09 ; nop ; nop ; jp z,loop`
     # (mask by game mode): same hook on that call (it only reads Ctrl_1_pressed).
@@ -109,6 +114,8 @@ GROUPS = [
         ("ps_battle_begin", "3a e6 c2 fe 48 0e 92 28 .. fe 49", 0, 3),
         ("ps_battle_cmd", "11 0c 00 19 7e b7 20 .. cd .. .. cd .. .. cd .. .. 21 82 78 22 69 c2 3e 04 32 6e c2 cd .. .. cb 61 c2 .. .. 21 .. .. cd .. .. cd .. .. 3a 67 c2 fe 04", 8, 37),
         ("ps_battle_select", "cd .. .. 00 00 ca .. .. 4f af 32 6d c2", 0, 3),
+        ("ps_battle_round_open", "af 32 67 c2 32 d4 c2 cd .. .. cd .. ..", 7, 6),
+        ("ps_battle_round_close", "af 32 67 c2 cd .. .. cd .. .. cd .. .. 21 a0 c2 06 0c", 4, 6),
     ]),
 ]
 

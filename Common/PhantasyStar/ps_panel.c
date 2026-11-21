@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "hud.h"
+#include "video/sms_vdp.h"
 
 extern uint8_t     sms_read8(uint16_t addr);
 extern bool        ps_worldmap_draw(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space);
@@ -160,12 +161,46 @@ extern const uint8_t *glue_sram_image(size_t *size);
 extern bool ps_worldmap_draw_at(uint32_t *fb, int w, int h, int bx, int by, int bw, int bh, int space,
                                 int tileset, int map, int px, int py, const char **name);
 extern int  ps_worldmap_map_tileset(int map, int fallback);
+extern void ps_worldmap_current_pos(int *px, int *py);
 extern bool ps_automap_draw_slot(uint32_t *fb, int w, int h, int x, int y, int cs, int slot, const uint8_t *blk);
 
 static const uint8_t *g_blk;                           /* previewed slot block, NULL = live RAM */
+
+/* Battle timing (user report 2026-11-21: the panel showed a hit before the game did). When an enemy
+ * hits, the game draws the target's box ($7C80 + $10 * n: LABEL_2F93, still the old HP), lowers the HP
+ * in RAM at once (LABEL_15C2), then plays the attack animation ($C29F set, LABEL_18CE waits for it) and
+ * only when the animation reaches its hit (LABEL_5E1D: sound $AE) redraws the box with the new values
+ * (LABEL_2FA1), ~60 frames after the RAM change; the animation ends ~10 frames later ($C29F = 0).
+ * So while $C29F is set the panel keeps showing a character's old block (status, HP, MP ...) until
+ * the game rewrites that character's box in VRAM, or the animation ends. */
+static uint8_t g_shown[4][16];                         /* the stat blocks the panel shows */
+static bool    g_held[4];
+static uint8_t g_boxsnap[4][6 * 16];                   /* that character's box (name table) when held */
+static void box_vram(int c, uint8_t *out)               /* 6 rows x 8 tiles at $3C80 + $10 * c */
+{
+    for (int r = 0; r < 6; r++) memcpy(out + 16 * r, &g_vdp.vram[(0x3C80 + 0x10 * c + 0x40 * r) & 0x3FFF], 16);
+}
+static void shown_update(void)
+{
+    bool anim = sms_read8(0xC29F) != 0;
+    for (int c = 0; c < 4; c++) {
+        uint8_t ram[16];
+        for (int i = 0; i < 16; i++) ram[i] = sms_read8((uint16_t)(0xC400 + 0x10 * c + i));
+        if (g_held[c]) {
+            uint8_t now[6 * 16]; box_vram(c, now);
+            if (anim && !memcmp(now, g_boxsnap[c], sizeof now)) continue;   /* the game still shows the old box */
+            g_held[c] = false;
+        } else if (anim && memcmp(ram, g_shown[c], 16)) {
+            g_held[c] = true; box_vram(c, g_boxsnap[c]);
+            continue;
+        }
+        memcpy(g_shown[c], ram, 16);
+    }
+}
 static uint8_t rd(uint16_t a)
 {
     if (g_blk && a >= 0xC300 && a < 0xC700) return g_blk[a - 0xC300];
+    if (!g_blk && a >= 0xC400 && a < 0xC440) return g_shown[(a - 0xC400) >> 4][a & 15];
     return sms_read8(a);
 }
 
@@ -289,6 +324,25 @@ void ps_panel_draw(uint32_t *b, int w, int h)
 /* test: PS_PANEL_PPM=<file> + PS_PANEL_FRAME=<n> writes the panel of frame n (headless, no window) */
 void ps_panel_frame(uint64_t frame)
 {
+    shown_update();
+    {   /* test: PS_HIT_TRACE=1 = RAM HP, the panel's HP and the game's box (VRAM $3C80..$3DFF) per change */
+        static int on = -1; if (on < 0) on = getenv("PS_HIT_TRACE") != NULL;
+        if (on) {
+            static char last[160];
+            uint32_t h = 2166136261u;
+            for (int a = 0x3C80; a < 0x3E00; a++) h = (h ^ g_vdp.vram[a]) * 16777619u;
+            char cur[160];
+            snprintf(cur, sizeof cur, "mode %02X C29F %02X hp %3u %3u %3u %3u panel %3u %3u %3u %3u box %08X", sms_read8(0xC202),
+                     sms_read8(0xC29F), sms_read8(0xC401), sms_read8(0xC411), sms_read8(0xC421), sms_read8(0xC431),
+                     g_shown[0][1], g_shown[1][1], g_shown[2][1], g_shown[3][1], (unsigned)h);
+            if (getenv("PS_POS_TRACE")) {
+                int px = 0, py = 0; ps_worldmap_current_pos(&px, &py);
+                snprintf(cur, sizeof cur, "mode %02X obj %02X %3u %3u cam %02X%02X %02X%02X cnt %02X cell %02X saved %02X%02X %02X%02X d5 %02X pos %d %d", sms_read8(0xC202), sms_read8(0xC800),
+                         sms_read8(0xC804), sms_read8(0xC802), sms_read8(0xC302), sms_read8(0xC301), sms_read8(0xC306), sms_read8(0xC305), sms_read8(0xC265), sms_read8(0xC810), sms_read8(0xC314), sms_read8(0xC313), sms_read8(0xC312), sms_read8(0xC311), sms_read8(0xC2D5), px, py);
+            }
+            if (strcmp(cur, last)) { fprintf(stderr, "[hit] %llu %s\n", (unsigned long long)frame, cur); memcpy(last, cur, sizeof last); }
+        }
+    }
     {   /* test: PS_PANEL_TOGGLE=<n> flips the panel at frame n (as pad Back / F2 do) */
         static long tog = -2;
         if (tog == -2) { const char *t = getenv("PS_PANEL_TOGGLE"); tog = t ? atol(t) : -1; }

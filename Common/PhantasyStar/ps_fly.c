@@ -51,6 +51,7 @@ extern int         ps_worldmap_place_tileset(int place);
 extern int         ps_worldmap_town_place(int tileset, int sx, int sy);
 extern int         ps_worldmap_tileset_of(int map);
 extern long        ps_worldmap_df1(void);
+extern int         ps_worldmap_map_tileset(int map, int fallback);
 extern bool        ps_automap_map_known(int map, int *px, int *py);
 extern bool        ps_automap_cell_visited(int floor, int pos);
 extern const char *ps_automap_floor_name(int floor);
@@ -122,11 +123,48 @@ static const struct { uint8_t floor, pos, dir, group; const char *name, *type, *
 /* During a spaceship flight (GameMode_LoadShip / GameMode_Ship, route $C2E9 & $7F = 1-based entry
    of LABEL_ABF: departure planet record, arrival planet record, town record): the take-off /
    landing point on `planet` in world pixels (centre of the party cell). False if unknown. */
+/* The gate of town map `map` on `planet` (its planet entrance table, type $08 records: y, x, $08, map,
+   town y, town x), in world pixels (centre of the cell). A spaceport without a gate of its own (Motavia's
+   map $10) shares its tile set with the town it belongs to: then that town's gate. */
+static bool town_gate(int planet, int map, int *px, int *py)
+{
+    long df1 = ps_worldmap_df1();
+    if (df1 < 0 || !g_rom || planet < 0 || planet > 3 || map < 4) return false;
+    const uint8_t *e = g_rom + df1 + planet * 14;
+    long o0 = 3L * 0x4000 + (long)((e[12] | (e[13] << 8)) - 0x8000);
+    int ts = ps_worldmap_map_tileset(map, -1);
+    for (int pass = 0; pass < 2; pass++)
+        for (long o = o0, n = 0; n < 256 && o >= 0 && o + 6 <= (long)g_rom_n && g_rom[o] != 0xFF; n++, o += 6) {
+            const uint8_t *r = g_rom + o;
+            if (r[2] != 0x08) continue;
+            if (pass == 0 ? r[3] != map : (ts < 4 || ps_worldmap_map_tileset(r[3], -1) != ts)) continue;
+            *px = (r[1] & 0x7F) * 16 + 8;
+            *py = ((r[0] >> 4) & 7) * 192 + (r[0] & 15) * 16 + 8;
+            return true;
+        }
+    return false;
+}
+static int s_last_town = -1;                 /* the town map the party was last in (the spaceport it left) */
+void ps_fly_note_town(int map) { if (map >= 4) s_last_town = map; }
+
+/* The marker during a flight (user report 2026-11-21: "the landing location on the Motavia map is
+   wrong"): the route's planet records (LABEL_ABF) only place the take-off / landing cutscene, a
+   backdrop spot (Palma -> Motavia lands at the top edge of Motavia, $0610 / $0050), not where the
+   spaceport is. So the marker is the spaceport's gate on that planet: on the arrival planet the
+   route's town (record +6), on the departure planet the town the party took off from; the cutscene
+   spot only if no gate is found. Motavia Spaceport (map $10) has no gate: Paseo's (same tile set,
+   joined by a corridor; checked on the rendered planet: the spaceport building is just south of it). */
 bool ps_fly_ship_pos(int planet, int *px, int *py)
 {
     int k = sms_read8(0xC2E9) & 0x7F;
     if (s_abf < 0 || k < 1 || k > 8 || !g_rom) return false;
     const uint8_t *e = g_rom + s_abf + 9 * (k - 1);
+    {   static int dbg = -1, last = -1; if (dbg < 0) dbg = getenv("PS_FLY_DEBUG") != NULL;
+        if (dbg && last != planet * 16 + k) { last = planet * 16 + k;
+        fprintf(stderr, "[fly] ship route %d planet %d: %02X %02X %02X | %02X %02X %02X | %02X %02X %02X (abf %04lX)\n", k, planet,
+                e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8], s_abf); } }
+    if (e[3] == planet && town_gate(planet, e[6], px, py)) return true;
+    if (e[0] == planet && e[3] != planet && town_gate(planet, s_last_town, px, py)) return true;
     const uint8_t *r = e[0] == planet ? e : e[3] == planet ? e + 3 : NULL;
     if (!r) return false;
     *px = (r[2] & 0x7F) * 16 + 8;
@@ -488,6 +526,7 @@ void ps_fly_frame(void)
 {
     s_frame++;
     if (s_pending >= 0 && ++s_pending_age > 30) s_pending = -1;
+    if (sms_read8(RAM_GAME_MODE) == MODE_MAP) ps_fly_note_town(sms_read8(0xC309));
 }
 
 /* ---- HUD page: one scrolling list with planet headers ---- */
