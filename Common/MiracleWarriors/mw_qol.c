@@ -2,9 +2,22 @@
  * mw_qol.c - Miracle Warriors options (HUD: F1 / gamepad Start; mw_qol.ini in the game folder or
  * $MW_QOL_INI). Every option defaults to the original game.
  *
- *  OPTIONS tab: WALK SPEED 1X (original) / 2X / 4X; FAST FORWARD = speed while TAB / pad RT is held
+ *  OPTIONS tab: WALK SPEED 1X (original) / 2X / 4X; ENCOUNTERS 0..200 % (random battles per step);
+ *               RETREAT ORIGINAL / ALWAYS WORKS; FAST FORWARD = speed while TAB / pad RT is held
  *               (engine hud_set_turbo_speed; LT = x0.5).
- *  MULTIPLIERS: EXP (the level bar, per hit) / GUILDERS / FANGS / CHARACTER POINTS x0..x100 (x1 = original).
+ *  MULTIPLIERS: EXP (the level bar, per hit) / GUILDERS / FANGS / CHARACTER POINTS x0..x100 (x1 = original);
+ *               DAMAGE DEALT / DAMAGE RECEIVED x0..x10.
+ *
+ * Battles (found 2026-11-22 from the ROM): after every step ($C44A set) the encounter check $08F4 rolls
+ * $243A (0..255): overworld (mode 1) a battle below $18 (24/256), other modes below $20 with the monster
+ * table $8050[$C449] (towns: none); zone = bank 7 $8000[cell type] -> 16 monster ids at $8068 + 16 * zone
+ * ($63 = none), record = bank 7 $82D8 + 32 * id -> $C140 (24 bytes). Battles placed on the map start at
+ * $0962 (record set by the place handler) and are not affected by ENCOUNTERS. Damage the party deals =
+ * $1432 ((HL + DE) * (100 - $C144) / 100 * (256 + random & 15) / 256) -> `jp $4878` (enemy HP $C142);
+ * enemy hits on member n = $152B / $15EA / $16A1 / $1758 -> $45FD / $4665 / $46CD / $4735 (HP +$0A).
+ * RETREAT ($C468 = $88 -> $0C96): away when (random & $7F) >= $C145 (record byte 5, 0..127; bosses 127);
+ * else message $28 "THOU ART SURROUNDED!" and the enemy attacks all four ($0EFE). Away = $0F52
+ * (battle over, $C474 = 0: no reward). No battle forbids it.
  *  MAP tab / SIDE PANEL: mw_map.c (maps drawn from the ROM, explored cells kept per save slot);
  *               options SIDE PANEL (F2 / pad Back) and MAP REVEAL (explored / whole map).
  *  SOUND tab  : MUSIC / SOUND EFFECTS volume (host mixing only, the game's sound data is untouched),
@@ -58,6 +71,7 @@
 #include <math.h>
 #include "hud.h"
 #include "sms_runtime.h"
+#include "z80_ops.h"
 #include "safe_file.h"
 #include "audio/sn76489.h"
 #include "audio/ym2413.h"
@@ -69,6 +83,14 @@ static int s_fm_i;                                    /* SOUND CHIP: 0 PSG (orig
 #define N_MULT 101                                    /* multipliers x0 .. x100 (= index) */
 static int s_walk_i;                                  /* WALK SPEED: 0 1X (original), 1 2X, 2 4X */
 static int s_exp_i = 1, s_gld_i = 1, s_fang_i = 1, s_pts_i = 1;
+#define N_DMG 11                                      /* DAMAGE DEALT / RECEIVED x0 .. x10 (= index) */
+static int s_dealt_i = 1, s_recv_i = 1;
+#define N_ENC 21                                      /* ENCOUNTERS 0 % .. 200 % in steps of 10 (index * 10) */
+static int s_enc_i = 10;
+static int s_retreat_i;                               /* RETREAT: 0 original, 1 always works */
+static uint64_t s_frame;                              /* the emulated frame (mw_on_frame_post) */
+static char s_enc_buf[N_ENC][20];
+static const char *k_enc[N_ENC];
 static int s_panel_i;                                 /* SIDE PANEL: 0 off (default), 1 on */
 extern int mw_map_reveal;                             /* MAP REVEAL (mw_map.c): 0 explored, 1 whole map */
 extern void mw_map_init(void), mw_map_frame(void), mw_map_test(uint64_t frame), mw_map_hud_closed(void), mw_map_reveal_changed(void);
@@ -96,6 +118,10 @@ static void load_config(void)
         else if (!strcmp(key, "guilders_multiplier")) s_gld_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "char_points_multiplier")) s_pts_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fangs_multiplier"))    s_fang_i = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
+        else if (!strcmp(key, "damage_dealt"))    s_dealt_i = v < 0 ? 1 : v > 10 ? 10 : (int)(v + 0.5);
+        else if (!strcmp(key, "damage_received")) s_recv_i  = v < 0 ? 1 : v > 10 ? 10 : (int)(v + 0.5);
+        else if (!strcmp(key, "encounter_percent")) s_enc_i = v < 0 ? 10 : v > 200 ? 20 : (int)(v / 10 + 0.5);
+        else if (!strcmp(key, "retreat_always")) s_retreat_i = v != 0;
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fast_forward") && v > 0) {
             s_ff_i = 0; for (int i = 1; i < 4; i++) if (fabs(k_ff_vals[i] - v) < fabs(k_ff_vals[s_ff_i] - v)) s_ff_i = i;
@@ -116,6 +142,10 @@ static void save_config(void)
     fprintf(f, "guilders_multiplier = %-5d ; battle guilders reward x N (0..100, 1 = original)\n", s_gld_i);
     fprintf(f, "fangs_multiplier    = %-5d ; battle fangs reward x N (0..100, 1 = original)\n", s_fang_i);
     fprintf(f, "char_points_multiplier = %-2d ; character points gained in a battle x N (0..100, 1 = original; losses unchanged)\n", s_pts_i);
+    fprintf(f, "damage_dealt        = %-5d ; damage the party deals x N (0..10, 1 = original)\n", s_dealt_i);
+    fprintf(f, "damage_received     = %-5d ; damage the party receives x N (0..10, 1 = original, 0 = none)\n", s_recv_i);
+    fprintf(f, "encounter_percent   = %-5d ; random battle chance per step: 100 = original, 50 = half, 0 = none (0..200)\n", s_enc_i * 10);
+    fprintf(f, "retreat_always      = %-5d ; RETREAT in battles: 0 = original (a chance per monster), 1 = always works\n", s_retreat_i);
     fprintf(f, "side_panel     = %d     ; widescreen window with a side panel: the map around the party + the world map (F2 / pad Back)\n", s_panel_i);
     fprintf(f, "map_reveal     = %d     ; maps (MAP tab, side panel): 0 = the explored part, 1 = the whole map\n", mw_map_reveal);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
@@ -159,8 +189,11 @@ static int open_page(void)
 static const char *const k_walk[] = { "1X (ORIGINAL)", "2X", "4X" };
 static const char *const k_onoff[] = { "OFF", "ON" };
 static const char *const k_reveal[] = { "EXPLORED PART", "WHOLE MAP" };
+static const char *const k_retreat[] = { "ORIGINAL", "ALWAYS WORKS" };
 static const HudOption k_opts[] = {
     { "WALK SPEED",   k_walk, 3, &s_walk_i, NULL },
+    { "ENCOUNTERS",   k_enc, N_ENC, &s_enc_i, NULL },
+    { "RETREAT",      k_retreat, 2, &s_retreat_i, NULL },
     { "FAST FORWARD", k_ff_names, 4, &s_ff_i, on_ff },
     { "SIDE PANEL",   k_onoff, 2, &s_panel_i, on_panel },
     { "MAP REVEAL",   k_reveal, 2, &mw_map_reveal, mw_map_reveal_changed },
@@ -170,6 +203,8 @@ static const HudOption k_mult_opts[] = {
     { "GUILDERS", k_mult, N_MULT, &s_gld_i,  NULL },
     { "FANGS",    k_mult, N_MULT, &s_fang_i, NULL },
     { "CHARACTER POINTS", k_mult, N_MULT, &s_pts_i, NULL },
+    { "DAMAGE DEALT",     k_mult, N_DMG, &s_dealt_i, NULL },
+    { "DAMAGE RECEIVED",  k_mult, N_DMG, &s_recv_i, NULL },
 };
 static const char *k_chip[] = { "PSG (ORIGINAL)", "FM" };
 static HudOption k_sound_opts[] = {
@@ -216,7 +251,6 @@ int mw_msg_guilders_end(void)
 }
 int mw_points(void)   { if (s_pts_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_pts_i, 0xC436, "character points"); return 0; }
 /* [insn_hooks] $2F29 / $5007 / $682B: the move handlers' `ld a,($C44B) ; or a ; ret nz` (resume +5) */
-static uint64_t s_frame;
 int mw_step_gate(void)
 {
     static const uint8_t mask[3] = { 15, 7, 3 };
@@ -256,6 +290,45 @@ int mw_exp_bar(void)
     if (getenv("MW_LOG")) fprintf(stderr, "[mw] exp bar %u + %u x%d -> %u\n", hl, bc, s_exp_i, v);
     g_z80.b = (uint8_t)(v >> 8); g_z80.c = (uint8_t)v;
     return 0;
+}
+
+/* [insn_hooks] $090D / $0928: `cp $18` / `cp $20` of the encounter check $08F4 (A = the step's roll 0..255,
+ * then `ret nc`): the limit scaled by ENCOUNTERS (0 = never). Resume after the cp. */
+static int enc_cp(unsigned base)
+{
+    if (s_enc_i == 10) return 0;                             /* 100 %: the original cp */
+    unsigned lim = (base * (unsigned)s_enc_i * 10 + 50) / 100;
+    if (lim > 255) lim = 255;
+    if (getenv("MW_LOG") && g_z80.a < lim) fprintf(stderr, "[mw] %llu encounter: roll %u < %u (of %u)\n", (unsigned long long)s_frame, g_z80.a, lim, base);
+    z80_cp8(&g_z80, g_z80.a, (uint8_t)lim);
+    return 1;
+}
+int mw_enc_world(void) { return enc_cp(0x18); }            /* overworld */
+int mw_enc_other(void) { return enc_cp(0x20); }            /* caverns (towns have no monster table) */
+
+/* [insn_hooks] $145A (`ld c,l ; ld b,h ; jp $4878`): HL = the damage the party deals ($1432: every attack
+ * and spell on the enemy) right before it is taken off the enemy's HP. Observe: HL scaled. */
+static void scale_dmg(int mult, const char *what)
+{
+    unsigned hl = (unsigned)g_z80.h << 8 | g_z80.l, v = hl * (unsigned)mult;
+    if (v > 0xFFFF) v = 0xFFFF;
+    if (getenv("MW_LOG")) fprintf(stderr, "[mw] %llu %s %u x%d -> %u\n", (unsigned long long)s_frame, what, hl, mult, v);
+    g_z80.h = (uint8_t)(v >> 8); g_z80.l = (uint8_t)v;
+}
+int mw_dmg_dealt(void) { if (s_dealt_i != 1) scale_dmg(s_dealt_i, "damage dealt"); return 0; }
+/* [insn_hooks] $1570 / $162F / $16E6 / $179D (`ld c,l ; ld b,h ; call $45FD` etc.): HL = an enemy hit on
+ * party member 1-4 ($152B / $15EA / $16A1 / $1758, used by every enemy action), before the HP subtraction. */
+int mw_dmg_recv(void) { if (s_recv_i != 1) scale_dmg(s_recv_i, "damage received"); return 0; }
+
+/* [insn_hooks] $0C96 (`ld a,($C145)`, the RETREAT handler; resume $0C99): $C145 = the monster's block value
+ * 0..127; the party gets away when (random & $7F) >= it, else "THOU ART SURROUNDED!" and the enemy
+ * attacks everyone. ALWAYS WORKS = a block value of 0. */
+int mw_retreat(void)
+{
+    if (getenv("MW_LOG")) fprintf(stderr, "[mw] %llu retreat: block value %u%s\n", (unsigned long long)s_frame, sms_read8(0xC145), s_retreat_i ? " -> 0" : "");
+    if (!s_retreat_i) return 0;
+    g_z80.a = 0;
+    return 1;
 }
 
 /* [insn_hooks] bank 15 $89AF (the sound driver's frame update; observe only) */
@@ -303,6 +376,9 @@ void mw_on_post_reset(void)
     {   static bool pages;
         if (!pages) { pages = true;
             for (int i = 0; i <= 100; i++) { snprintf(s_pct_buf[i], sizeof s_pct_buf[i], "%d%%", i); k_pct[i] = s_pct_buf[i]; }
+            for (int i = 0; i < N_ENC; i++) {
+                snprintf(s_enc_buf[i], sizeof s_enc_buf[i], i == 0 ? "0% (NONE)" : i == 10 ? "100% (ORIGINAL)" : "%d%%", i * 10);
+                k_enc[i] = s_enc_buf[i]; }
             for (int i = 0; i < N_MULT; i++) {
                 snprintf(s_mult_buf[i], sizeof s_mult_buf[i], i == 0 ? "X0 (NONE)" : i == 1 ? "X1 (ORIGINAL)" : "X%d", i);
                 k_mult[i] = s_mult_buf[i]; }
