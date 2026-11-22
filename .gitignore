@@ -23,7 +23,8 @@ mw_qol.ini
 *.regs
 
 # Separate repos and third-party tools/data (not ours)
-Recomp/
+Recomp/*
+!Recomp/smsggrecomp
 Disasm/
 Emulicious/
 Masterlator/

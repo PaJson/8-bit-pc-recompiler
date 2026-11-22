@@ -1,3 +1,7 @@
 [submodule "External/wla-dx"]
 	path = External/wla-dx
 	url = https://github.com/PaJson/wla-dx.git
+[submodule "Recomp/smsggrecomp"]
+	path = Recomp/smsggrecomp
+	url = https://github.com/PaJson/smsggrecomp.git
+	branch = sms-pc-recompiler
