@@ -60,6 +60,19 @@ The Python used for helper scripts should be run with `-I`.
 
 **Upstream PR (open question, 2026-11-22):** `mstan/smsggrecomp` has no licence yet (README: "Not yet declared"), only mstan's own PRs (#1-#3), last push 2026-11-08 = the base of our branch (no newer upstream commits). Our branch = 41 commits, 41 files, +15.9k / -3.0k lines, mixing generic fixes (recompiler idioms, discovery order, VDP sprite priority + sprite Y wrap, NMI Pause, SRAM, YM2413) with our features (HUD, side panel, `[insn_hooks]`, art, test env vars). Recommendation given to the user: no single big PR; ask mstan first (issue or the R.A.I.D. Discord named in his README), then small PRs, VDP fixes first. User has not decided.
 
+**Making the project repo public (discussion 2026-11-22, NOTHING done yet; continue here).** User asked: public repo, a name without the copyright / trademark problems, what to do with logos / covers. Facts checked:
+- Tracked files: no picture / ROM / IPS / BPS / zip / wav in `git ls-files` (`Images/`, `ROMs/` ignored; `Logos/` already purged from history). Top level tracked: `.claude/agents`, `.gitattributes`, `.gitignore`, `.gitmodules`, `CLAUDE.md`, `CREDITS.md`, `Common/`, `External/` (wla-dx submodule), `Games/` (120 files: game.toml, CMakeLists, ps1), `Launcher/`, `Launcher.cmd`, `Patches/`, `README.md`, `Recomp/` (submodule), `Tools/`.
+- Licences: engine `mstan/smsggrecomp` = **none** ("Not yet declared"; fork `PaJson/smsggrecomp` is PUBLIC already, as is `PaJson/z80-recomp-core` and `PaJson/wla-dx`); `z80-recomp-core` = **PolyForm Noncommercial 1.0.0** (`LICENSES/SUPERZAZU-MIT.txt` for the vendored Z80); emu2413 MIT, stb public domain / MIT, wla-dx GPL (tool only).
+- Email: every project commit is `Patrik Jansson <pajson77@gmail.com>`; the public engine fork already shows it (41 commits; 56 by mstan).
+- "SEGA Master System PC Re-compiler" is hard-coded as the launcher window title (`Launcher/launcher.c` `SDL_CreateWindow`); the generated fallback background is neutral ("PC RECOMPILER / 8-BIT CONSOLE CLASSICS").
+- Copyright note told the user: a title screen captured from the ROM is still the game's artwork; acceptable only because it is made on the player's PC from their own ROM (like the exe) and never shipped. The recompiler cannot render it: it needs a headless run of the built game + frame dump, frame per game (PS title ~1500).
+Recommendation given (user has NOT chosen yet; the user asked to /clear and continue in a few hours):
+1. Licence first: ask mstan to declare a licence (same message as the upstream-PR question); own code (`Common/`, `Launcher/`, `Tools/`, `Patches/`) e.g. MIT; the whole stays non-commercial because of the PolyForm core.
+2. Name: no "SEGA" in the product name, only descriptive ("a static recompiler for Sega Master System games"); keep repo name `sms-pc-recompiler`, app title e.g. "SMS PC Recompiler" (or a own name: "Recomp8", "Native8"; user's pick). Rename = launcher title, README, project folder (`Tools/rename_project.ps1`).
+3. Art: keep the art code (reads only the user's own `Images/`), but default = generated neutral launcher background + a title screen captured from the player's ROM after each build (stored beside the exe), used in the launcher instead of the cover and in the HUD header / PS panel title instead of the logo (or text only).
+4. Hygiene: README disclaimer (not affiliated with Sega, no ROMs, own legal copies); optionally git noreply email for future commits (old commits would need a history rewrite in both repos); trim / move `CLAUDE.md` if wanted; drop `.claude/agents` if personal.
+Proposed order: (a) draft message to mstan, (b) rename, (c) title-image capture + drop the cover/logo defaults, (d) README disclaimer + cleanup. Ask which parts to do before starting.
+
 ## Multi-ROM workflow (2026-11-12)
 
 One recompiled build per ROM, each in `Games/<slug>/`, made by a generator so it is reproducible:
