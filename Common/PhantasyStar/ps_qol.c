@@ -110,6 +110,8 @@ static int s_reveal_i = 0, s_secrets_i = 1;    /* dungeon map: explored / whole 
 static int s_panel_i = 0;                      /* widescreen side panel (party, meseta, map) off / on */
 static int s_hover_i = 0;                      /* hovercraft also drives on land: off / on */
 static int s_diag_i = 0;                       /* DIAGONAL WALKING: off / on */
+static int s_fix_i = 0;                        /* ORIGINAL BUG FIXES: off / on (ps_fixes.c) */
+extern void ps_fixes_set(bool on);
 static int s_flyall_i = 0, s_flyfree_i = 0;    /* FLY page: visited places / all; the spell's rules / free */
 static const char *const k_flylist_names[] = { "VISITED", "ALL" };
 static const char *const k_flycost_names[] = { "SPELL (8 MP)", "FREE" };
@@ -178,6 +180,7 @@ static void load_config(void)
         else if (!strcmp(key, "diagonal_walking")) s_diag_i = v != 0;
         else if (!strcmp(key, "fly_list_all")) s_flyall_i = v != 0;
         else if (!strcmp(key, "fly_free")) s_flyfree_i = v != 0;
+        else if (!strcmp(key, "bug_fixes")) s_fix_i = v != 0;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sound_chip")) {
@@ -215,6 +218,7 @@ static void save_config(void)
     fprintf(f, "diagonal_walking   = %d      ; 1 = two directions held walk a staircase of whole cells (original: up / down first)\n", s_diag_i);
     fprintf(f, "fly_list_all       = %d      ; FLY page: 0 = towns and dungeons visited in this save, 1 = every place (also script-only ones)\n", s_flyall_i);
     fprintf(f, "fly_free           = %d      ; FLY page: 0 = the Fly spell's rules (8 MP, on a map), 1 = free, also from inside a dungeon\n", s_flyfree_i);
+    fprintf(f, "bug_fixes          = %d      ; 1 = fix bugs of the original game: text box line count, Air Castle and ship soft locks, Myau's level-30 attack (Japan / Korea)\n", s_fix_i);
     fprintf(f, "music_volume       = %-6d ; music volume in percent (0..100)\n", s_bgm_i);
     {   int m = ps_sound_mode() >= 0 ? ps_sound_mode() : s_chip_pref;
         if (m >= 0) fprintf(f, "sound_chip         = %-6s ; fm, psg or psg_western (a sound bank from another PS ROM in the ROM folder is used when needed)\n", ps_sound_mode_key(m)); }
@@ -684,6 +688,7 @@ static void on_map_changed(void) { ps_automap_enable(s_map_i != 0); }
 static void on_panel_changed(void) { hud_set_panel_enabled(s_panel_i != 0); }
 static void on_view_changed(void) { ps_automap_set_view(s_reveal_i, s_secrets_i); }
 static void on_ff_changed(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
+static void on_fix_changed(void) { ps_fixes_set(s_fix_i != 0); }
 static void on_panel_toggled(bool on) { s_panel_i = on; save_config(); }   /* pad Back / F2 */
 
 /* ---- BUTTONS page: every pad button / key and what it does (incl. our additions) ---- */
@@ -806,6 +811,7 @@ static const HudOption k_opts[] = {
     { "DIAGONAL WALKING",   k_onoff,     2,      &s_diag_i,  NULL },
     { "FLY LIST",          k_flylist_names, 2,   &s_flyall_i, NULL },
     { "FLY COST",          k_flycost_names, 2,   &s_flyfree_i, NULL },
+    { "ORIGINAL BUG FIXES", k_onoff,     2,      &s_fix_i,   on_fix_changed },
 };
 
 /* ---- MAP page ----
@@ -917,6 +923,7 @@ void ps_on_post_reset(void)
     ps_worldmap_init();
     hover_init();
     diag_init();
+    ps_fixes_set(s_fix_i != 0);
     vehicle_init();
     battle_init();
     ps_items_init();

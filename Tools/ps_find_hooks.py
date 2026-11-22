@@ -117,6 +117,29 @@ GROUPS = [
         ("ps_battle_round_open", "af 32 67 c2 32 d4 c2 cd .. .. cd .. ..", 7, 6),
         ("ps_battle_round_close", "af 32 67 c2 cd .. .. cd .. .. cd .. .. 21 a0 c2 06 0c", 4, 6),
     ]),
+    # ORIGINAL BUG FIXES (ps_fixes.c; all only observe). Text box: the engine's character fetch
+    # LABEL_31FA `ld a,(hl) ; or a ; jp m,.. ; cp $65 ; jp nc,.. ; cp $62 ; ret z` and its re-entry
+    # with the box still open LABEL_31CB `dec hl ; jp LABEL_3235` (right before ShowDialogue_B12's
+    # `ld a,$0C ; ld ($FFFF),a ; ld a,($C2D3) ; or a`). The Japanese engine has other control codes
+    # (`ld a,(hl) ; cp $58 ; jp nc ; cp $56 ; ret z`); the 2.6.1 retranslations replaced the engine
+    # (and fixed it themselves), Korea's engine differs: no text-box fix there.
+    ("text box", [
+        ("ps_fix_text_char", "7e b7 fa .. .. fe 65 d2 .. .. fe 62 c8", 0, 1),
+        ("ps_fix_text_reopen", "2b c3 .. .. 3e 0c 32 ff ff 3a d3 c2 b7", 0, 1),
+    ]),
+    ("text box (Japan)", [
+        ("ps_fix_text_char", ".. fe 58 d2 .. .. fe 56 c8", 0, 1),   # ld a,(hl) or (AGES Ja) rst $18
+        ("ps_fix_text_reopen", "2b c3 .. .. 3e .. 32 ff ff 3a d3 c2 b7 c2", 0, 1),
+    ]),
+    # Battle won, LABEL_1688: `ld hl,($C2DD) ; ld a,($C2DF) ; or l ; or h ; ret z` (treasure chest?)
+    ("castle chest", [
+        ("ps_fix_battle_chest", "2a dd c2 3a df c2 b5 b4 c8", 0, 3),
+    ]),
+    # The Luveno finished, LABEL_4DFB: `ld a,$07 ; ld ($C504),a ; ld hl,$0294 ; jp ShowDialogue_B2`
+    # (2.6.1: PSRP replaced that jp with its own fix -> no match)
+    ("ship church", [
+        ("ps_fix_ship_church", "3e 07 32 04 c5 21 94 02 c3", 0, 2),
+    ]),
 ]
 
 def find(rom, pat):

@@ -19,7 +19,7 @@ sms_add_game(%(proj)s)
 
 CMAKE_PS = r'''
 # Phantasy Star QoL hooks (auto-map, EXP/Meseta/encounter options) shared by all PS builds.
-target_sources(%(proj)s PRIVATE ../../Common/PhantasyStar/ps_automap.c ../../Common/PhantasyStar/ps_qol.c ../../Common/PhantasyStar/ps_worldmap.c ../../Common/PhantasyStar/ps_panel.c ../../Common/PhantasyStar/ps_items.c ../../Common/PhantasyStar/ps_fly.c ../../Common/PhantasyStar/ps_sound.c)
+target_sources(%(proj)s PRIVATE ../../Common/PhantasyStar/ps_automap.c ../../Common/PhantasyStar/ps_qol.c ../../Common/PhantasyStar/ps_worldmap.c ../../Common/PhantasyStar/ps_panel.c ../../Common/PhantasyStar/ps_items.c ../../Common/PhantasyStar/ps_fly.c ../../Common/PhantasyStar/ps_sound.c ../../Common/PhantasyStar/ps_fixes.c)
 '''
 
 BUILD = r'''# Regenerate C from the ROM, build the runner. Usage: ./build.ps1 [-Jobs 4]
