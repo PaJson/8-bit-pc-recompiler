@@ -5,6 +5,8 @@
  *  OPTIONS tab: WALK SPEED 1X (original) / 2X / 4X; FAST FORWARD = speed while TAB / pad RT is held
  *               (engine hud_set_turbo_speed; LT = x0.5).
  *  MULTIPLIERS: EXP (the level bar, per hit) / GUILDERS / FANGS / CHARACTER POINTS x0..x100 (x1 = original).
+ *  MAP tab / SIDE PANEL: mw_map.c (maps drawn from the ROM, explored cells kept per save slot);
+ *               options SIDE PANEL (F2 / pad Back) and MAP REVEAL (explored / whole map).
  *  SOUND tab  : MUSIC / SOUND EFFECTS volume (host mixing only, the game's sound data is untouched),
  *               SOUND CHIP PSG (original: Western consoles have no FM unit) / FM (Japanese FM unit).
  *
@@ -67,6 +69,10 @@ static int s_fm_i;                                    /* SOUND CHIP: 0 PSG (orig
 #define N_MULT 101                                    /* multipliers x0 .. x100 (= index) */
 static int s_walk_i;                                  /* WALK SPEED: 0 1X (original), 1 2X, 2 4X */
 static int s_exp_i = 1, s_gld_i = 1, s_fang_i = 1, s_pts_i = 1;
+static int s_panel_i;                                 /* SIDE PANEL: 0 off (default), 1 on */
+extern int mw_map_reveal;                             /* MAP REVEAL (mw_map.c): 0 explored, 1 whole map */
+extern void mw_map_init(void), mw_map_frame(void), mw_map_test(uint64_t frame), mw_map_hud_closed(void), mw_map_reveal_changed(void);
+extern void mw_map_panel(uint32_t *b, int w, int h);
 static char s_mult_buf[N_MULT][16];
 static const char *k_mult[N_MULT];
 static char s_pct_buf[101][6];
@@ -83,6 +89,8 @@ static void load_config(void)
         if (line[0] == ';' || line[0] == '#' || sscanf(line, " %63[a-z_0-9] = %lf", key, &v) != 2) continue;
         if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "fm_sound")) s_fm_i = v != 0;
+        else if (!strcmp(key, "side_panel")) s_panel_i = v != 0;
+        else if (!strcmp(key, "map_reveal")) mw_map_reveal = v != 0;
         else if (!strcmp(key, "walk_speed")) s_walk_i = v >= 3 ? 2 : v >= 1.5 ? 1 : 0;
         else if (!strcmp(key, "exp_multiplier"))      s_exp_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "guilders_multiplier")) s_gld_i  = v < 0 ? 1 : v > 100 ? 100 : (int)(v + 0.5);
@@ -108,6 +116,8 @@ static void save_config(void)
     fprintf(f, "guilders_multiplier = %-5d ; battle guilders reward x N (0..100, 1 = original)\n", s_gld_i);
     fprintf(f, "fangs_multiplier    = %-5d ; battle fangs reward x N (0..100, 1 = original)\n", s_fang_i);
     fprintf(f, "char_points_multiplier = %-2d ; character points gained in a battle x N (0..100, 1 = original; losses unchanged)\n", s_pts_i);
+    fprintf(f, "side_panel     = %d     ; widescreen window with a side panel: the map around the party + the world map (F2 / pad Back)\n", s_panel_i);
+    fprintf(f, "map_reveal     = %d     ; maps (MAP tab, side panel): 0 = the explored part, 1 = the whole map\n", mw_map_reveal);
     fprintf(f, "fast_forward   = %-5g ; speed while TAB / pad RT is held: 0.5, 1, 2 or 4 (pad LT = x0.5)\n", k_ff_vals[s_ff_i]);
     safe_fclose(f, s_ini);
 }
@@ -137,12 +147,23 @@ static void sound_frame(void)
 }
 static void on_volume_changed(void) { sound_frame(); }
 static void on_ff(void) { hud_set_turbo_speed(k_ff_vals[s_ff_i]); }
-static void on_close(void) { save_config(); }
+static void on_close(void) { save_config(); mw_map_hud_closed(); }
+static void on_panel(void) { hud_set_panel_enabled(s_panel_i != 0); }
+static void on_panel_toggled(bool on) { s_panel_i = on; save_config(); }   /* F2 / pad Back */
+static int open_page(void)
+{
+    const char *t = getenv("MW_HUD_PAGE");                /* test: the tab the HUD opens on */
+    return hud_page_index(t ? t : "MAP");
+}
 
 static const char *const k_walk[] = { "1X (ORIGINAL)", "2X", "4X" };
+static const char *const k_onoff[] = { "OFF", "ON" };
+static const char *const k_reveal[] = { "EXPLORED PART", "WHOLE MAP" };
 static const HudOption k_opts[] = {
     { "WALK SPEED",   k_walk, 3, &s_walk_i, NULL },
     { "FAST FORWARD", k_ff_names, 4, &s_ff_i, on_ff },
+    { "SIDE PANEL",   k_onoff, 2, &s_panel_i, on_panel },
+    { "MAP REVEAL",   k_reveal, 2, &mw_map_reveal, mw_map_reveal_changed },
 };
 static const HudOption k_mult_opts[] = {
     { "EXP",      k_mult, N_MULT, &s_exp_i,  NULL },
@@ -195,9 +216,29 @@ int mw_msg_guilders_end(void)
 }
 int mw_points(void)   { if (s_pts_i != 1 && !(sms_read8(0xC140) & 0x80)) scale_bc(s_pts_i, 0xC436, "character points"); return 0; }
 /* [insn_hooks] $2F29 / $5007 / $682B: the move handlers' `ld a,($C44B) ; or a ; ret nz` (resume +5) */
+static uint64_t s_frame;
 int mw_step_gate(void)
 {
     static const uint8_t mask[3] = { 15, 7, 3 };
+    {   /* test: MW_TEST_CALL=<frame>:<hex addr>,... runs that game routine at that frame from the overworld's
+           step code (main program), then ends this handler: $3AC6 = into the cavern behind overworld cell
+           type 59 (as after the menu choice there), $31B9 + $2D n = save to slot n + 1, $6F77 = load slot 1 */
+        const char *e = getenv("MW_TEST_CALL");
+        for (const char *q = e; q && *q; ) {
+            unsigned long at = strtoul(q, (char **)&q, 10); unsigned addr = *q == ':' ? (unsigned)strtoul(q + 1, NULL, 16) : 0;
+            static uint64_t done_at[16]; static int nd; bool done = false;
+            for (int i = 0; i < nd; i++) done |= done_at[i] == at;
+            if (addr && !done && s_frame >= at && nd < 16) {
+                done_at[nd++] = at;
+                if (getenv("MW_LOG")) fprintf(stderr, "[mw] test call $%04X at frame %llu\n", addr, (unsigned long long)s_frame);
+                g_z80.sp = (uint16_t)(g_z80.sp - 2); sms_write16(g_z80.sp, 0x0000);
+                call_by_address((uint16_t)addr);
+                g_z80.sp = (uint16_t)(g_z80.sp + 2);          /* result 2 = this handler's RET */
+                return 2;
+            }
+            q = strchr(q, ','); if (q) q++;
+        }
+    }
     if (!s_walk_i) return 0;                                 /* 1X: the original instructions */
     if (sms_read8(0xC44B) & mask[s_walk_i]) {                /* the RET: result 2 only leaves the C function, */
         g_z80.sp = (uint16_t)(g_z80.sp + 2);                 /* so pop the return address as the RET would */
@@ -267,11 +308,25 @@ void mw_on_post_reset(void)
                 k_mult[i] = s_mult_buf[i]; }
             hud_add_option_page("MULTIPLIERS", k_mult_opts, (int)(sizeof k_mult_opts / sizeof k_mult_opts[0]));
             hud_add_option_page("SOUND", k_sound_opts, (int)(sizeof k_sound_opts / sizeof k_sound_opts[0])); } }
-    {   static const char *const order[] = { "OPTIONS", "MULTIPLIERS", "SOUND" };
-        hud_set_page_order(order, 3); }
+    mw_map_init();                                    /* MAP tab (once) */
+    {   static const char *const order[] = { "MAP", "OPTIONS", "MULTIPLIERS", "SOUND" };
+        hud_set_page_order(order, 4); }
+    hud_set_open_page(open_page);
+    hud_set_panel(mw_map_panel);                      /* map around the party + world map (mw_map.c) */
+    hud_set_panel_enabled(s_panel_i != 0);
+    hud_set_on_panel_toggle(on_panel_toggled);
 }
 void mw_on_frame_post(uint64_t frame)
 {
+    s_frame = frame;
+    mw_map_frame();
+    mw_map_test(frame);
+    {   /* test: MW_HUD_OPEN=<frame> opens the HUD (window tests: SMS_WINDOW_SHOT + _EXIT; MW_HUD_PAGE = the tab,
+           MW_HUD_KEYS = keys for the MAP tab) */
+        static long ho = -2;
+        if (ho == -2) { const char *e = getenv("MW_HUD_OPEN"); ho = e ? atol(e) : -1; }
+        if (ho >= 0 && frame == (uint64_t)ho && !hud_is_open()) hud_key(HUD_KEY_TOGGLE);
+    }
     {   /* test: MW_FM_SWITCH=<frame>:<0|1>,... sets SOUND CHIP at that frame (as the HUD would) */
         const char *e = getenv("MW_FM_SWITCH");
         for (const char *q = e; q && *q; ) {

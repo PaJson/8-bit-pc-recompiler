@@ -21,10 +21,10 @@ on_post_reset = "mw_on_post_reset"   # Common/MiracleWarriors/mw_qol.c: options 
 on_frame_post = "mw_on_frame_post"   # mw_qol.c: music / sound effects volume
 
 [insn_hooks]
-addr   = [0x89AF, 0x03A0, 0x03A7, 0x03B3, 0x45CA, 0x4632, 0x469A, 0x4702, 0x2F29, 0x5007, 0x682B, 0x4DF6, 0x4E12, 0x4E19]
-func   = ["mw_snd_update", "mw_fangs", "mw_guilders", "mw_points", "mw_exp_bar", "mw_exp_bar", "mw_exp_bar", "mw_exp_bar", "mw_step_gate", "mw_step_gate", "mw_step_gate", "mw_msg_fangs", "mw_msg_guilders", "mw_msg_guilders_end"]
-resume = [0x89AF, 0x03A0, 0x03A7, 0x03B3, 0x45CA, 0x4632, 0x469A, 0x4702, 0x2F2E, 0x500C, 0x6830, 0x4DF6, 0x4E12, 0x4E21]
-bank   = [15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
+addr   = [0x89AF, 0x03A0, 0x03A7, 0x03B3, 0x45CA, 0x4632, 0x469A, 0x4702, 0x2F29, 0x5007, 0x682B, 0x4DF6, 0x4E12, 0x4E19, 0x31D3, 0x3200, 0x322D, 0x325A, 0x3287, 0x6F8C, 0x02AE]
+func   = ["mw_snd_update", "mw_fangs", "mw_guilders", "mw_points", "mw_exp_bar", "mw_exp_bar", "mw_exp_bar", "mw_exp_bar", "mw_step_gate", "mw_step_gate", "mw_step_gate", "mw_msg_fangs", "mw_msg_guilders", "mw_msg_guilders_end", "mw_map_saved", "mw_map_saved", "mw_map_saved", "mw_map_saved", "mw_map_saved", "mw_map_loaded", "mw_map_new_game"]
+resume = [0x89AF, 0x03A0, 0x03A7, 0x03B3, 0x45CA, 0x4632, 0x469A, 0x4702, 0x2F2E, 0x500C, 0x6830, 0x4DF6, 0x4E12, 0x4E21, 0x31D3, 0x3200, 0x322D, 0x325A, 0x3287, 0x6F8C, 0x02AE]
+bank   = [15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
 # 2026-11-17: bank 15 $89AF = the sound driver's frame update (`ld a,($DD00)`, from the frame interrupt $013B):
 # SOUND CHIP PSG / FM switched live (mw_qol.c)
 # 2026-11-18: $03A0 / $03A7 / $03B3 = the battle reward adds (fangs / guilders / character points gain), BC scaled by
