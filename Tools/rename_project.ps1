@@ -4,7 +4,7 @@
 # the launcher and every game (Windows refuses to rename a folder that a program has open):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File "<project folder>\Tools\rename_project.ps1"
 # Options:
-#   -NewName "<name>"   new folder name (default "SMS PC Recompiler"; same parent folder)
+#   -NewName "<name>"   new folder name (default "8-bit PC Recompiler"; same parent folder)
 #   -Rebuild            also rebuild every game now (long: the paths change, so everything recompiles;
 #                       without it each game recompiles on its next build, e.g. R in the launcher)
 #   -RepairOnly -Root <folder>   skip the rename, only repair <folder> (e.g. after renaming by hand)
@@ -17,7 +17,7 @@
 #      and ninja state, and is configured again with its own settings (Release, -O1, options ...).
 # Git repositories, sources, saves, ROMs and ini files contain no absolute paths and need nothing.
 param(
-    [string]$NewName = 'SMS PC Recompiler',
+    [string]$NewName = '8-bit PC Recompiler',
     [switch]$Rebuild,
     [switch]$RepairOnly,
     [string]$Root

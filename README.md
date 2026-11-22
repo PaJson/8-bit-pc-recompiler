@@ -1,6 +1,6 @@
-# SMS PC Recompiler
+# 8-bit PC Recompiler
 
-A static recompiler for Sega Master System games.
+A static recompiler for 8-bit Sega games (Master System, Game Gear).
 
 Native Windows builds of Master System games, made by **static recompilation** of the Z80 ROM
 to C with the [smsggrecomp](https://github.com/PaJson/smsggrecomp) engine (a fork of
@@ -23,7 +23,7 @@ Golvellius (+ our own *Golvellius Plus* ROM patch), Miracle Warriors, and Sonic 
 3. **Long paths for git** (one wla-dx test file has a very long name):
    `git config --global core.longpaths true`
 4. **Clone with the submodules:**
-   `git clone --recursive https://github.com/PaJson/sms-pc-recompiler.git`
+   `git clone --recursive https://github.com/PaJson/8-bit-pc-recompiler.git`
    (after a plain clone: `git submodule update --init --recursive`)
 5. **Build the recompiler** once (MSYS2 `bin` first on the PATH), in `Recomp/smsggrecomp/recompiler`:
    ```

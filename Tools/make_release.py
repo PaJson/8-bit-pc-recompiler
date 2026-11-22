@@ -81,8 +81,8 @@ def copy_if_changed(src, dst):
     return True
 
 
-README = """SMS PC Recompiler - games
-=========================
+README = """8-bit PC Recompiler - games
+===========================
 
 Start Launcher.exe. It lists every game whose ROM is in the ROMs folder.
 
