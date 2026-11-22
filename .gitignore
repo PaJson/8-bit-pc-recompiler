@@ -65,3 +65,6 @@ cega/
 
 # Tools/make_release.py output: the stand-alone running environment (game exes are derived from the ROMs)
 Release/
+
+# Claude Code: personal permission settings (the shared .claude/agents etc. are committed)
+.claude/settings.local.json
