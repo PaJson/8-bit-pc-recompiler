@@ -36,6 +36,30 @@ MSYS2 at `C:\msys64` with mingw64 gcc 16, cmake, ninja, SDL2. `cmake` is NOT on 
 always `export PATH=/c/msys64/mingw64/bin:$PATH` (bash) / `$env:PATH="C:\msys64\mingw64\bin;$env:PATH"`.
 The Python used for helper scripts should be run with `-I`.
 
+## Repos, GitHub, fresh clone (2026-11-22)
+
+| Repo | Where | Branch |
+|---|---|---|
+| Project (this folder) | **private** GitHub `PaJson/sms-pc-recompiler` (created 2026-11-22; history rewritten once before the first push to drop `Logos/`) | `main` |
+| Engine `Recomp/smsggrecomp` (submodule) | fork `PaJson/smsggrecomp` of `mstan/smsggrecomp` | `sms-pc-recompiler` (our work, was `ps-qol-night2`); the fork's `main` = mstan's upstream, untouched |
+| Core `Recomp/smsggrecomp/external/z80-recomp-core` (engine's submodule) | `PaJson/z80-recomp-core` | detached at `bdd1c30` = its `main` |
+| `External/wla-dx` (submodule, Golvellius Plus assembler) | `PaJson/wla-dx` | `fceeb84` |
+
+**Commit / push order after engine changes:** commit + push in `Recomp/smsggrecomp` (plain `git push`, the branch tracks origin), then `git add Recomp/smsggrecomp` + commit + push in the project. Never commit or push without the user's go-ahead.
+
+**New PC / fresh clone:**
+1. MSYS2 in `C:\msys64` with `mingw-w64-x86_64-gcc cmake ninja SDL2` (here: gcc 16.2, cmake 4.4.5, ninja 1.13.2, SDL2 2.32.10); Python 3 (here 3.14) for `Tools/`; `gh` for GitHub.
+2. `git config --global core.longpaths true` (set here 2026-11-22): a wla-dx test file has a 140-character name; without it a clone into a deep folder stops with "Filename too long".
+3. `git clone --recursive https://github.com/PaJson/sms-pc-recompiler.git` (or `git submodule update --init --recursive` after a plain clone).
+4. Recompiler: in `Recomp/smsggrecomp/recompiler`: `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe -DCMAKE_MAKE_PROGRAM=C:/msys64/mingw64/bin/ninja.exe` then `cmake --build build` (PATH with `C:\msys64\mingw64\bin` first).
+5. Copy the ROMs into `ROMs/` (names as in each `Games/<slug>/game.toml`; the launcher matches by CRC32), then `Games/<slug>/build.ps1` or `Launcher.cmd` (builds the launcher, then games on first Play).
+
+**Not in the repo (git-ignored; copy by hand if needed):** `ROMs/` (all ROMs, `ROMs/Patched/` regenerable with `Tools/regen_patched.sh` / the launcher), `ROMs/Patches/` (the authors' original downloads), `Games/*/saves/` + `*.sav` etc., personal ini files (`ps_qol.ini`, `gv_qol.ini`, `mw_qol.ini`, `launcher.ini`), `Images/` (the user's SEGA artwork: never commit), `Disasm/ps1disasm-master/` (only `Tools/ps_scenario.py` reads it), `cega/`, `Release/`, every `build*/` and `generated/` folder.
+
+**Clone test 2026-11-22 (passed):** fresh `git clone --recursive` from GitHub into the scratchpad, Rev A ROM copied into `ROMs/`, steps 4-5 above: recompiler built, `Games/ps-reva/build.ps1` regenerated + built `PsRevaRecomp.exe`, 3000 frames of `rand1` headless: 0 dispatch misses, 100 % static; `Launcher/build.ps1` built `Launcher.exe`. Not tested from a clone: other games, patched ROMs, `Tools/` scripts.
+
+**Upstream PR (open question, 2026-11-22):** `mstan/smsggrecomp` has no licence yet (README: "Not yet declared"), only mstan's own PRs (#1-#3), last push 2026-11-08 = the base of our branch (no newer upstream commits). Our branch = 41 commits, 41 files, +15.9k / -3.0k lines, mixing generic fixes (recompiler idioms, discovery order, VDP sprite priority + sprite Y wrap, NMI Pause, SRAM, YM2413) with our features (HUD, side panel, `[insn_hooks]`, art, test env vars). Recommendation given to the user: no single big PR; ask mstan first (issue or the R.A.I.D. Discord named in his README), then small PRs, VDP fixes first. User has not decided.
+
 ## Multi-ROM workflow (2026-11-12)
 
 One recompiled build per ROM, each in `Games/<slug>/`, made by a generator so it is reproducible:
