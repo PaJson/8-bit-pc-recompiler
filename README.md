@@ -1,4 +1,6 @@
-# SEGA Master System PC Re-compiler
+# SMS PC Recompiler
+
+A static recompiler for Sega Master System games.
 
 Native Windows builds of Master System games, made by **static recompilation** of the Z80 ROM
 to C with the [smsggrecomp](https://github.com/PaJson/smsggrecomp) engine (a fork of
@@ -58,6 +60,13 @@ Put the patch authors' original downloads into `ROMs/Patches/` (links in `CREDIT
 | Launcher / cover artwork (SEGA material: never commit) | `Images/` |
 | Phantasy Star disassembly (only `Tools/ps_scenario.py` reads it) | `Disasm/ps1disasm-master/` |
 | Build output, generated C, release folder | `build*/`, `Games/*/generated/`, `Release/` |
+
+## Licence
+
+- Our own code (`Common/`, `Launcher/`, `Tools/`, `Patches/`, the build scripts): MIT, see `LICENSE`.
+- The engine `Recomp/smsggrecomp` and its core `external/z80-recomp-core` (git submodules) have their
+  own licences (PolyForm Noncommercial 1.0.0), so every game build made with them may only be used and
+  shared non-commercially. Third-party parts keep theirs (`CREDITS.md`).
 
 ## More
 
