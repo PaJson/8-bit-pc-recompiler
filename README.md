@@ -65,8 +65,9 @@ Put the patch authors' original downloads into `ROMs/sms/Patches/` (links in `CR
 
 - Our own code (`Common/`, `Launcher/`, `Tools/`, `Patches/`, the build scripts): MIT, see `LICENSE`.
 - The engine `Recomp/smsggrecomp` and its core `external/z80-recomp-core` (git submodules) have their
-  own licences (PolyForm Noncommercial 1.0.0), so every game build made with them may only be used and
-  shared non-commercially. Third-party parts keep theirs (`CREDITS.md`).
+  own licences (PolyForm Noncommercial 1.0.0, plus the additional permissions in each `PERMISSIONS.md`:
+  voluntary donations and advertising are allowed, payment must never buy access), so every game build made
+  with them may only be used and shared non-commercially. Third-party parts keep theirs (`CREDITS.md`).
 
 ## More
 
