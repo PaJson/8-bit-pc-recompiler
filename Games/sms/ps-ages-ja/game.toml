@@ -1,0 +1,63 @@
+# game.toml - Phantasy Star (SEGA AGES, Ja)
+# ROM: ROMs/sms/Phantasy Star (World) (Ja) (Sega Ages).sms
+#      552 KB (34 x 16 KB banks + 8192 bytes), CRC32 DF96F194 (the build refuses any other ROM)
+# Made by Tools/mkgame.py from Tools/sms/templates/ps_reva.game.toml.
+
+[game]
+output_prefix = "psagesja"
+display_name  = "Phantasy Star (SEGA AGES, Ja)"
+platform      = "sms"
+rom           = "../../../ROMs/sms/Phantasy Star (World) (Ja) (Sega Ages).sms"
+
+[ram_layout]
+# dungeon_id = 0x____
+# player_x   = 0x____
+# player_y   = 0x____
+# facing     = 0x____
+
+[hooks]
+on_post_reset = "ps_on_post_reset"   # ps_qol.c: ROM data patches / config
+on_frame_post = "ps_on_frame_post"   # ps_qol.c -> auto-map (ps_automap.c) + RAM-side QoL options
+
+[mapper]
+kind = "sega"
+
+[functions]
+extra = []
+blacklist = []
+
+# Computed-jump tables read from ROM (ps1disasm-master, ps1.asm).
+# $00BE GameModeTbl (20 entries) -> GetPtrAndJump (`jp (hl)`) from main loop.
+# $018F VInt mode table (12 entries) -> `jp (hl)` in VInt, indexed by ($C208 & $1F).
+# Sound driver (bank 12 @ $8000): $82E5 (5, cmds $D5-$D9), $8530 (18, cmds $EE+).
+[jump_tables]
+# Tables read by GetPtrAndJump ($00E6: pointer = HL + 2*A) - found by scanning the ROM for
+# `ld hl,TBL ; call/jp $00E6` and counting `.dw` entries in ps1disasm-master/ps1.asm.
+#         GameMode VInt  snd1    snd2    BattleMenu 1A8A   1A66   PlayerMenu 1DFE  ItemAct 3C2A  5827(PS)  12C4  ItemUse 63B8  621F  4773(helper $4769, DE=table-2)
+addr  = [0x00E8, 0x1A79, 0x1BF1, 0x142B, 0x1BCD, 0x1DFE, 0x1F65, 0x2362, 0x2371, 0x3D59, 0x5AAE, 0x64A6, 0x663C, 0x01B9, 0x49DE, 0x845C, 0x88C2]
+bank  = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 12, 12]
+count = [20, 5, 18, 8, 18, 5, 19, 3, 64, 20, 22, 5, 11, 12, 182, 5, 18]
+
+# jump-table detection (Tools/sms/ps_find_tables.py):
+#  0x00E8 bank -1 count  20  GPJ site 00DF (RevA 00B5)
+#  0x1A79 bank -1 count   5  GPJ site 1215 (RevA 10AE)
+#  0x1BF1 bank -1 count  18  GPJ site 134F (RevA 11E8)
+#  0x142B bank -1 count   8  GPJ site 1425 (RevA 12BE)
+#  0x1BCD bank -1 count  18  GPJ site 1BA0 (RevA 1A39)
+#  0x1DFE bank -1 count   5  GPJ site 1D6E (RevA 1C07)
+#  0x1F65 bank -1 count  19  GPJ site 1F18 (RevA 1DB1)
+#  0x2362 bank -1 count   3  GPJ site 2353 (RevA 21EC)
+#  0x2371 bank -1 count  64  GPJ site 236B (RevA 2204)
+#  0x3D59 bank -1 count  20  GPJ site 3CEE (RevA 3BBF)
+#  0x5AAE bank -1 count  22  GPJ site 5A20 (RevA 5799)
+#  0x64A6 bank -1 count   5  GPJ site 6498 (RevA 6211)
+#  0x663C bank -1 count  11  GPJ site 6636 (RevA 63B2)
+#  0x01B9 bank -1 count  12  VInt mode table
+#  0x49DE bank -1 count 182  helper 49D4 site 49BD
+#  0x845C bank 12 count   5  sound snd1 (bank 12)
+#  0x88C2 bank 12 count  18  sound snd2 (bank 12)
+
+[insn_hooks]   # QoL hooks (Tools/sms/ps_find_hooks.py; each returns 0 = original code unless enabled)
+addr   = [0x7414, 0x7421, 0x5D2B, 0x5DC6, 0x5DF7, 0x5E02, 0x18DA, 0x0327, 0x032F, 0x0337, 0x13CF, 0x1729, 0x0C76, 0x10AA, 0x0056, 0x77E3, 0x77EC, 0x245C, 0x740C, 0x5D95, 0x0C9C, 0x10AF, 0x1176, 0x11F9, 0x2EFE, 0x11D5, 0x122F, 0x3370, 0x3341, 0x1801, 0x50FC]
+func   = ["ps_walk_frames", "ps_walk_pixels", "ps_walk_animcp", "ps_walk_animtmr", "ps_walk_follow_x", "ps_walk_follow_y", "ps_exp_add", "ps_snd_update", "ps_snd_init", "ps_snd_mute", "ps_damage", "ps_damage", "ps_items_walk_mark", "ps_items_walk_mark", "ps_items_vwait", "ps_hover_pass", "ps_hover_pass", "ps_hover_board", "ps_diag_step", "ps_diag_face", "ps_fly_go", "ps_fly_dungeon_go", "ps_battle_begin", "ps_battle_cmd", "ps_battle_select", "ps_battle_round_open", "ps_battle_round_close", "ps_fix_text_char", "ps_fix_text_reopen", "ps_fix_battle_chest", "ps_fix_ship_church"]
+resume = [0x7421, 0x742B, 0x5D2D, 0x5DCA, 0x5E01, 0x5E0D, 0x18E0, 0x032C, 0x0334, 0x033C, 0x13D2, 0x172C, 0x0C78, 0x10AC, 0x0059, 0x77E5, 0x77EE, 0x246E, 0x740F, 0x5D98, 0x0CA1, 0x10B6, 0x1179, 0x121E, 0x2F01, 0x11DB, 0x1235, 0x3371, 0x3342, 0x1804, 0x50FE]

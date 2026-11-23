@@ -1,6 +1,0 @@
-cmake_minimum_required(VERSION 3.20)
-project(GolvelliusPlusRecomp LANGUAGES C)
-set(SMSGG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../Recomp/smsggrecomp" CACHE PATH "SMS/GG framework")
-include("${SMSGG_ROOT}/cmake/SmsGame.cmake")
-sms_add_game(GolvelliusPlusRecomp)
-target_sources(GolvelliusPlusRecomp PRIVATE ../../Common/Golvellius/gv_qol.c ../../Common/Golvellius/gv_map.c ../../Common/Golvellius/gv_panel.c ../../Common/Golvellius/gv_cave.c ../../Common/Golvellius/gv_info.c ../../Common/Golvellius/gv_slots.c)

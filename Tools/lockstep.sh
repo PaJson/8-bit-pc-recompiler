@@ -12,8 +12,10 @@
 P="$(cd "$(dirname "$0")/.." && pwd)"
 export SMS_FIXED_R="${SMS_FIXED_R:-1}"   # LD A,R from an execution counter (see runner/glue.c sms_test_r)
 g="$1"; out="$2"; n="$3"; pf="$4"; kf="${5:--}"; every="${6:-60}"; skip="${7:-CA00-CAFF}"
-rom=$(grep '^rom' "$P/Games/$g/game.toml" | sed 's/^[^"]*"\.\.\/\.\.\/\([^"]*\)".*/\1/')
-exe=$(ls "$P/Games/$g/build/"*.exe | head -1)
+G=$(ls -d "$P/Games"/*/"$g" 2>/dev/null | head -1); [ -n "$G" ] || { echo "no game folder Games/*/$g"; exit 2; }
+rel=$(grep "^rom" "$G/game.toml" | sed 's/^[^"]*"\(.*\)".*/\1/')
+rom="$(cd "$G/$(dirname "$rel")" && pwd)/$(basename "$rel")"
+exe=$(ls "$G/build/"*.exe | head -1)
 mkdir -p "$out/rec" "$out/int"
 abspath() { case "$1" in -|/*|?:*) echo "$1";; *) echo "$(pwd)/$1";; esac; }
 pf=$(abspath "$pf"); kf=$(abspath "$kf"); out=$(abspath "$out")
@@ -23,9 +25,9 @@ set --
 [ "$kf" != "-" ] && set -- "$@" --poke-file "$(w "$kf")"
 ( cd "$out/rec" && rm -f dispatch_misses.log && SMS_NO_SAVE=1 SMS_STATE_EVERY=$every SMS_STATE_SKIP=$skip \
     SMS_STATE_LOG="$(w "$out/rec/state.log")" SMS_COVERAGE="$(w "$out/coverage.txt")" \
-    "$exe" "$(w "$P/$rom")" --frames "$n" "$@" > out.txt 2>&1 ) &
+    "$exe" "$(w "$rom")" --frames "$n" "$@" > out.txt 2>&1 ) &
 ( cd "$out/int" && SMS_NO_SAVE=1 SMS_STATE_EVERY=$every SMS_STATE_SKIP=$skip SMS_STATE_LOG="$(w "$out/int/state.log")" \
-    "$exe" "$(w "$P/$rom")" --frames "$n" --interp "$@" > out.txt 2>&1 ) &
+    "$exe" "$(w "$rom")" --frames "$n" --interp "$@" > out.txt 2>&1 ) &
 wait
 python -I - "$out" "$g" <<'EOF'
 import sys, re

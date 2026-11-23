@@ -4,9 +4,9 @@ ROMs/
 *.gg
 *.sav
 *.automap
-Games/*/generated/
-Games/*/build*/
-Games/*/saves/
+Games/*/*/generated/
+Games/*/*/build*/
+Games/*/*/saves/
 
 # Logs, test output, personal settings
 *.log
@@ -42,7 +42,7 @@ __pycache__/
 
 # Reference material from fan sites / sprite rips (the user's, not ours; ROM-derived art)
 Meta/
-Games/*/build_log.txt
+Games/*/*/build_log.txt
 
 # user bug reports (screenshots / recordings of the game)
 Bugs/
@@ -58,7 +58,7 @@ Launcher/build/
 .vscode/
 
 # our ROM patches: build output (background = the user ROM, patched ROM, patches)
-Patches/*/build/
+Patches/*/*/build/
 # WLA-DX build output (External/wla-dx = git submodule)
 External/build/
 

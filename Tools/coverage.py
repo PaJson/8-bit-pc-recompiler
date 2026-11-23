@@ -4,7 +4,7 @@
   SMS_COVERAGE=cov1.txt <game exe> <rom> --frames N ...      (one or more runs, any input)
   python -I Tools/coverage.py <slug> cov1.txt [cov2.txt ...] [--list]
 
-Reads Games/<slug>/generated/*_funcs.h (every recompiled function, func_XXXX or func_XXXX_bN)
+Reads Games/<platform>/<slug>/generated/*_funcs.h (every recompiled function, func_XXXX or func_XXXX_bN)
 and the runner's coverage dumps ("BANK OFFSET" per executed function entry), prints how many
 functions ran and (with --list) the ones that never ran - the code no test has exercised yet.
 """
@@ -16,7 +16,7 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     listing = "--list" in sys.argv
     slug, files = args[0], args[1:]
-    hdr = glob.glob(os.path.join(ROOT, "Games", slug, "generated", "*_funcs.h"))[0]
+    hdr = glob.glob(os.path.join(ROOT, "Games", "*", slug, "generated", "*_funcs.h"))[0]
     funcs = []
     for m in re.finditer(r"void func_([0-9A-F]{4})(?:_b(\d+))?\(void\);", open(hdr).read()):
         addr = int(m.group(1), 16)

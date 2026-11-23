@@ -1,5 +1,0 @@
-cmake_minimum_required(VERSION 3.20)
-project(SonicchaosRecomp LANGUAGES C)
-set(SMSGG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../Recomp/smsggrecomp" CACHE PATH "SMS/GG framework")
-include("${SMSGG_ROOT}/cmake/SmsGame.cmake")
-sms_add_game(SonicchaosRecomp)

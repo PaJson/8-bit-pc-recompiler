@@ -12,6 +12,34 @@ options, FM audio).
 
 Base ROM = **original Rev A**. The SEGA AGES ROM is only a comparison/diff target.
 
+## Platform layout (2026-11-23, user: the project is "8-bit": more consoles later)
+
+One folder level per console (`sms`, `gg`, later `nes`, `gb` ...; lower case = the `platform = "sms"` key of `game.toml`):
+`Games/<platform>/<slug>/`, `ROMs/<platform>/` (with `Patched/` + `Patches/` inside), `Common/<platform>/<Game>/`,
+`Patches/<platform>/<Game>/` (our own ROM patches). Engines live in `Recomp/<engine>/` (submodules; today only `smsggrecomp` = Z80:
+SMS + GG; `Tools/mkgame.py` `ENGINES` maps platform -> engine, its templates are Z80 / SMS ones). `Tools/` and `Launcher/` stay shared and flat.
+Same level for the rest (later the same day, user's request): `Disasm/<platform>/ps1disasm-master`, `Bugs/<platform>/`, `Images/<platform>/` (the
+`<title> (front|full|logo)` art; `Images/Backround.jpg`, the launcher background, stays in `Images/`; engine `art_find` searches `Images/` and one level
+of subfolders), `Tools/<platform>/` (everything Phantasy Star / Golvellius / Z80 specific: `ps_*`, `gv_*`, `regen_*`, `find_ptr_tables`, `sms_checksum`,
+`unrolled_runs`, `z80dis.c`, `rom_inventory`, `stack_shapes`, `templates/` = the `mkgame` game.toml templates + `generic_press.txt`); shared tools stay in
+`Tools/` (`mkgame.py`, `make_release.py`, `lockstep.sh`, `verify_game.sh`, `coverage.py`, `apply_patch.py`, `rename_project.ps1`, `test_input/`).
+**NOT split by platform (decision 2026-11-23, user may overrule):** `Recomp/` (one engine folder per CPU family, named after it: `smsggrecomp` serves
+sms AND gg, so a platform level above would be wrong or duplicate it; a future NES engine = `Recomp/nesrecomp`) and `External/` (`wla-dx` is a
+multi-CPU assembler, not an sms thing).
+**Older notes in this file use the flat paths** (`Games/<slug>`, `ROMs/...`, `Common/PhantasyStar`, `Patches/Golvellius`, `Tools/ps_find_hooks.py`,
+`Disasm/ps1disasm-master`): read them as `Games/sms/<slug>`, `ROMs/sms/...`, `Common/sms/PhantasyStar`, `Patches/sms/Golvellius`, `Tools/sms/ps_find_hooks.py`,
+`Disasm/sms/ps1disasm-master`. Relative paths from a game folder: ROM
+`../../../ROMs/sms/<file>`, engine `../../../Recomp/smsggrecomp`, hooks `../../../Common/sms/<Game>/`.
+Done in the move: all 24 game folders (`git mv`; build folders repaired with `rename_project.ps1 -RepairOnly`, each recompiles once on its next
+build; `Games/sms/ps-reva` rebuilt + 3000 frames of `rand1` 0 misses, lockstep 3000 final SAME), `mkgame.py --platform` (default sms), `lockstep.sh` /
+`ps_suite.sh` / `verify_game.sh` / `regen_all.sh` / `coverage.py` (find `Games/*/<slug>`), `regen_patched*.sh`, `gv_build_patch.py`, `ps_find_tables.py`,
+`make_release.py` (per platform: `Release/Games/<platform>/...`, `Release/ROMs/<platform>/...`: an OLD `Release/` folder has the flat layout: delete it and re-run),
+the launcher (scans `Games\<platform>\<slug>`, patches in every `ROMs\<platform>\Patches`, patched ROMs to `ROMs\<platform>\Patched`), `.gitignore`, README.
+The launcher's ROM index is by CRC32 and does not care about folders. Adding a console: engine submodule in `Recomp/`, an `ENGINES` entry +
+templates in `mkgame.py`, then the same folders. Candidate engines (user's forks, 2026-11-23): 8-bit `PaJson/nesrecomp`, `PaJson/gb-recompiled`
+(nothing checked yet: licence, CPU coverage, runner API); 16-bit-or-more ones belong to the 16-bit project / elsewhere (`segagenesisrecomp`,
+`snesrecomp`, `gbarecomp`).
+
 ## Layout (project root = this folder)
 
 **Renaming the project folder** (user wish 2026-11-15: "SEGA Master System PC Re-compiler"; 2026-11-22: "SMS PC Recompiler", renamed by the user the same day; later 2026-11-22: "8-bit PC Recompiler" = the script's default now): run `Tools/rename_project.ps1` from a plain PowerShell window with VS Code, Claude Code, the launcher and all games closed. It renames the folder, copies Claude Code's project data (`%USERPROFILE%\.claude\projects\<path with non-alphanumerics as '-'>`: memory + conversations; old copy kept) and repairs every CMake build folder in place (old path replaced in CMakeCache.txt, CMakeFiles/ + ninja state removed, reconfigured with its own settings; `-Rebuild` also builds all). Tested on a scratch copy (launcher build renamed into a name with `#` and spaces, then built). Nothing else stores the absolute path (sources, scripts, git incl. the submodule, saves, ini files). Done by the user 2026-11-15.
@@ -24,11 +52,11 @@ Base ROM = **original Rev A**. The SEGA AGES ROM is only a comparison/diff targe
 |---|---|
 | `Recomp/smsggrecomp/` | **Fork of mstan/smsggrecomp** (PaJson/smsggrecomp). **Git submodule of the project since 2026-11-22** (branch `sms-pc-recompiler`; clone with `git clone --recursive`, or `git submodule update --init --recursive`): each project commit pins the engine commit. After engine changes: commit + push in the engine first, then commit the new pointer (`git add Recomp/smsggrecomp`) in the project. Recompiler + shared runner. Submodule `external/z80-recomp-core` -> PaJson fork. (Moved here from the root 2026-11-12.) |
 | (`Recomp/z80-recomp-core/`) | Was a redundant clone of the core fork (the submodule `Recomp/smsggrecomp/external/z80-recomp-core` is what builds); its one extra commit (upstream licence texts, `bdd1c30`) was moved into the submodule 2026-11-15, then the clone could be deleted. |
-| `ROMs/` | All ROMs (`*.sms`, gitignore!): 8 Phantasy Star variants, Sonic 1/2/Chaos, Golvellius, Miracle Warriors. `ROMs/Patched/` = ROMs made with `Tools/apply_patch.py` (our own IPS/BPS applier) from `ROMs/Patches/`. |
-| `ROMs/Patches/` (git-ignored; moved from `ROMPatches/` and cleaned up with the user 2026-11-15, 350 MB -> 3.4 MB) | **The authors' original downloads only** (zip / rar + their description .txt; links in CREDITS.md, no .url / .pdf), one folder per hack named `<hack> <version> (<author>)`: `Golvellius - Valley of Doom/{Improvement Hacks v1.1 (Alianger), SRAM save with 6 enemies 1.0 (Ichigobankai, LemFliggity)}/` (Eric R. Quinn's Bugfix 1.1 is bundled complete and byte-identical inside Alianger's zip, folder `Golvellius-SMS-Bugfix-1.1/`, its IPS renamed `Golvellius map fix.ips`; so its own folder was dropped. None of Alianger's own patches contain those two bytes; our MAP FIXES writes them itself) and `Phantasy Star/{Retranslation 2.6.1 (PSRP, SMS Power) (PhantasyStar-SMS-{EN,FR,ca,de,es,la,pt-br}-2.6.1.zip: each = ps1jert.<lang>.bps/.ips (+ .literal for EN) + readme / technical notes; base = the original **Japan** ROM)}/` (the sprite hacks Brunette Alis, CSI and Makeover were dropped too: the user only wants dialogue / name changes, not graphics makeovers). Nothing reads fixed paths in it: the Golvellius options find a patch by CRC32 + size, loose or INSIDE a zip (`gv_patch.c`); `Tools/apply_patch.py` takes `"<zip>::<file>"`. Dropped with the user: the PSRP source snapshots (no 2.7 beta: wait for the official release), the Daedalus007 fork (its 2025 snapshot = a pure copy of PSRP; the 2022 one = a "Daedalus Edition" script mod of 2.2), vivify93's "less exaggerated" pre-patched ROM (no patch / source), the old SMS Power releases 0.90-2.5 and the 2.0 / 2.01 New Sprites patches. |
+| `ROMs/<platform>/` (today `ROMs/sms/`) | All ROMs (`*.sms`, gitignore!): 8 Phantasy Star variants, Sonic 1/2/Chaos, Golvellius, Miracle Warriors. `ROMs/Patched/` = ROMs made with `Tools/apply_patch.py` (our own IPS/BPS applier) from `ROMs/Patches/`. |
+| `ROMs/sms/Patches/` (git-ignored; moved from `ROMPatches/` and cleaned up with the user 2026-11-15, 350 MB -> 3.4 MB) | **The authors' original downloads only** (zip / rar + their description .txt; links in CREDITS.md, no .url / .pdf), one folder per hack named `<hack> <version> (<author>)`: `Golvellius - Valley of Doom/{Improvement Hacks v1.1 (Alianger), SRAM save with 6 enemies 1.0 (Ichigobankai, LemFliggity)}/` (Eric R. Quinn's Bugfix 1.1 is bundled complete and byte-identical inside Alianger's zip, folder `Golvellius-SMS-Bugfix-1.1/`, its IPS renamed `Golvellius map fix.ips`; so its own folder was dropped. None of Alianger's own patches contain those two bytes; our MAP FIXES writes them itself) and `Phantasy Star/{Retranslation 2.6.1 (PSRP, SMS Power) (PhantasyStar-SMS-{EN,FR,ca,de,es,la,pt-br}-2.6.1.zip: each = ps1jert.<lang>.bps/.ips (+ .literal for EN) + readme / technical notes; base = the original **Japan** ROM)}/` (the sprite hacks Brunette Alis, CSI and Makeover were dropped too: the user only wants dialogue / name changes, not graphics makeovers). Nothing reads fixed paths in it: the Golvellius options find a patch by CRC32 + size, loose or INSIDE a zip (`gv_patch.c`); `Tools/apply_patch.py` takes `"<zip>::<file>"`. Dropped with the user: the PSRP source snapshots (no 2.7 beta: wait for the official release), the Daedalus007 fork (its 2025 snapshot = a pure copy of PSRP; the 2022 one = a "Daedalus Edition" script mod of 2.2), vivify93's "less exaggerated" pre-patched ROM (no patch / source), the old SMS Power releases 0.90-2.5 and the 2.0 / 2.01 New Sprites patches. |
 | (`ExternalTools/`) | Held FLIPS 1.31 for a few hours on 2026-11-15; replaced by our own `Tools/apply_patch.py` (IPS + BPS, BPS CRC32s checked, several patches in a row; output byte-identical to FLIPS for all four `ROMs/Patched/` ROMs from both the BPS and IPS files). No third-party tools are needed any more; the user keeps Emulicious / FLIPS outside the project. |
-| `Games/<slug>/` | **One folder per ROM, generated by `Tools/mkgame.py`** (see "Multi-ROM workflow"): `game.toml`, `CMakeLists.txt`, `build.ps1`, `check.ps1`, `play.ps1`, `build/`, `generated/`, `saves/`. The ROM stays in `ROMs/`. |
-| `Common/PhantasyStar/` | Shared PS hooks (`ps_automap.c`, `ps_qol.c`, `ps_qol.ini.sample`) (soak input scripts moved to `Tools/test_input/rand{1,2,3}.txt` 2026-11-15). |
+| `Games/<platform>/<slug>/` | **One folder per ROM, generated by `Tools/mkgame.py`** (see "Multi-ROM workflow"): `game.toml`, `CMakeLists.txt`, `build.ps1`, `check.ps1`, `play.ps1`, `build/`, `generated/`, `saves/`. The ROM stays in `ROMs/`. |
+| `Common/sms/PhantasyStar/` (+ `Golvellius/`, `MiracleWarriors/`) | Shared PS hooks (`ps_automap.c`, `ps_qol.c`, `ps_qol.ini.sample`) (soak input scripts moved to `Tools/test_input/rand{1,2,3}.txt` 2026-11-15). |
 | `Tools/` | `mkgame.py`, `ps_find_tables.py`, `rom_inventory.py`, `regen_patched.sh`, `verify_game.sh`, `templates/`, `test_input/` (random-input scripts `rand{1,2,3}.txt` for soaks / lockstep, used for every game; was `Common/PhantasyStar/cmp/`). |
 | `Disasm/ps1disasm-master/` | **The disassembly we use** (has `ps1.constants.asm` with named RAM vars/dungeon IDs, `sound/sound_driver.asm`, `ps1original.sms`; `Tools/ps_scenario.py` reads its `banks/bank03.asm`). The older copies `PS1_Disasm/`, `PS_Disasm/` and the old per-game dirs `PhantasyStarSMSRecomp/`, `PhantasyStarAgesRecomp/`, `_template_sonic/`, `Masterlator/` were deleted by the user (2026-11-15). |
 | ROMs `Phantasy Star (USA, Europe) (Rev A).sms` etc. | Rev A MD5 `1110938DF80F4E44C8213D7F85CFB5E6`, CRC32 `00BEF1D7`, 512 KB. AGES En = 540,672 B, AGES Ja = 565,248 B (headers parse; sizes not multiples of 16 KB). |
@@ -81,18 +109,18 @@ Proposed order: (a) draft message to mstan, (b) rename, (c) title-image capture 
 
 One recompiled build per ROM, each in `Games/<slug>/`, made by a generator so it is reproducible:
 ```
-python -I Tools/mkgame.py <slug> "<file in ROMs/>" "<window title>" [--template ps_reva|sonic1|sms_generic] [--hooks ps|none]
+python -I Tools/mkgame.py <slug> "<file in ROMs/<platform>/>" "<window title>" [--platform sms] [--template ps_reva|sonic1|sms_generic] [--hooks ps|none]
         [--auto-tables]                     # PS only: detect [jump_tables] with Tools/ps_find_tables.py
         [--byte-table ADDR:BANK:COUNT:PAGE] [--table-count ADDR=N] [--banked ADDR:BANK]
-Games/<slug>/build.ps1                      # recompile ROM -> C, build the runner (needs recompiler/build/SmsRecomp.exe)
-Games/<slug>/check.ps1 -Frames 20000 -Press ..\..\Tools\test_input\rand1.txt   # headless soak, lists dispatch misses
-Games/<slug>/play.ps1 [-Scale 3] [-Speed 1.0]   # saves go to Games/<slug>/saves/ (env SMS_SAVE_DIR, new)
+Games/sms/<slug>/build.ps1                  # recompile ROM -> C, build the runner (needs recompiler/build/SmsRecomp.exe)
+Games/sms/<slug>/check.ps1 -Frames 20000 -Press ..\..\..\Tools\test_input\rand1.txt   # headless soak, lists dispatch misses
+Games/sms/<slug>/play.ps1 [-Scale 3] [-Speed 1.0]   # saves go to Games/sms/<slug>/saves/ (env SMS_SAVE_DIR, new)
 sh Tools/verify_game.sh <slug>              # build + compare recompiled vs --interp frames on a scripted input
 ```
-`game.toml` `rom = "../../ROMs/<file>"` (relative to the game folder; `CMakeLists` default `SMSGG_ROOT = ../../Recomp/smsggrecomp`).
+`game.toml` `rom = "../../../ROMs/sms/<file>"` (relative to the game folder; `CMakeLists` default `SMSGG_ROOT = ../../../Recomp/smsggrecomp`).
 Every generated build is tied to its ROM's CRC32 (the runner refuses another ROM). Launcher app: see "Launcher" in the QoL / feature ToDo below.
 
-**Path gotcha:** the project path (`...\VS2026\Projects\8-bit-PC-Recompiler`) no longer has spaces or `#` (`Documents\#Patrik\Development` -> `D:\Users\PaJson\Development` 2026-11-22; `Visual Studio 2026` -> `VS2026` and the project folders `8-bit PC Recompiler` / `16-bit PC Recompiler` -> hyphenated names 2026-11-23). Still quote paths in scripts (other machines / clones).
+**Path gotcha:** the project path (`...\VS2026\Projects\8-bit-PC-Recompiler`) no longer has spaces or `#` (`Documents\#Patrik\Development` -> `D:\Users\PaJson\Development` 2026-11-22; `Visual Studio 2026` -> `VS2026` and the project folders `8-bit PC Recompiler` / `16-bit PC Recompiler` -> hyphenated names 2026-11-23). Still quote paths in scripts (other machines / clones). Folder depth matters: game folders are 3 levels below the root (`Games/sms/<slug>`).
 
 ### Phantasy Star variants - status (all: 0 dispatch misses, 100% static, 20000 frames of `rand1.txt`)
 | slug | ROM | notes |

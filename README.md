@@ -30,36 +30,36 @@ Golvellius (+ our own *Golvellius Plus* ROM patch), Miracle Warriors, and Sonic 
    cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe -DCMAKE_MAKE_PROGRAM=C:/msys64/mingw64/bin/ninja.exe
    cmake --build build
    ```
-6. **Copy your ROMs into `ROMs/`**, named exactly as the `rom = "..."` line in each
-   `Games/<slug>/game.toml` (No-Intro names, e.g. `Phantasy Star (USA, Europe) (Rev A).sms`).
+6. **Copy your ROMs into `ROMs/sms/` (or `ROMs/gg/`)**, named exactly as the `rom = "..."` line in each
+   `Games/<platform>/<slug>/game.toml` (No-Intro names, e.g. `Phantasy Star (USA, Europe) (Rev A).sms`).
 
 ## Playing
 
 - Double-click **`Launcher.cmd`**: builds the launcher on first use, lists every game whose ROM is
   present, builds a game the first time you play it (a few minutes), then starts it.
-- Or per game: `Games/<slug>/build.ps1`, then `Games/<slug>/play.ps1`.
+- Or per game: `Games/<platform>/<slug>/build.ps1`, then `Games/<platform>/<slug>/play.ps1`.
 - Keys: arrows, Z / X = buttons 1 / 2, Enter = Pause, F1 = options overlay, F11 = fullscreen,
   Tab = fast forward. Gamepads work too (Start = options overlay).
-- Saves go to `Games/<slug>/saves/`.
+- Saves go to `Games/<platform>/<slug>/saves/`.
 
 ## Patched ROMs (optional)
 
-Put the patch authors' original downloads into `ROMs/Patches/` (links in `CREDITS.md`), then:
+Put the patch authors' original downloads into `ROMs/sms/Patches/` (links in `CREDITS.md`), then:
 - PSRP 2.6.1 retranslations (need the original **Japan** ROM; the zips go into
-  `ROMs/Patches/Phantasy Star/Retranslation 2.6.1 (PSRP, SMS Power)/`): `sh Tools/regen_patched.sh`
-  (English) and `sh Tools/regen_patched_langs.sh` (other languages). They write `ROMs/Patched/`.
-- Golvellius Plus (our own patch, source in `Patches/Golvellius/`): `python -I Tools/gv_build_patch.py`.
+  `ROMs/sms/Patches/Phantasy Star/Retranslation 2.6.1 (PSRP, SMS Power)/`): `sh Tools/sms/regen_patched.sh`
+  (English) and `sh Tools/sms/regen_patched_langs.sh` (other languages). They write `ROMs/sms/Patched/`.
+- Golvellius Plus (our own patch, source in `Patches/Golvellius/`): `python -I Tools/sms/gv_build_patch.py`.
 
 ## Not in this repository (git-ignored, copy by hand when moving to another PC)
 
 | What | Where |
 |---|---|
-| ROMs, patched ROMs, the patch authors' downloads | `ROMs/`, `ROMs/Patched/`, `ROMs/Patches/` |
-| Saves (battery saves, map files, passwords) | `Games/*/saves/` |
-| Personal settings | `Games/*/ps_qol.ini`, `gv_qol.ini`, `mw_qol.ini`, `launcher.ini` |
+| ROMs, patched ROMs, the patch authors' downloads | `ROMs/`, `ROMs/sms/Patched/`, `ROMs/sms/Patches/` |
+| Saves (battery saves, map files, passwords) | `Games/*/*/saves/` |
+| Personal settings | `Games/*/*/ps_qol.ini`, `gv_qol.ini`, `mw_qol.ini`, `launcher.ini` |
 | Launcher / cover artwork (SEGA material: never commit) | `Images/` |
-| Phantasy Star disassembly (only `Tools/ps_scenario.py` reads it) | `Disasm/ps1disasm-master/` |
-| Build output, generated C, release folder | `build*/`, `Games/*/generated/`, `Release/` |
+| Phantasy Star disassembly (only `Tools/sms/ps_scenario.py` reads it) | `Disasm/sms/ps1disasm-master/` |
+| Build output, generated C, release folder | `build*/`, `Games/*/*/generated/`, `Release/` |
 
 ## Licence
 

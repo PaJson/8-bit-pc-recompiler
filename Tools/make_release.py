@@ -87,26 +87,26 @@ README = """8-bit PC Recompiler - games
 Start Launcher.exe. It lists every game whose ROM is in the ROMs folder.
 
 ROMs
-  Put your own ROM files (.sms) into ROMs\\ (subfolders are fine). The file names do not matter: every
+  Put your own ROM files (.sms) into ROMs\\sms\\ (subfolders are fine). The file names do not matter: every
   game program is made for one exact ROM and the launcher recognises it by its CRC32 checksum. A ROM
   that no game is made for is listed in grey.
 
 Patched games (translations, Golvellius Plus)
-  These need the original ROM in ROMs\\ and the patch file in ROMs\\Patches\\ (the IPS / BPS file, or the
+  These need the original ROM in ROMs\\sms\\ and the patch file in ROMs\\sms\\Patches\\ (the IPS / BPS file, or the
   author's .zip as downloaded). The launcher lists such a game once the base ROM is there; on Play it
-  makes the patched ROM (into ROMs\\Patched\\) and starts it. If the patch file is missing, the entry
+  makes the patched ROM (into ROMs\\sms\\Patched\\) and starts it. If the patch file is missing, the entry
   says which file to get. CREDITS.md has the official download pages.
   Already included:
-  - Golvellius Plus, our own patch (ROMs\\Patches\\Golvellius Plus\\; needs the original
+  - Golvellius Plus, our own patch (ROMs\\sms\\Patches\\Golvellius Plus\\; needs the original
     "Golvellius - Valley of Doom" ROM).
   - Phantasy Star Retranslation 2.6.1 by SMS Power! in 7 languages, the zips exactly as released
-    (ROMs\\Patches\\Phantasy Star\\...; needs the original Japanese "Phantasy Star" ROM). Their
+    (ROMs\\sms\\Patches\\Phantasy Star\\...; needs the original Japanese "Phantasy Star" ROM). Their
     README.md names the team and the terms: free of charge, distributed together in original
     condition, no commercial sale. Please keep the zips unchanged.
 
 Saves and settings
-  Each game keeps its saves in Games\\<game>\\saves\\ and its options (the in-game HUD: F1 or pad Start)
-  in an .ini file in Games\\<game>\\.
+  Each game keeps its saves in Games\\sms\\<game>\\saves\\ and its options (the in-game HUD: F1 or pad Start)
+  in an .ini file in Games\\sms\\<game>\\.
 
 Pictures (optional)
   Images\\ : the first .jpg / .png there is the launcher background; "<title> (front).jpg" = a cover,
@@ -133,8 +133,7 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     with_images = "--with-images" in sys.argv
     out = os.path.abspath(args[0]) if args else os.path.join(ROOT, "Release")
-    roms = os.path.join(ROOT, "ROMs")
-    for d in ("Games", "ROMs", os.path.join("ROMs", "Patches"), os.path.join("ROMs", "Patched"), "Images"):
+    for d in ("Games", "ROMs", "Images"):
         os.makedirs(os.path.join(out, d), exist_ok=True)
 
     sdl = os.path.join(ROOT, "Launcher", "build", "SDL2.dll")
@@ -150,10 +149,28 @@ def main():
     with open(os.path.join(out, "ROMs", "README.txt"), "w", newline="\r\n") as f:
         f.write(ROMS_README)
 
-    # our own patch: Golvellius Plus (built by Tools/gv_build_patch.py)
+    done, skipped = [], []
+    gdirs = os.path.join(ROOT, "Games")
+    for plat in sorted(d for d in os.listdir(gdirs) if os.path.isdir(os.path.join(gdirs, d))):
+        release_platform(plat, out, sdl, with_images, done, skipped)
+
+    for d in done:
+        print("  %-24s %s %-5s %s" % d)
+    for s, why in skipped:
+        print("  %-24s skipped: %s" % (s, why))
+    print("%d games in %s" % (len(done), out))
+
+
+def release_platform(plat, out, sdl, with_images, done, skipped):
+    """Games/<plat>/* + ROMs/<plat>/Patches -> <out>/Games/<plat>/*, <out>/ROMs/<plat>/Patches"""
+    roms = os.path.join(ROOT, "ROMs", plat)
+    for d in ("Patches", "Patched"):
+        os.makedirs(os.path.join(out, "ROMs", plat, d), exist_ok=True)
+
+    # our own patch: Golvellius Plus (built by Tools/sms/gv_build_patch.py)
     gp = os.path.join(roms, "Patches", "Golvellius - Valley of Doom", "Golvellius Plus")
     if os.path.isdir(gp):
-        dst = os.path.join(out, "ROMs", "Patches", "Golvellius Plus")
+        dst = os.path.join(out, "ROMs", plat, "Patches", "Golvellius Plus")
         os.makedirs(dst, exist_ok=True)
         for f in os.listdir(gp):
             if f.lower().endswith((".bps", ".ips", ".txt")):
@@ -164,7 +181,7 @@ def main():
         src = os.path.join(roms, "Patches", rel)
         if not os.path.isdir(src):
             continue
-        dst = os.path.join(out, "ROMs", "Patches", rel)
+        dst = os.path.join(out, "ROMs", plat, "Patches", rel)
         os.makedirs(dst, exist_ok=True)
         for f in os.listdir(src):
             if f.lower().endswith(".zip"):
@@ -185,9 +202,8 @@ def main():
             if f.lower().endswith((".sms", ".gg")):
                 rom_crcs.setdefault(crc_file(os.path.join(dp, f)), f)
 
-    done, skipped = [], []
-    for slug in sorted(os.listdir(os.path.join(ROOT, "Games"))):
-        gdir = os.path.join(ROOT, "Games", slug)
+    for slug in sorted(os.listdir(os.path.join(ROOT, "Games", plat))):
+        gdir = os.path.join(ROOT, "Games", plat, slug)
         toml_p = os.path.join(gdir, "game.toml")
         if not os.path.isfile(toml_p):
             continue
@@ -217,19 +233,13 @@ def main():
                       'patch_crc32      = "%08X"   # BPS: the CRC32 in its last 4 bytes; IPS: of the file' % pcrc,
                       'patch_name       = "%s"' % pname,
                       'patch_from       = "%s"   # the file to put into ROMs\\Patches\\ (as downloaded)' % pfrom]
-        rdir = os.path.join(out, "Games", slug)
+        rdir = os.path.join(out, "Games", plat, slug)
         os.makedirs(rdir, exist_ok=True)
         with open(os.path.join(rdir, "game.toml"), "w", encoding="utf-8", newline="\r\n") as f:
             f.write("\n".join(lines) + "\n")
         changed = copy_if_changed(os.path.join(bdir, exes[0]), os.path.join(rdir, exes[0]))
         copy_if_changed(sdl, os.path.join(rdir, "SDL2.dll"))
         done.append((slug, "%08X" % crc, "patch" if recipe and recipe[0] != crc else "", "copied" if changed else "unchanged"))
-
-    for d in done:
-        print("  %-24s %s %-5s %s" % d)
-    for s, why in skipped:
-        print("  %-24s skipped: %s" % (s, why))
-    print("%d games in %s" % (len(done), out))
 
 
 if __name__ == "__main__":

@@ -291,7 +291,18 @@ static void index_patches(const char *dir, int depth)
 }
 static const PatchFile *patch_by_crc(uint32_t crc)
 {
-    if (!g_patches_done) { char d[MAX_PATH]; snprintf(d, sizeof d, "%s\\ROMs\\Patches", g_root); g_npatches = 0; index_patches(d, 4); g_patches_done = true; }
+    if (!g_patches_done) {                       /* ROMs\<platform>\Patches of every platform */
+        g_npatches = 0; g_patches_done = true;
+        char pat[MAX_PATH]; snprintf(pat, sizeof pat, "%s\\ROMs\\*", g_root);
+        WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pat, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+                char d[MAX_PATH]; snprintf(d, sizeof d, "%s\\ROMs\\%s\\Patches", g_root, fd.cFileName); index_patches(d, 4);
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+    }
     for (int i = 0; i < g_npatches; i++) if (g_patches[i].crc == crc) return &g_patches[i];
     return NULL;
 }
@@ -402,7 +413,7 @@ static uint8_t *apply_bps(const uint8_t *src, size_t sn, const uint8_t *p, size_
 /* ---------------- games ---------------- */
 enum { ST_READY, ST_NOT_BUILT, ST_PATCH, ST_NEEDS_PATCH, ST_NO_PROFILE };
 typedef struct {
-    char slug[64], name[160], dir[MAX_PATH], rom[MAX_PATH], exe[MAX_PATH], romfile[200];
+    char slug[64], platform[32], name[160], dir[MAX_PATH], rom[MAX_PATH], exe[MAX_PATH], romfile[200];
     char cover[MAX_PATH], logo[MAX_PATH];        /* optional art (Images/), "" = none */
     int  state;
     uint32_t crc;                                /* the ROM this build is made for */
@@ -497,14 +508,20 @@ static void scan_games(void)
 {
     g_ngames = 0;
     g_nromidx = 0; g_patches_done = false;
-    { char roms[MAX_PATH]; snprintf(roms, sizeof roms, "%s\\ROMs", g_root); index_roms(roms, 3); }
-    char pat[MAX_PATH]; snprintf(pat, sizeof pat, "%s\\Games\\*", g_root);
+    { char roms[MAX_PATH]; snprintf(roms, sizeof roms, "%s\\ROMs", g_root); index_roms(roms, 4); }
+    /* Games\<platform>\<slug>\game.toml (platform = sms, gg, nes, gb ...) */
+    char ppat[MAX_PATH]; snprintf(ppat, sizeof ppat, "%s\\Games\\*", g_root);
+    WIN32_FIND_DATAA pd; HANDLE ph = FindFirstFileA(ppat, &pd);
+    if (ph != INVALID_HANDLE_VALUE) do {
+    if (!(pd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || pd.cFileName[0] == '.') continue;
+    char plat[32]; snprintf(plat, sizeof plat, "%s", pd.cFileName);
+    char pat[MAX_PATH]; snprintf(pat, sizeof pat, "%s\\Games\\%s\\*", g_root, plat);
     WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pat, &fd);
     if (h != INVALID_HANDLE_VALUE) {
         do {
             if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
             char dir[MAX_PATH], toml[MAX_PATH], rom[MAX_PATH], romfull[MAX_PATH] = "";
-            snprintf(dir, sizeof dir, "%s\\Games\\%s", g_root, fd.cFileName);
+            snprintf(dir, sizeof dir, "%s\\Games\\%s\\%s", g_root, plat, fd.cFileName);
             snprintf(toml, sizeof toml, "%s\\game.toml", dir);
             if (!is_file(toml)) continue;
             /* the ROM: by `crc32 = "..."` (Release layout) or by the CRC32 of the file `rom = "..."` names
@@ -540,6 +557,7 @@ static void scan_games(void)
             }
             Game *g = add_game(); *g = tmp;
             snprintf(g->slug, sizeof g->slug, "%s", fd.cFileName);
+            snprintf(g->platform, sizeof g->platform, "%s", plat);
             snprintf(g->dir, sizeof g->dir, "%s", dir);
             const char *rn = g->rom[0] ? g->rom : g->rom_name;
             const char *base = strrchr(rn, '\\'); snprintf(g->romfile, sizeof g->romfile, "%s", base ? base + 1 : rn);
@@ -552,6 +570,8 @@ static void scan_games(void)
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
+    } while (FindNextFileA(ph, &pd));
+    if (ph != INVALID_HANDLE_VALUE) FindClose(ph);
     add_unprofiled_roms();
     g_any_logo = false;
     for (int i = 0; i < g_ngames; i++) find_art(&g_games[i]);
@@ -887,7 +907,7 @@ static void draw_ui(void)
         const char *st = g->state == ST_NO_PROFILE ? "No build profile for this ROM yet."
                        : g->state == ST_READY ? "Ready to play."
                        : g->state == ST_PATCH ? "Play makes the patched ROM first."
-                       : g->state == ST_NEEDS_PATCH ? "Needs the patch file in ROMs\\Patches:"
+                       : g->state == ST_NEEDS_PATCH ? "Needs the patch file in the Patches folder:"
                        : "Not built yet: Play builds it first (minutes).";
         snprintf(line, sizeof line, "%.*s", chars, st);
         text(tx, dy + 22 * sc, line, state_col(g->state), sc);
@@ -1109,13 +1129,14 @@ static bool make_patched_rom(Game *g)
     if (out && crc32_buf(0, out, on) != g->crc) { free(out); out = NULL; err = "the patched ROM is not the one this build is made for"; }
     if (!out) { char m[200]; snprintf(m, sizeof m, "Patch failed: %s.", err); set_error(m); return false; }
     char dir[MAX_PATH], path[MAX_PATH], tmp[MAX_PATH + 4];
-    snprintf(dir, sizeof dir, "%s\\ROMs\\Patched", g_root); CreateDirectoryA(dir, NULL);
+    snprintf(dir, sizeof dir, "%s\\ROMs\\%s", g_root, g->platform[0] ? g->platform : "sms"); CreateDirectoryA(dir, NULL);
+    { size_t dl = strlen(dir); snprintf(dir + dl, sizeof dir - dl, "\\Patched"); } CreateDirectoryA(dir, NULL);
     snprintf(path, sizeof path, "%s\\%s", dir, g->rom_name); snprintf(tmp, sizeof tmp, "%s.tmp", path);
     FILE *f = fopen(tmp, "wb");
     bool ok = f && fwrite(out, 1, on, f) == on;
     if (f) ok = fclose(f) == 0 && ok;
     free(out);
-    if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) { DeleteFileA(tmp); set_error("Cannot write the patched ROM (ROMs\\Patched)."); return false; }
+    if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) { DeleteFileA(tmp); set_error("Cannot write the patched ROM (ROMs\\<platform>\\Patched)."); return false; }
     char slug[64]; snprintf(slug, sizeof slug, "%s", g->slug);
     scan_games();
     for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
@@ -1127,7 +1148,7 @@ static void play_selected(bool force_build)
     if (g_proc_kind || g_sel < 0 || g_sel >= g_ngames) return;
     Game *g = &g_games[g_sel];
     if (g->state == ST_NO_PROFILE) { set_error("This ROM has no build profile (Games folder)."); return; }
-    if (g->state == ST_NEEDS_PATCH) { char m[200]; snprintf(m, sizeof m, "Put %s into ROMs\\Patches first.", g->patch_name[0] ? g->patch_name : "the patch"); set_error(m); return; }
+    if (g->state == ST_NEEDS_PATCH) { char m[200]; snprintf(m, sizeof m, "Put %s into ROMs\\<platform>\\Patches first.", g->patch_name[0] ? g->patch_name : "the patch"); set_error(m); return; }
     if (g->state == ST_PATCH) {
         if (!make_patched_rom(g)) return;
         g = &g_games[g_sel];
@@ -1159,7 +1180,7 @@ static void poll_process(void)
     for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
     if (kind == 1) { SDL_ShowWindow(g_win); SDL_RaiseWindow(g_win); return; }
     Game *g = (g_sel >= 0 && g_sel < g_ngames) ? &g_games[g_sel] : NULL;
-    if (code != 0 || !g || g->state != ST_READY) { snprintf(g_status, sizeof g_status, "Build failed - see Games\\%s\\build_log.txt", slug); g_status_col = 0xFFFF6060; return; }
+    if (code != 0 || !g || g->state != ST_READY) { snprintf(g_status, sizeof g_status, "Build failed - see build_log.txt in the game folder (%s)", slug); g_status_col = 0xFFFF6060; return; }
     snprintf(g_status, sizeof g_status, "Build finished."); g_status_col = 0xFF7CE07C;
     if (g_play_after_build) { g_status[0] = 0; if (start_game(g)) SDL_HideWindow(g_win); }
 }
