@@ -1,0 +1,104 @@
+# Check: runs on every pull request to main (and by hand: Actions tab -> "Check" -> "Run workflow").
+#
+#   1. a release branch (release/v<version>): name = app_info.toml version, CHANGELOG.md has a "## v<version>"
+#      section, the tag v<version> does not exist yet
+#   2. the engine self-tests (Recomp/smsggrecomp/tests/run_selftests.sh)
+#   3. the whole release build (Tools/make_release.py --zip, ends with the smoke test: a tiny ROM of our own
+#      built and run with nothing but the release on PATH)
+#   4. the zip is attached to the run (Artifacts), so the exact zip can be tested before merging
+#      (Tools/sandbox_test.ps1 -Zip <downloaded zip>)
+#
+# No ROMs on GitHub: lockstep tests and play-testing stay on the developer's PC (Docs/notes/testing.md).
+# Release flow: Docs/notes/launcher-and-release.md "Release flow".
+name: Check
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # the runner's own MSYS2 (C:\msys64): the same path as on the developer's PC, which the engine's
+      # self-test script uses; mesa = software OpenGL for the GPU self-tests (the runner has no GPU)
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW64
+          release: false
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-mesa
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version and release branch
+        id: ver
+        shell: pwsh
+        run: |
+          $m = Select-String -Path app_info.toml -Pattern '^name\s*=\s*"([^"]+)"'
+          $v = Select-String -Path app_info.toml -Pattern '^version\s*=\s*"([^"]+)"'
+          $name = $m.Matches[0].Groups[1].Value; $version = $v.Matches[0].Groups[1].Value
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "app_info.toml version '$version' is not MAJOR.MINOR.PATCH" }
+          "title=$name v$version" >> $env:GITHUB_OUTPUT
+          $branch = "${{ github.head_ref }}"
+          if ($branch -like "release/*") {
+            if ($branch -ne "release/v$version") { throw "branch $branch does not match app_info.toml version $version (expected release/v$version)" }
+            if (-not (Select-String -Path CHANGELOG.md -Pattern "^## v$([regex]::Escape($version))\b" -Quiet)) {
+              throw "CHANGELOG.md has no '## v$version' section (it becomes the release notes)"
+            }
+            if (git ls-remote --tags origin "refs/tags/v$version") { throw "tag v$version already exists: bump the version" }
+            "release branch $branch OK (version $version, changelog section found, tag free)"
+          } else {
+            "not a release branch ($branch): version $version"
+          }
+
+      - name: Engine self-tests
+        shell: msys2 {0}
+        working-directory: Recomp/smsggrecomp
+        run: |
+          mkdir -p build_selftest
+          ls /mingw64/bin | grep -i -E "^(opengl32|libgallium|libglapi)" || true
+          for f in opengl32.dll libgallium_wgl.dll libglapi.dll; do
+            if [ -f /mingw64/bin/$f ]; then cp -f /mingw64/bin/$f build_selftest/; fi
+          done
+          sh tests/run_selftests.sh build_selftest
+
+      - name: Build the release (+ smoke test)
+        shell: pwsh
+        run: python -I Tools/make_release.py out --zip --msys "${{ steps.msys2.outputs.msys2-location }}"
+
+      - name: Attach the zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.ver.outputs.title }}
+          path: out/${{ steps.ver.outputs.title }}.zip
+          compression-level: 0
+          retention-days: 14
+
+      - name: Self-test logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-logs
+          path: Recomp/smsggrecomp/build_selftest/*.log
+          if-no-files-found: ignore

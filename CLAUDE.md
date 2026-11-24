@@ -51,6 +51,7 @@ sh Tools/lockstep.sh <slug> <outdir> <frames> Tools/test_input/rand1.txt   # rec
 sh Tools/sms/ps_suite.sh lockstep|qol <outdir> [slug] [ini]                # 56 PS scenarios
 sh Tools/verify_game.sh <slug>
 python -I Tools/make_release.py [--zip]                                     # release zip (no ROMs needed)
+Tools/sandbox_test.ps1 [-Zip <zip>]                                        # test a release zip in Windows Sandbox
 ```
 
 ## Testing essentials (details: Docs/notes/testing.md)
@@ -79,12 +80,14 @@ python -I Tools/make_release.py [--zip]                                     # re
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
 ## Current state (2026-11-24; update or delete when done)
-- The 2026-11-24 work is committed and pushed (engine `598153c`, then the project): release zip flow
-  (`Docs/notes/launcher-and-release.md` "Release zip"), CLAUDE.md split into `Docs/notes/`, launcher fixes,
-  PS dungeon map fix (`Docs/notes/phantasy-star.md`, last section). The GitHub release workflow has not run
-  yet (push a tag `v0.1.0`, or run it by hand from the Actions tab). (The "NOT committed yet" remarks in
-  those notes sections are from before this commit.)
-- Open questions for the user: Windows Sandbox test of the zip? keep the 4 Sonic profiles in the release?
-  delete the old flat files in `Release/`? hide map cells on pitch-black floors?
+- Committed + pushed: engine `598153c`, project `e6924d7` (release zip flow, `Docs/notes/` split, launcher
+  fixes, PS cave map fix). Release workflow ran by hand (run 45450461783, OK, 2.5 min); its zip tested by the
+  user in Windows Sandbox (`Tools/sandbox_test.ps1`): launcher + Golvellius Plus work. Sandbox has no Notepad.
+- On branch `release/v0.1.0` (PR "Release v0.1.0"): PS pitch-black floors record nothing, release README
+  (PSRP needs the first Japanese ROM), `Tools/sandbox_test.ps1`, launcher text fitting, `check.yml`,
+  `CHANGELOG.md`, release.yml notes from CHANGELOG. Release flow: `Docs/notes/launcher-and-release.md`.
+  Next: Check passes -> user tests its zip in Sandbox -> user merges -> tag `v0.1.0` (on the user's word).
+- Decided: all profiles (Sonic too) stay in the release; a few private releases before going public; next
+  profiles planned: Golden Axe Warrior, Ultima IV, Wonder Boy, Ys. Old flat files in `Release/` deleted.
 - To verify by playing: PS cave map (stairs / exits visited, surroundings on arrival), launcher (message
   cleared on moving, cover changes only after releasing a held direction), build progress bar.
