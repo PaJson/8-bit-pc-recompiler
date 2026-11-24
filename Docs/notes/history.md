@@ -150,3 +150,16 @@ launcher art as it is (no Nintendo name on it; the style is the user's choice). 
 the notes (local paths, email line, the Discord message), `.claude/` no longer tracked (the page-reader agent is a
 personal helper, kept locally). Repo description: "Static recompilation of 8-bit console games to native PC
 builds, with optional quality-of-life features". Releases v0.1.0 / v0.1.1 are public with it.
+
+**Moving the development setup to another PC** (moved here from README.md 2026-11-24: a personal checklist,
+not for readers of the public repo). Git-ignored, so copy these by hand:
+
+| What | Where |
+|---|---|
+| ROMs, patched ROMs, the patch authors' downloads | `ROMs/`, `ROMs/sms/Patched/`, `ROMs/sms/Patches/` |
+| Saves (battery saves, map files, passwords) | `Games/*/*/saves/` |
+| Personal settings | `Games/*/*/ps_qol.ini`, `gv_qol.ini`, `mw_qol.ini`, `launcher.ini` |
+| Game cover / logo art (SEGA material: never commit); the app's own art `Images/*.png` / `.ico` is committed | `Images/<platform>/` |
+| Phantasy Star disassembly (only `Tools/sms/ps_scenario.py` reads it) | `Disasm/sms/ps1disasm-master/` |
+| Claude Code helper agents (personal) | `.claude/` |
+| Build output, generated C, release folder (rebuilt, no need to copy) | `build*/`, `Games/*/*/generated/`, `Release/` |

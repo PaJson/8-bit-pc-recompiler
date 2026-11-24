@@ -80,17 +80,6 @@ Put the patch authors' original downloads into `ROMs/sms/Patches/` (links in `CR
 Locally: `python -I Tools/make_release.py --zip` -> `Release/<name> v<version>/` + `.zip`. Details:
 `Docs/notes/launcher-and-release.md`.
 
-## Not in this repository (git-ignored, copy by hand when moving to another PC)
-
-| What | Where |
-|---|---|
-| ROMs, patched ROMs, the patch authors' downloads | `ROMs/`, `ROMs/sms/Patched/`, `ROMs/sms/Patches/` |
-| Saves (battery saves, map files, passwords) | `Games/*/*/saves/` |
-| Personal settings | `Games/*/*/ps_qol.ini`, `gv_qol.ini`, `mw_qol.ini`, `launcher.ini` |
-| Launcher / cover artwork (SEGA material: never commit) | `Images/` |
-| Phantasy Star disassembly (only `Tools/sms/ps_scenario.py` reads it) | `Disasm/sms/ps1disasm-master/` |
-| Build output, generated C, release folder | `build*/`, `Games/*/*/generated/`, `Release/` |
-
 ## License
 
 - Our own code (`Common/`, `Launcher/`, `Tools/`, `Patches/`, the build scripts): MIT, see `LICENSE`.
