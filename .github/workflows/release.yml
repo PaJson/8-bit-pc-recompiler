@@ -1,7 +1,10 @@
 # Release: builds "<name> v<version>.zip" (Tools/make_release.py) on a clean Windows machine.
 #
-#   push a tag v<version> (= `version` in app_info.toml, e.g. v0.1.0)  -> a GitHub Release with the zip
+#   push a tag v<version> (= `version` in app_info.toml, e.g. v0.1.0)  -> a GitHub Release with the zip;
+#                                                                         notes = the "## v<version>" section
+#                                                                         of CHANGELOG.md
 #   Actions tab -> "Release" -> "Run workflow"                         -> the zip as a workflow artifact only
+# Release flow (release PR -> Check workflow -> merge -> tag): Docs/notes/launcher-and-release.md.
 #
 # No ROMs are involved: the zip holds the launcher, the recompiler, a C compiler (whole MSYS2 packages)
 # and the prebuilt runner; games are built on the player's PC from the player's ROMs. make_release.py
@@ -19,8 +22,9 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -28,6 +32,7 @@ jobs:
         id: msys2
         with:
           msystem: MINGW64
+          release: false          # the runner's own C:\msys64, as in check.yml
           update: true
           install: >-
             mingw-w64-x86_64-gcc
@@ -35,7 +40,7 @@ jobs:
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-SDL2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -50,6 +55,16 @@ jobs:
             throw "tag ${{ github.ref_name }} does not match app_info.toml version $version (expected tag v$version)"
           }
           "title=$name v$version" >> $env:GITHUB_OUTPUT
+          # release notes: the CHANGELOG.md section of this version (required for a tag)
+          $lines = Get-Content CHANGELOG.md; $out = @(); $in = $false
+          foreach ($l in $lines) {
+            if ($l -match '^## ') { if ($in) { break }; $in = $l -match "^## v$([regex]::Escape($version))\b"; continue }
+            if ($in) { $out += $l }
+          }
+          if ("${{ github.ref_type }}" -eq "tag" -and -not ($out -join "").Trim()) { throw "CHANGELOG.md has no '## v$version' section" }
+          $out += ""; $out += "---"
+          $out += "Unzip, put your own ROMs into ROMs\sms\ (see ROMs\README.txt), start Launcher.exe. No games or ROMs are included; each game is built on your PC from your ROM. See README.txt."
+          Set-Content -Path release_notes.md -Value (($out -join "`n").Trim() + "`n") -Encoding utf8
 
       - name: Build the release
         shell: pwsh
@@ -57,7 +72,7 @@ jobs:
 
       - name: Upload (workflow artifact)
         if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.ver.outputs.title }}
           path: out/${{ steps.ver.outputs.title }}.zip
@@ -71,4 +86,4 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" "out/${{ steps.ver.outputs.title }}.zip" `
             --title "${{ steps.ver.outputs.title }}" `
-            --notes "Unzip, put your own ROMs into ROMs\sms\ (see ROMs\README.txt), start Launcher.exe. No games or ROMs are included; each game is built on your PC from your ROM. See README.txt."
+            --notes-file release_notes.md

@@ -50,6 +50,7 @@ extern const char    *glue_save_path(void);
 #define RAM_DNG_POS   0xC30C
 #define RAM_DNG_IDX   0xC30D
 #define RAM_DNG_MAP   0xCB00
+#define RAM_DNG_LIGHT 0xC315            /* LABEL_6D7F: 0 = pitch black (no Magic Lamp), else palette + 1 */
 #define RAM_SAVE_BLK  0xC300            /* the 1 KB block the game saves / loads */
 #define MODE_DUNGEON  0x0B
 #define N_SLOTS       6                 /* index 1..5 = the game's save slots (0 unused) */
@@ -872,7 +873,11 @@ void ps_automap_frame(uint64_t frame)
     (void)frame;
     uint8_t mode = sms_read8(RAM_GAME_MODE);
     track_saves(mode);
-    g_in_dungeon = (mode == MODE_DUNGEON);
+    /* A dark floor without the Magic Lamp (GameMode_LoadDungeon): the screen stays black, "CANNOT GO
+       FORWARD, IT'S PITCH BLACK.", the player menu opens; FLASH lights the floor ($C315 != 0), otherwise
+       the party is sent back out (LoadMap). The party never moves in the dark and sees nothing, so the
+       map records nothing until it is lit (same $C315 code in all 17 PS ROMs; user decision 2026-11-24). */
+    g_in_dungeon = (mode == MODE_DUNGEON) && sms_read8(RAM_DNG_LIGHT) != 0;
     if (!g_in_dungeon) {
         if (g_was_in) mark_ahead(is_exit);                 /* left the dungeon: through the exit ahead */
         g_was_in = false; g_last_pos = -1; window_hide(); return;

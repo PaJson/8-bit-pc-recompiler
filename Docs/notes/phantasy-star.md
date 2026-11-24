@@ -205,5 +205,15 @@ arrives by were missing, but showed on the second entry into the same cave.
   pitch black otherwise, "CANNOT GO FORWARD"), keep its press lines < 4500, add pokes `F:C30D=<floor>`,
   `F:C30C=<cell>`, `F:C30A=<facing>`, `F:C202=0A` (= what an entrance does), then presses (U forward, L / R
   turn, A opens a door). Floor layouts: `Tools/sms/ps_dungeons.py`, `ps_draw_floors.py`.
-- Open question for the user: on a pitch-black floor (no light) the game shows nothing ahead, but the map
-  still reveals the cells "ahead" when the party turns: hide them there? (needs the light check of the game)
+- Pitch-black floors (2026-11-24, user chose "map only what the party walks on"): tested in the game, the
+  party never walks in the dark. GameMode_LoadDungeon: no Magic Lamp ($39) and the floor not in
+  LABEL_6DFE (lit without it: $01 $02 $14 $15 $16 $21) -> LABEL_6D7F leaves `$C315` = 0 (else palette + 1),
+  the screen stays black, "CANNOT GO FORWARD, IT'S PITCH BLACK.", the player menu opens (LABEL_1BE1);
+  FLASH ($27, ItemUse_Flash) sets `$C315` = $FF and the floor is lit, otherwise Game_mode = LoadMap (back
+  outside). `$C315` stays nonzero inside a dungeon (stairs keep it), LoadMap clears it. Before, the map
+  recorded the entrance, its 3x3 and the view ahead of that refused entry. Now ps_automap.c counts the
+  party as in a dungeon only while `$C315` != 0 (same code / address in all 17 ROMs: pattern
+  `3E 39 CD .. .. 20 05 3E FF 32 15 C3`). Tested (Rev A floor 00 pos 15): dark + cancel = nothing
+  recorded, back on the map; lamp = recorded as before (exit $14 visited); dark + FLASH = lit, recorded
+  with the exit. Soaks 20000 frames: Rev A + Japan (lamp), PSRP EN + Korea (no lamp): 0 `[stack]`, 0
+  misses. All 17 PS builds relinked.

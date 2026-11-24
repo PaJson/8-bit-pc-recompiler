@@ -124,3 +124,53 @@
 - Enter on a ROM without a profile: "Cannot play this one yet." (the old text ran past the panel; the line
   above already says "No build profile for this ROM yet.").
 - Not verified by a test (needs held keys; `LAUNCHER_SHOT` sets g_art_sel = g_sel): user to try.
+
+## Testing a release zip in Windows Sandbox (2026-11-24)
+- `Tools/sandbox_test.ps1 [-Zip <file>] [-MemoryMB 8192]` (default: newest `Release/*.zip`) writes
+  `Release/_sandbox/test.wsb` + `setup.ps1` and starts the sandbox: no network, the zip's folder and
+  `ROMs/sms` mapped read-only (`C:\Host\Release`, `C:\Host\ROMs`); at logon the zip is unpacked with
+  `tar.exe` to the sandbox Desktop (`setup.log` there) and both folders open in Explorer. Then play it as a
+  new player: copy ROMs into the release's `ROMs\sms\`, start `Launcher.exe`.
+- A workflow zip: `gh run download <run id> -D Release/_gh`, then `-Zip` that file.
+- The sandbox has no Notepad (it is a Store app on Windows 11); a normal PC has it.
+- First test (user, workflow run 45450461783): launcher, title shots, Golvellius Plus patched + built +
+  played. PSRP not listed with only the Japanese Rev 1 ROM: correct, the patches are for CRC32 6605D36A
+  (README now says so).
+
+## Release flow (2026-11-24, user decision: release PR + check workflow)
+- `.github/workflows/check.yml` ("Check"): every pull request to `main` (+ by hand). Release-branch checks
+  (`release/v<version>` = `app_info.toml` version, `CHANGELOG.md` has `## v<version>`, tag `v<version>`
+  free), engine self-tests (`run_selftests.sh`; the runner's own `C:\msys64` via `setup-msys2 release:
+  false`, Mesa's software `opengl32.dll` copied next to the GPU tests), `make_release.py out --zip` (smoke
+  test), the zip attached to the run for 14 days. No ROMs on GitHub: lockstep + playing stay local.
+- `.github/workflows/release.yml`: on a tag `v<version>`; release notes = that `CHANGELOG.md` section
+  (+ a fixed "unzip, put your ROMs ..." line); fails without the section. Same MSYS2 setup as Check.
+- Steps for a release (Claude does 1-3 and 6 only when the user says so):
+  1. `git switch -c release/v<version>`; set `version` in `app_info.toml`; add `## v<version>` to
+     `CHANGELOG.md` (written for players). Engine changes: committed + pushed in the engine first.
+  2. Locally: engine self-tests, lockstep / soaks of what changed, `python -I Tools/make_release.py --zip`.
+  3. Commit, push the branch, `gh pr create --base main` (title "Release v<version>").
+  4. Check passes -> `gh run download <run id> -D Release/_gh` -> `Tools/sandbox_test.ps1 -Zip <zip>`,
+     play-test.
+  5. The user merges the PR (squash or merge commit) on GitHub.
+  6. `git switch main && git pull`, `git tag v<version> && git push origin v<version>` -> Release
+     workflow -> GitHub Release with the zip (private repo: visible to its collaborators only).
+- Other work can use PRs too (any branch -> Check runs); small fixes may still go straight to `main`.
+
+## Launcher text fitting (2026-11-24, user report from the Sandbox test)
+- `fit_text()`: long text is cut with "..": list names and the 2nd line of the selected name in the MIDDLE
+  (both ends readable: "Golvellius - Valle..[Golvellius Plus]", "Phantasy Star (Ret..2.6.1 EN literal)"),
+  status lines at the end. Before: list names were cut at the end (Golvellius = Golvellius Plus, PSRP EN =
+  EN literal, FR = FR extended looked the same), status lines cut without a mark.
+- State line "Not built yet: Play builds it first." (was "... (minutes).", cut at 40 chars); the game
+  being built shows "This takes a few minutes." instead. Key help falls back to shorter wordings in a
+  narrow panel ("ENTER PLAY R REBUILD ESC BACK").
+- Test env `LAUNCHER_SIZE=<w>x<h>` (window size, for `LAUNCHER_SHOT` pictures). Checked by screenshots at
+  960x540 / 1280x720 / 1920x1080 and during a real build (LAUNCHER_AUTO=build:sonic1, LAUNCHER_SHOT_MS).
+- First Check runs (PR #1): run 1 `gpu_jobs` failed (Mesa's default D3D12 path on the Microsoft Basic Render
+  Driver), run 2 hung > 12 min with `GALLIUM_DRIVER=llvmpipe` (cancelled). Now: engine `run_selftests.sh`
+  `SMS_SELFTEST_SKIP_GPU=1` (engine `8f18b70`) skips only `gpu_jobs` on GitHub (it runs locally, release
+  step 2); `reference_present` passes there on Mesa D3D12. Job time limit 45 min (self-tests 10, build 30).
+  Actions updated to checkout / setup-python / upload-artifact v7 (Node 20 deprecation warning).
+- Open (later release): setup-msys2 warns "MINGW64 is deprecated, migrate to UCRT64": a toolchain move
+  (dev PC, workflows, the release's bundled compiler); left visible as a reminder.

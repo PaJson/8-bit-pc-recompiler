@@ -976,6 +976,21 @@ static void make_background(void)
     g_bg_w = w; g_bg_h = h; g_bg_generic = true;
 }
 
+/* s fitted into `chars` characters; a cut is shown as "..": at the end, or with `middle` in the middle,
+   so both ends stay readable (names that differ only at the end: "Golvellius ... [Golvellius Plus]",
+   "Phantasy Star (Retranslation 2.6.1 EN)" / "... EN literal)") */
+static void fit_text(char *out, size_t n, const char *s, int chars, bool middle)
+{
+    int len = (int)strlen(s);
+    if (chars < 1) chars = 1;
+    if (len <= chars || chars < 8) { snprintf(out, n, "%.*s", chars, s); return; }
+    int keep = chars - 2, tail = middle ? keep / 2 : 0, head = keep - tail;
+    while (head > 1 && s[head - 1] == ' ') head--;               /* no space right before ".." */
+    const char *t = s + len - tail;
+    while (tail > 1 && *t == ' ') { t++; tail--; }                /* nor right after it */
+    snprintf(out, n, "%.*s..%.*s", head, s, tail, t);
+}
+
 static void text(int x, int y, const char *s, uint32_t col, int sc)
 {
     hud_text_scaled(g_ui, g_ui_w, g_ui_h, x + sc / 2 + 1, y + sc / 2 + 1, s, 0xC0000000u, sc);   /* shadow */
@@ -1043,8 +1058,7 @@ static void draw_ui(void)
         int y = L.row_y + i * L.row_h;
         bool sel = g_top + i == g_sel;
         if (sel) fill(L.x0 + 3 * sc, y - 2 * sc, L.x1 - 3 * sc, y + 9 * sc, 0xE0204A80);
-        char nm[200]; snprintf(nm, sizeof nm, "%.*s", name_chars > 4 ? name_chars : 4, g->name);
-        if ((int)strlen(g->name) > name_chars && name_chars > 6) { nm[name_chars - 2] = '.'; nm[name_chars - 1] = '.'; }
+        char nm[200]; fit_text(nm, sizeof nm, g->name, name_chars, true);
         uint32_t col = g->state == ST_NO_PROFILE ? 0xFF8890A0 : sel ? 0xFFFFE040 : 0xFFFFFFFF;
         if (g->state != ST_NO_PROFILE) fill(tx, y + sc, tx + 4 * sc, y + 5 * sc, state_col(g->state));   /* status marker */
         text(tx + 7 * sc, y, nm, col, sc);
@@ -1063,16 +1077,17 @@ static void draw_ui(void)
         int cut = nl;
         if (nl > chars) { cut = chars; while (cut > chars / 2 && g->name[cut] != ' ') cut--; if (cut <= chars / 2) cut = chars; }
         snprintf(line, sizeof line, "%.*s", cut, g->name); text(tx, dy, line, 0xFFFFFFFF, sc);
-        if (nl > cut) { const char *r = g->name + cut; while (*r == ' ') r++; snprintf(line, sizeof line, "%.*s", chars, r); text(tx, dy + 10 * sc, line, 0xFFFFFFFF, sc); }
+        if (nl > cut) { const char *r = g->name + cut; while (*r == ' ') r++; fit_text(line, sizeof line, r, chars, true); text(tx, dy + 10 * sc, line, 0xFFFFFFFF, sc); }
         const char *st = g->state == ST_NO_PROFILE ? "No build profile for this ROM yet."
                        : g->state == ST_READY ? "Ready to play."
                        : g->state == ST_PATCH ? "Play makes the patched ROM first."
                        : g->state == ST_NEEDS_PATCH ? "Needs the patch file in the Patches folder:"
-                       : "Not built yet: Play builds it first (minutes).";
-        snprintf(line, sizeof line, "%.*s", chars, st);
+                       : "Not built yet: Play builds it first.";
+        if (g_proc_kind == 2 && !strcmp(g->slug, g_proc_slug)) st = "This takes a few minutes.";   /* being built */
+        fit_text(line, sizeof line, st, chars, false);
         text(tx, dy + 22 * sc, line, state_col(g->state), sc);
         if (g->state == ST_NEEDS_PATCH && !g_status[0]) {          /* which file, in the status line */
-            snprintf(line, sizeof line, "%.*s", chars, g->patch_from[0] ? g->patch_from : g->patch_name);
+            fit_text(line, sizeof line, g->patch_from[0] ? g->patch_from : g->patch_name, chars, true);
             text(tx, dy + 33 * sc, line, 0xFFA0A0B0, sc);
         }
     }
@@ -1080,7 +1095,7 @@ static void draw_ui(void)
         Uint32 el = (SDL_GetTicks() - g_build_t0) / 1000;
         char tm[24]; snprintf(tm, sizeof tm, "%u:%02u", el / 60, el % 60);
         int tw = 6 * sc * (int)strlen(tm);
-        char line[260]; snprintf(line, sizeof line, "%.*s", (L.x1 - L.x0 - 24 * sc - tw) / (6 * sc), g_status);
+        char line[260]; fit_text(line, sizeof line, g_status, (L.x1 - L.x0 - 24 * sc - tw) / (6 * sc), false);
         text(tx, dy + 33 * sc, line, g_status_col, sc);
         text(L.x1 - 8 * sc - tw, dy + 33 * sc, tm, 0xFFA0A0B0, sc);
         int bx0 = tx, bx1 = L.x1 - 8 * sc, by0 = dy + 43 * sc, by1 = by0 + 3 * sc;
@@ -1094,8 +1109,15 @@ static void draw_ui(void)
         if (s1 > s0 && s0 < fx) fill(s0, by0, s1 < fx ? s1 : fx, by1, 0xFFC8F0FF);   /* over the done part */
         if (s1 > s0 && s1 > fx) fill(s0 > fx ? s0 : fx, by0, s1, by1, 0xFF5A88C8);   /* over the rest */
     }
-    else if (g_status[0]) { char line[260]; snprintf(line, sizeof line, "%.*s", (L.x1 - L.x0 - 16 * sc) / (6 * sc), g_status); text(tx, dy + 33 * sc, line, g_status_col, sc); }
-    text(tx, L.y1 - 13 * sc, g_proc_kind == 2 ? "Please wait ...   ESC QUIT" : "ENTER/A PLAY   R/Y REBUILD   ESC/B BACK", 0xFF8890A0, sc);
+    else if (g_status[0]) { char line[260]; fit_text(line, sizeof line, g_status, (L.x1 - L.x0 - 16 * sc) / (6 * sc), false); text(tx, dy + 33 * sc, line, g_status_col, sc); }
+    {   /* key help: a shorter wording when the panel is narrow */
+        int hc = (L.x1 - L.x0 - 16 * sc) / (6 * sc);
+        const char *help = g_proc_kind == 2 ? "Please wait ...   ESC QUIT" : "ENTER/A PLAY   R/Y REBUILD   ESC/B BACK";
+        if ((int)strlen(help) > hc) help = g_proc_kind == 2 ? "Please wait  ESC QUIT" : "ENTER/A PLAY R/Y REBUILD ESC/B BACK";
+        if ((int)strlen(help) > hc && g_proc_kind != 2) help = "ENTER PLAY R REBUILD ESC BACK";
+        char line[80]; fit_text(line, sizeof line, help, hc, false);
+        text(tx, L.y1 - 13 * sc, line, 0xFF8890A0, sc);
+    }
     SDL_UpdateTexture(g_ui_tex, NULL, g_ui, w * 4);
 }
 
@@ -1533,7 +1555,9 @@ int main(int argc, char **argv)
     }
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-    g_win = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+    int win_w = 1280, win_h = 720;                              /* test: LAUNCHER_SIZE=<w>x<h> */
+    if (getenv("LAUNCHER_SIZE") && sscanf(getenv("LAUNCHER_SIZE"), "%dx%d", &win_w, &win_h) != 2) { win_w = 1280; win_h = 720; }
+    g_win = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, win_w, win_h,
                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
     if (!g_win) return 1;
     g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);

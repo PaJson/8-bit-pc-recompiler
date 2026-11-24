@@ -26,7 +26,9 @@ holds the launcher, the recompiler, a C compiler (complete MSYS2 gcc packages; v
 screen taken from your ROM, and the first time you play a game it builds it on your PC from your ROM
 (1-2 minutes, Golvellius about 5). The zip contains no game programs and nothing taken from any ROM.
 
-Making a release: set `version` in `app_info.toml`, commit, push a tag `v<version>`: the GitHub workflow
+Making a release: a pull request from `release/v<version>` (version in `app_info.toml`, a `## v<version>`
+section in `CHANGELOG.md` = the release notes); the `check.yml` workflow builds and tests the zip and
+attaches it to the run. After merging, push a tag `v<version>`: the GitHub workflow
 `.github/workflows/release.yml` runs `Tools/make_release.py` (which ends with a smoke test: a tiny test
 ROM of our own built and run with only the release on the PATH) and attaches the zip to a GitHub Release.
 Locally: `python -I Tools/make_release.py --zip` -> `Release/<name> v<version>/` + `.zip`.

@@ -122,9 +122,11 @@ Patched games (translations, Golvellius Plus)
   They need the original ROM and the patch file in ROMs\\sms\\Patches\\. Included:
   - Golvellius Plus, our own patch (needs the original "Golvellius - Valley of Doom" ROM).
   - Phantasy Star Retranslation 2.6.1 by SMS Power! in 7 languages, the zips exactly as released
-    (needs the original Japanese "Phantasy Star" ROM). Terms (their README.md): free of charge,
-    distributed together in original condition, no commercial sale. Please keep the zips unchanged.
-  The launcher makes the patched ROM (ROMs\\sms\\Patched\\) when you start such a game.
+    (needs the first Japanese "Phantasy Star" ROM, CRC32 6605D36A; the Japanese Rev 1 does not work).
+    Terms (their README.md): free of charge, distributed together in original condition, no
+    commercial sale. Please keep the zips unchanged.
+  A patched game is listed once its original ROM is in ROMs\\. The launcher makes the patched ROM
+  (ROMs\\sms\\Patched\\) when you start such a game.
 
 Saves and settings
   Each game keeps its saves in Games\\sms\\<game>\\saves\\ and its options in an .ini file next to it.
