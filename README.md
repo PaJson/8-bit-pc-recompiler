@@ -26,13 +26,6 @@ holds the launcher, the recompiler, a C compiler (complete MSYS2 gcc packages; v
 screen taken from your ROM, and the first time you play a game it builds it on your PC from your ROM
 (1-2 minutes, Golvellius about 5). The zip contains no game programs and nothing taken from any ROM.
 
-Making a release: a pull request from `release/v<version>` (version in `app_info.toml`, a `## v<version>`
-section in `CHANGELOG.md` = the release notes); the `check.yml` workflow builds and tests the zip and
-attaches it to the run. After merging, push a tag `v<version>`: the GitHub workflow
-`.github/workflows/release.yml` runs `Tools/make_release.py` (which ends with a smoke test: a tiny test
-ROM of our own built and run with only the release on the PATH) and attaches the zip to a GitHub Release.
-Locally: `python -I Tools/make_release.py --zip` -> `Release/<name> v<version>/` + `.zip`.
-
 ## Setup on a new PC (developing)
 
 1. **MSYS2** in `C:\msys64`, then in an MSYS2 shell:
@@ -73,6 +66,20 @@ Put the patch authors' original downloads into `ROMs/sms/Patches/` (links in `CR
 - Golvellius Plus (our own patch, source in `Patches/sms/Golvellius/`, the built .ips / .bps committed in
   `Patches/sms/Golvellius/dist/`): `python -I Tools/sms/gv_build_patch.py`.
 
+## Making a release (maintainers)
+
+1. Branch `release/v<version>`: set `version` in `app_info.toml`, add a `## v<version>` section to
+   `CHANGELOG.md` (it becomes the release text).
+2. Open a pull request to `main`. The `Check` workflow (`.github/workflows/check.yml`) runs the engine
+   self-tests, builds the release zip with `Tools/make_release.py` (ends with a smoke test: a tiny ROM of
+   our own built and run with only the release on the PATH) and attaches the zip to the run. Test that
+   zip, e.g. in Windows Sandbox: `Tools\sandbox_test.ps1 -Zip <zip>`.
+3. Merge, then push the tag `v<version>`: `.github/workflows/release.yml` builds the zip again and
+   publishes the GitHub Release.
+
+Locally: `python -I Tools/make_release.py --zip` -> `Release/<name> v<version>/` + `.zip`. Details:
+`Docs/notes/launcher-and-release.md`.
+
 ## Not in this repository (git-ignored, copy by hand when moving to another PC)
 
 | What | Where |
@@ -94,7 +101,8 @@ Put the patch authors' original downloads into `ROMs/sms/Patches/` (links in `CR
 
 ## More
 
-- `CLAUDE.md`: full project notes (status, ROM research, every option, test methods).
+- `Docs/notes/`: full project notes (ROM research, every option, test methods, release flow);
+  `CLAUDE.md` lists them and holds the rules for working on the project.
 - `CREDITS.md`: authors of the patches, tools and research this project uses.
 - Engine changes: commit and push in `Recomp/smsggrecomp` first (branch `sms-pc-recompiler`),
   then commit the new submodule pointer here (`git add Recomp/smsggrecomp`).

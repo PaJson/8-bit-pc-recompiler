@@ -174,3 +174,9 @@
   Actions updated to checkout / setup-python / upload-artifact v7 (Node 20 deprecation warning).
 - Open (later release): setup-msys2 warns "MINGW64 is deprecated, migrate to UCRT64": a toolchain move
   (dev PC, workflows, the release's bundled compiler); left visible as a reminder.
+- v0.1.0 published 2026-11-24 (tag on `701acca`). Two fixes after it, for the next release:
+  `Tools/release_notes.py [<version>] [<out>]` makes the release text (the CHANGELOG section with wrapped
+  lines joined: GitHub shows every line break as `<br>`, checked on the v0.1.0 page) + the "unzip, put
+  your ROMs" line; release.yml publishes it, check.yml prints it on release branches. The zip is uploaded
+  as `8-bit-PC-Recompiler-v<version>.zip` (GitHub turns spaces in asset names into dots) with the label
+  `8-bit PC Recompiler v<version>.zip` (`gh release create ... "file#label"`).

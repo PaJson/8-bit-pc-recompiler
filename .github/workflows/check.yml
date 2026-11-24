@@ -1,7 +1,7 @@
 # Check: runs on every pull request to main (and by hand: Actions tab -> "Check" -> "Run workflow").
 #
 #   1. a release branch (release/v<version>): name = app_info.toml version, CHANGELOG.md has a "## v<version>"
-#      section, the tag v<version> does not exist yet
+#      section (the release text is printed in the log), the tag v<version> does not exist yet
 #   2. the engine self-tests (Recomp/smsggrecomp/tests/run_selftests.sh; gpu_jobs skipped: no GPU here)
 #   3. the whole release build (Tools/make_release.py --zip, ends with the smoke test: a tiny ROM of our own
 #      built and run with nothing but the release on PATH)
@@ -64,11 +64,12 @@ jobs:
           $branch = "${{ github.head_ref }}"
           if ($branch -like "release/*") {
             if ($branch -ne "release/v$version") { throw "branch $branch does not match app_info.toml version $version (expected release/v$version)" }
-            if (-not (Select-String -Path CHANGELOG.md -Pattern "^## v$([regex]::Escape($version))\b" -Quiet)) {
-              throw "CHANGELOG.md has no '## v$version' section (it becomes the release notes)"
-            }
             if (git ls-remote --tags origin "refs/tags/v$version") { throw "tag v$version already exists: bump the version" }
-            "release branch $branch OK (version $version, changelog section found, tag free)"
+            # the release text exactly as release.yml will publish it (needs the CHANGELOG.md section)
+            python -I Tools/release_notes.py $version release_notes.md
+            if ($LASTEXITCODE -ne 0) { throw "CHANGELOG.md has no '## v$version' section (it becomes the release notes)" }
+            "release branch $branch OK (version $version, tag free). Release text:"
+            "----------"; Get-Content release_notes.md; "----------"
           } else {
             "not a release branch ($branch): version $version"
           }
