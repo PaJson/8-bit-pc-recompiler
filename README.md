@@ -54,17 +54,25 @@ screen taken from your ROM, and the first time you play a game it builds it on y
   Tab = fast forward. Gamepads work too (Start = options overlay).
 - Saves go to `Games/<platform>/<slug>/saves/`.
 
-## Patched ROMs (optional)
+## Patched games (optional)
 
-(The launcher can also make them itself: it finds the patch by CRC32 in `ROMs/sms/Patches/`. The PSRP
-2.6.1 zips are also in `ThirdParty/`, unchanged, because their terms allow passing them on; the release
-ships them.)
-Put the patch authors' original downloads into `ROMs/sms/Patches/` (links in `CREDITS.md`), then:
-- PSRP 2.6.1 retranslations (need the original **Japan** ROM; the zips go into
-  `ROMs/sms/Patches/Phantasy Star/Retranslation 2.6.1 (PSRP, SMS Power)/`): `sh Tools/sms/regen_patched.sh`
-  (English) and `sh Tools/sms/regen_patched_langs.sh` (other languages). They write `ROMs/sms/Patched/`.
-- Golvellius Plus (our own patch, source in `Patches/sms/Golvellius/`, the built .ips / .bps committed in
-  `Patches/sms/Golvellius/dist/`): `python -I Tools/sms/gv_build_patch.py`.
+The translations and Golvellius Plus run a patched ROM, made from your own original ROM. The patch files
+come with the project:
+- **Phantasy Star Retranslation 2.6.1** (SMS Power!, 7 languages, 9 versions): the official zips in
+  `ThirdParty/sms/Patches/`, unchanged, as their terms require for passing them on. Needs the first
+  Japanese ROM, "Phantasy Star (Japan)" (not Rev 1).
+- **Golvellius Plus** (our own patch): `Patches/sms/Golvellius/dist/` (source in `Patches/sms/Golvellius/`).
+  Needs the original "Golvellius - Valley of Doom" ROM.
+
+Put the patch files into `ROMs/sms/Patches/` (the zips as they are, any subfolder) and the original ROM into
+`ROMs/sms/`. The launcher then lists the patched game; the first time you play it, the launcher finds the
+patch by its CRC32, writes the patched ROM to `ROMs/sms/Patched/` and builds the game. The release zip
+already has the patch files in place.
+
+Without the launcher (developing): `sh Tools/sms/regen_patched.sh` (PSRP English) and
+`sh Tools/sms/regen_patched_langs.sh` (the other languages) make the patched ROMs and regenerate their game
+folders; they expect the zips in `ROMs/sms/Patches/Phantasy Star/Retranslation 2.6.1 (PSRP, SMS Power)/`.
+`python -I Tools/sms/gv_build_patch.py` rebuilds Golvellius Plus from its source and writes the patched ROM.
 
 ## Making a release
 
