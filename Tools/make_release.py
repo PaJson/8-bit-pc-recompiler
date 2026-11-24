@@ -13,9 +13,9 @@ The result is the intended running environment, without sources or a compiler:
                       the PSRP 2.6.1 zips (their terms allow passing them on unchanged, free of charge)
       ROMs/Patched/   ROMs the launcher makes from a base ROM + a patch
       Images/         the app's own art (Background.png, Logo.png, Icon*.png, Icon.ico); always copied
-      Images/<plat>/  game art: the user's "<title> (front).jpg" / "(logo).png" and the title screens the
-                      launcher captured from the user's ROMs, "<name> (title).png" (--with-images only;
-                      without them the launcher captures the titles again on its first start)
+      Images/<plat>/  the user's own game art "<title> (front).jpg" / "(logo).png" (--with-images only).
+                      Captured title screens "<name> (title).png" are NEVER copied (a game's artwork): the
+                      launcher makes them from the ROMs in ROMs/ on its first start (~2 s per game).
 
 Only games with a built exe (Games/<slug>/build/*.exe) and their ROM present are copied. A game whose ROM
 is made by a patch gets a recipe in its game.toml: every .bps in ROMs/Patches (loose or inside a zip) is
@@ -23,8 +23,8 @@ read, and a BPS whose target CRC32 is that game's ROM gives the base ROM's CRC32
 (the launcher finds both by CRC32, so renamed files work too).
 
 NEVER copied: ROMs, saves, the user's .ini settings, third-party patch files other than those in
-REDISTRIBUTABLE (whole zips, byte-identical; CREDITS.md has the official pages). --with-images copies the
-platform folders Images/<plat>/ (the user's own covers, personal use only: SEGA artwork; captured titles).
+REDISTRIBUTABLE (whole zips, byte-identical; CREDITS.md has the official pages), captured title screens.
+--with-images copies the user's own covers / logos from Images/<plat>/ (personal use only: SEGA artwork).
 Existing files in the output folder (saves, settings, ROMs) are kept; exes are replaced when they changed.
 The Games/*/ exes contain the game's program translated to PC code (derived from the ROM): the Release
 folder is for this PC, not for sharing (it is git-ignored).
@@ -198,12 +198,12 @@ def release_platform(plat, out, sdl, with_images, done, skipped):
             if f.lower().endswith(".zip"):
                 copy_if_changed(os.path.join(src, f), os.path.join(dst, f))
 
-    pimg = os.path.join(ROOT, "Images", plat)          # game art: the user's covers + captured titles
-    if with_images and os.path.isdir(pimg):
+    pimg = os.path.join(ROOT, "Images", plat)          # the user's own covers / logos (not the captured titles:
+    if with_images and os.path.isdir(pimg):             # the launcher makes those from the ROMs where it runs)
         os.makedirs(os.path.join(out, "Images", plat), exist_ok=True)
         for f in os.listdir(pimg):
             p = os.path.join(pimg, f)
-            if os.path.isfile(p) and not f.endswith(".tmp"):
+            if os.path.isfile(p) and not f.endswith(".tmp") and not re.search(r" \(title\)\.[^.]+$", f):
                 copy_if_changed(p, os.path.join(out, "Images", plat, f))
 
     patches = scan_patches(os.path.join(roms, "Patches"))

@@ -68,7 +68,10 @@ templates in `mkgame.py`, then the same folders. Candidate engines (user's forks
 - Launcher background: `launcher.ini background=` > `Images/Background.*` > another picture in `Images/` (not Logo / Icon / game art) >
   generated one. Over any background but the app's own, the PRESS START screen shows `Logo.png` (generated bg: under its ring, replacing
   its drawn title text). Transparent borders of every loaded picture are trimmed. `make_release.py`: top-level `Images/` always copied,
-  `Images/<platform>/` only with `--with-images`.
+  the user's own covers / logos in `Images/<platform>/` only with `--with-images`; captured `(title)` files NEVER (a game's artwork,
+  user decision 2026-11-24: the launcher makes them from the ROMs wherever it runs; checked in Release with a renamed ROM).
+  Reminder given to the user: the Release game exes are ROM-derived too (translated program code), so Release is for this PC;
+  sharing = the project itself (recompiler + build on the recipient's PC from their own ROMs).
 - Not done (discussed): the PS side panel's pre-game screen could show the `(title)` picture (panel is 256 px wide) instead of the text.
 
 ## Quit prompt, PS RUN AWAY (2026-11-24)
