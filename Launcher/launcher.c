@@ -40,10 +40,12 @@
  *
  * Start screen: the background with a blinking PRESS START; Enter / click / pad Start shows the game
  * list (fades in), Esc quits. In the list: Enter / pad A / double click play, R / pad Y rebuild,
- * Esc / pad B / Back return to the start screen (while a build runs, Esc quits). launcher.ini:
+ * A / pad X build all (every game not built yet, see build_all), Esc / pad B / Back return to the
+ * start screen (while a build runs, Esc quits; during Build all Esc / pad B first stop it after the
+ * current game). launcher.ini:
  * `splash = 0` skips it, `press_start_y = 50` = its height (% of the window, centre of the text).
  * Keys: Up/Down (PgUp/PgDn, Home/End) select, Enter play (build first if needed), R rebuild,
- * F11 / Alt+Enter fullscreen. Gamepad: D-pad / stick, A play, Y rebuild.
+ * A build all, F11 / Alt+Enter fullscreen. Gamepad: D-pad / stick, A play, Y rebuild, X build all.
  * Mouse: wheel, click selects, double click plays.
  *
  * launcher.ini (project root, optional): background = <image path>, panel = right | left,
@@ -651,6 +653,14 @@ static char g_status[200];                    /* message line */
 static uint32_t g_status_col = 0xFFA0A0B0;
 static char g_build_log[MAX_PATH];
 static bool g_play_after_build;
+/* Build all (build_all, below) */
+#define MAX_QUEUE 128
+static char g_q[MAX_QUEUE][64];
+static int  g_nq, g_qi;                        /* queued slugs, the next one */
+static bool g_q_on, g_q_stop;
+static int  g_q_built, g_q_failed;
+static char g_q_fail[64];                     /* the first failed game's slug (selected at the end) */
+static int  g_msg_sel = -1;                   /* main loop: the selection the shown message belongs to */
 /* build progress (drawn under the status line): elapsed time + a bar. Release builds (release_build.c)
    report 4 steps; step 2 (compiling) is long and silent, so its share of the bar follows an estimate
    from the size of the generated <prefix>_full.c (~12 s per MB measured here, at -O1 and -O2) and stops
@@ -1013,8 +1023,8 @@ static Layout layout(int w, int h)
     L.row_h = 11 * sc;
     L.row_y = L.y0 + 30 * sc;
     L.logo_h = g_any_logo ? 40 * sc : 0;                         /* logo box above the details */
-    L.logo_y = L.y1 - 64 * sc - L.logo_h;
-    int bottom = L.y1 - 64 * sc - (L.logo_h ? L.logo_h + 6 * sc : 0);
+    L.logo_y = L.y1 - 76 * sc - L.logo_h;                       /* the details block = the last 72 * sc */
+    int bottom = L.y1 - 76 * sc - (L.logo_h ? L.logo_h + 6 * sc : 0);
     L.rows = (bottom - L.row_y) / L.row_h; if (L.rows < 1) L.rows = 1;
     return L;
 }
@@ -1066,7 +1076,7 @@ static void draw_ui(void)
     if (g_top > 0) text(L.x1 - 14 * sc, L.row_y - 11 * sc, "^", 0xFF60D0FF, sc);
     if (g_top + L.rows < g_ngames) text(L.x1 - 14 * sc, L.row_y + L.rows * L.row_h - 2 * sc, "v", 0xFF60D0FF, sc);
     /* details */
-    int dy = L.y1 - 60 * sc;
+    int dy = L.y1 - 72 * sc;                                       /* name, state, status, bar, 2 help lines */
     int sep = L.logo_h ? L.logo_y - 4 * sc : dy - 4 * sc;
     fill(L.x0 + 3 * sc, sep, L.x1 - 3 * sc, sep + sc / 2 + 1, 0x8060D0FF);
     if (g_sel >= 0 && g_sel < g_ngames) {
@@ -1083,7 +1093,11 @@ static void draw_ui(void)
                        : g->state == ST_PATCH ? "Play makes the patched ROM first."
                        : g->state == ST_NEEDS_PATCH ? "Needs the patch file in the Patches folder:"
                        : "Not built yet: Play builds it first.";
-        if (g_proc_kind == 2 && !strcmp(g->slug, g_proc_slug)) st = "This takes a few minutes.";   /* being built */
+        char qst[64];
+        if (g_proc_kind == 2 && !strcmp(g->slug, g_proc_slug)) {   /* being built */
+            st = "This takes a few minutes.";
+            if (g_q_on) { snprintf(qst, sizeof qst, "Build all: game %d of %d.", g_qi, g_nq); st = qst; }
+        }
         fit_text(line, sizeof line, st, chars, false);
         text(tx, dy + 22 * sc, line, state_col(g->state), sc);
         if (g->state == ST_NEEDS_PATCH && !g_status[0]) {          /* which file, in the status line */
@@ -1110,13 +1124,14 @@ static void draw_ui(void)
         if (s1 > s0 && s1 > fx) fill(s0 > fx ? s0 : fx, by0, s1, by1, 0xFF5A88C8);   /* over the rest */
     }
     else if (g_status[0]) { char line[260]; fit_text(line, sizeof line, g_status, (L.x1 - L.x0 - 16 * sc) / (6 * sc), false); text(tx, dy + 33 * sc, line, g_status_col, sc); }
-    {   /* key help: a shorter wording when the panel is narrow */
+    {   /* key help, two lines (keyboard / pad): 26 characters each fit the narrowest panel (29) */
         int hc = (L.x1 - L.x0 - 16 * sc) / (6 * sc);
-        const char *help = g_proc_kind == 2 ? "Please wait ...   ESC QUIT" : "ENTER/A PLAY   R/Y REBUILD   ESC/B BACK";
-        if ((int)strlen(help) > hc) help = g_proc_kind == 2 ? "Please wait  ESC QUIT" : "ENTER/A PLAY R/Y REBUILD ESC/B BACK";
-        if ((int)strlen(help) > hc && g_proc_kind != 2) help = "ENTER PLAY R REBUILD ESC BACK";
-        char line[80]; fit_text(line, sizeof line, help, hc, false);
-        text(tx, L.y1 - 13 * sc, line, 0xFF8890A0, sc);
+        const char *h1 = "ENTER/A PLAY   R/Y REBUILD", *h2 = "A/X BUILD ALL   ESC/B BACK";
+        if (g_q_on) { h1 = g_q_stop ? "Stopping after this game." : "Building all games ..."; h2 = g_q_stop ? "ESC QUIT" : "ESC/B STOP AFTER THIS GAME"; }
+        else if (g_proc_kind == 2) { h1 = "Please wait ..."; h2 = "ESC QUIT"; }
+        char line[80];
+        fit_text(line, sizeof line, h1, hc, false); text(tx, L.y1 - 23 * sc, line, 0xFF8890A0, sc);
+        fit_text(line, sizeof line, h2, hc, false); text(tx, L.y1 - 13 * sc, line, 0xFF8890A0, sc);
     }
     SDL_UpdateTexture(g_ui_tex, NULL, g_ui, w * 4);
 }
@@ -1406,6 +1421,63 @@ static void play_selected(bool force_build)
     start_game(g);                                 /* the launcher hides once the game window has the focus */
 }
 
+/* ---------------- Build all (key A / pad X) ----------------
+   Builds every game whose ROM is here but that is not built yet, one at a time (a game made from a
+   patch gets its patched ROM first); built games, games without a profile and games whose patch file
+   is missing are left alone. A failure does not stop it; the end message counts what was built and
+   names what failed (each game folder has its build_log.txt). Esc / pad B stops it after the current
+   game. Games are kept by slug: every build ends with a rescan that can reorder the list. */
+static int game_index(const char *slug) { for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) return i; return -1; }
+static void queue_failed(const char *slug) { if (!g_q_failed++) snprintf(g_q_fail, sizeof g_q_fail, "%s", slug); }
+/* the end message; with failures the first failed game is selected, so its name shows above the
+   message (a name in the message itself would be cut in a narrow panel) */
+static void queue_finish(void)
+{
+    g_q_on = false;
+    if (g_q_failed) {
+        int i = game_index(g_q_fail);
+        if (i >= 0) g_sel = i;
+        snprintf(g_status, sizeof g_status, "Built %d, failed %d (%s; see its build_log.txt)", g_q_built, g_q_failed,
+                 i < 0 ? "?" : g_q_failed == 1 ? "selected" : "first one selected");
+        g_status_col = 0xFFFF6060;
+    } else {
+        snprintf(g_status, sizeof g_status, g_q_stop ? "Build all stopped: %d built." : "Build all finished: %d built.", g_q_built);
+        g_status_col = 0xFF7CE07C;
+    }
+    g_msg_sel = g_sel;
+}
+/* starts the next queued build that can run; ends the queue when none is left */
+static void queue_next(void)
+{
+    while (g_q_on && !g_q_stop && g_qi < g_nq) {
+        int i = game_index(g_q[g_qi++]);
+        if (i < 0) continue;
+        g_sel = i;
+        if (g_games[i].state == ST_PATCH) {
+            if (!make_patched_rom(&g_games[i])) { queue_failed(g_q[g_qi - 1]); continue; }   /* rescans */
+            if ((i = game_index(g_q[g_qi - 1])) < 0) continue;
+            g_sel = i;
+        }
+        Game *g = &g_games[i];
+        if (g->state != ST_NOT_BUILT) continue;                 /* built meanwhile */
+        if (!has_build_script(g) && !has_release_kit(g)) { queue_failed(g->slug); continue; }
+        if (start_build(g, false)) return;
+        queue_failed(g->slug);
+    }
+    queue_finish();
+}
+static void build_all(void)
+{
+    if (g_proc_kind || g_q_on) return;
+    g_nq = g_qi = g_q_built = g_q_failed = 0; g_q_fail[0] = 0; g_q_stop = false;
+    for (int i = 0; i < g_ngames && g_nq < MAX_QUEUE; i++)
+        if (g_games[i].state == ST_NOT_BUILT || g_games[i].state == ST_PATCH)
+            snprintf(g_q[g_nq++], sizeof g_q[0], "%s", g_games[i].slug);
+    if (!g_nq) { snprintf(g_status, sizeof g_status, "Nothing to build: every game here is built."); g_status_col = 0xFF7CE07C; g_msg_sel = g_sel; return; }
+    g_q_on = true;
+    queue_next();
+}
+
 static void poll_process(void)
 {
     if (!g_proc_kind) return;
@@ -1447,7 +1519,13 @@ static void poll_process(void)
         fprintf(stderr, "[launcher] game ended; foreground = launcher: %s\n", GetForegroundWindow() == sdl_hwnd(g_win) ? "yes" : "no");
         return;
     }
-    Game *g = (g_sel >= 0 && g_sel < g_ngames) ? &g_games[g_sel] : NULL;
+    Game *g = (g_sel >= 0 && g_sel < g_ngames && !strcmp(g_games[g_sel].slug, slug)) ? &g_games[g_sel] : NULL;
+    g_msg_sel = g_sel;                               /* the message is about this game: keep it */
+    if (g_q_on) {                                    /* Build all: count it, start the next one */
+        if (code == 0 && g && g->state == ST_READY) g_q_built++; else queue_failed(slug);
+        queue_next();
+        return;
+    }
     if (code != 0 || !g || g->state != ST_READY) { snprintf(g_status, sizeof g_status, "Build failed - see build_log.txt in the game folder (%s)", slug); g_status_col = 0xFFFF6060; return; }
     snprintf(g_status, sizeof g_status, "Build finished."); g_status_col = 0xFF7CE07C;
     if (g_play_after_build) { g_status[0] = 0; start_game(g); }
@@ -1580,7 +1658,7 @@ int main(int argc, char **argv)
        start, e.g. once a test script has brought the launcher to the front); LAUNCHER_EXIT_AFTER=1 quits when it ends */
     const char *auto_act = getenv("LAUNCHER_AUTO");
     Uint32 auto_at = getenv("LAUNCHER_AUTO_MS") ? (Uint32)atol(getenv("LAUNCHER_AUTO_MS")) : 0;
-    if (auto_act && strncmp(auto_act, "play:", 5) && strncmp(auto_act, "build:", 6)) auto_act = NULL;
+    if (auto_act && strncmp(auto_act, "play:", 5) && strncmp(auto_act, "build:", 6) && strcmp(auto_act, "buildall")) auto_act = NULL;
     if (auto_act) g_splash = false;
     bool exit_after = getenv("LAUNCHER_EXIT_AFTER") != NULL;
     /* test: LAUNCHER_SHOT_MS=<ms>[,<ms>...] + LAUNCHER_SHOT_OUT=<file with %d> = window pictures while it runs */
@@ -1610,7 +1688,9 @@ int main(int argc, char **argv)
             }
             else if (e.type == SDL_KEYDOWN) {
                 SDL_Keycode k = e.key.keysym.sym;
-                if (k == SDLK_ESCAPE && !e.key.repeat) { if (g_proc_kind == 2) quit = true; else enter_splash(); }   /* building: ESC QUIT */
+                if (k == SDLK_ESCAPE && !e.key.repeat) {      /* Build all: stop after this game; building: ESC QUIT */
+                    if (g_q_on && !g_q_stop) g_q_stop = true; else if (g_proc_kind == 2) quit = true; else enter_splash();
+                }
                 else if (k == SDLK_F11 || (k == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT))) {
                     bool fs = (SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
                     SDL_SetWindowFullscreen(g_win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -1623,6 +1703,7 @@ int main(int argc, char **argv)
                 else if (k == SDLK_END) g_sel = g_ngames - 1;
                 else if (!e.key.repeat && (k == SDLK_RETURN || k == SDLK_KP_ENTER)) play_selected(false);
                 else if (!e.key.repeat && k == SDLK_r) play_selected(true);
+                else if (!e.key.repeat && k == SDLK_a) build_all();
             }
             else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
                 Uint8 b = e.cbutton.button;
@@ -1631,8 +1712,10 @@ int main(int argc, char **argv)
                 else if (b == SDL_CONTROLLER_BUTTON_DPAD_LEFT || b == SDL_CONTROLLER_BUTTON_LEFTSHOULDER) { move_sel(-g_rows); nav_dir = -2; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
                 else if (b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT || b == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) { move_sel(g_rows); nav_dir = 2; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
                 else if (b == SDL_CONTROLLER_BUTTON_A) play_selected(false);
+                else if ((b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) && g_q_on) g_q_stop = true;
                 else if ((b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) && !g_proc_kind) enter_splash();
                 else if (b == SDL_CONTROLLER_BUTTON_Y) play_selected(true);
+                else if (b == SDL_CONTROLLER_BUTTON_X) build_all();
             }
             else if (e.type == SDL_CONTROLLERBUTTONUP) {
                 Uint8 b = e.cbutton.button;
@@ -1666,11 +1749,12 @@ int main(int argc, char **argv)
             Uint32 held = SDL_GetTicks() - nav_t;
             nav_next = SDL_GetTicks() + (held > 1500 ? 40 : held > 800 ? 80 : 120);
         }
-        {   /* selection changed: old message away; the cover follows once the selection rests */
-            static int last_sel = -1; static Uint32 sel_t;
-            if (g_sel != last_sel) {
-                if (last_sel >= 0 && !g_proc_kind) g_status[0] = 0;
-                last_sel = g_sel; sel_t = SDL_GetTicks();
+        {   /* selection changed: old message away (not one a finished build just left for its game);
+               the cover follows once the selection rests */
+            static Uint32 sel_t;
+            if (g_sel != g_msg_sel) {
+                if (g_msg_sel >= 0 && !g_proc_kind) g_status[0] = 0;
+                g_msg_sel = g_sel; sel_t = SDL_GetTicks();
             }
             const Uint8 *ks = SDL_GetKeyboardState(NULL);
             bool held = nav_dir || ks[SDL_SCANCODE_UP] || ks[SDL_SCANCODE_DOWN] || ks[SDL_SCANCODE_LEFT] || ks[SDL_SCANCODE_RIGHT]
@@ -1679,9 +1763,12 @@ int main(int argc, char **argv)
             else if (g_art_sel != g_sel && !held && SDL_GetTicks() - sel_t >= 120) g_art_sel = g_sel;
         }
         if (auto_act && SDL_GetTicks() >= auto_at) {              /* test: LAUNCHER_AUTO */
-            const char *slug = strchr(auto_act, ':') + 1;
-            for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
-            play_selected(auto_act[0] == 'b');
+            if (!strcmp(auto_act, "buildall")) build_all();
+            else {
+                const char *slug = strchr(auto_act, ':') + 1;
+                for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
+                play_selected(auto_act[0] == 'b');
+            }
             auto_act = NULL;
         }
         int was = g_proc_kind;

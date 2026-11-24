@@ -180,3 +180,23 @@
   your ROMs" line; release.yml publishes it, check.yml prints it on release branches. The zip is uploaded
   as `8-bit-PC-Recompiler-v<version>.zip` (GitHub turns spaces in asset names into dots) with the label
   `8-bit PC Recompiler v<version>.zip` (`gh release create ... "file#label"`).
+
+## Build all (built 2026-11-24, user request; user's choices: only games not built yet, key A / pad X)
+- `build_all()` in launcher.c: queues the slugs of every entry in state NOT BUILT or PATCH (patched ROM made
+  first, as Play does), builds them one at a time through the normal `start_build` (developer build.ps1 or the
+  release `--build`); READY, NO PROFILE and NEEDS PATCH are left alone. Slugs, not indexes: each build ends with
+  `scan_games()`, which can reorder the list. A failure does not stop the queue; the end message: "Build all
+  finished: N built." / "Build all stopped: N built." / "Built N, failed M (selected; see its build_log.txt)":
+  the first failed game is selected, so its name shows in the details (a name in the message was cut at
+  960x540). Nothing to do: "Nothing to build: every game here is built."
+- Esc / pad B during Build all = stop after the current game (a second Esc quits, as during a single build).
+  The game being built shows "Build all: game i of n." on its state line.
+- Key help is now two lines ("ENTER/A PLAY   R/Y REBUILD" / "A/X BUILD ALL   ESC/B BACK", 26 characters: the
+  narrowest panel, 960x540, has 29); the details block moved up 12 * sc (one list row fewer).
+- The message of a finished build now stays when the build moved the selection to its game (`g_msg_sel`
+  replaces the main loop's private last selection; before, browsing during a build and the build's jump back
+  cleared "Build finished." at once).
+- Test env `LAUNCHER_AUTO=buildall`. Verified in a scratch copy of the tree (junctions to ROMs / Recomp /
+  Common, three game folders, one build.ps1 failing on purpose): real builds of Sonic 1 / Chaos / 2, the
+  failure counted and selected, screenshots at 960x540 / 1280x720 / 1920x1080. Not tested: Esc / pad B stop,
+  a PATCH game in the queue, the release `--build` path in a queue.

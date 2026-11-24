@@ -114,7 +114,8 @@ No games are included.
    game's title screen from your ROM in the background (a few seconds per game).
 3. Choose a game and press Enter (pad A). The first time, the launcher builds the game from your ROM:
    it recompiles the ROM to C and compiles that with the C compiler in Engine\\Compiler (about 1-2
-   minutes, Golvellius about 5). After that the game starts at once.
+   minutes, Golvellius about 5). After that the game starts at once. To build every game that is not
+   built yet in one go, press A (pad X); Esc (pad B) stops it after the current game.
 
 The games run in their own window. In a game: F1 (pad Start) opens the options / map overlay, Esc asks
 before quitting, Tab = fast forward, F11 = fullscreen.
