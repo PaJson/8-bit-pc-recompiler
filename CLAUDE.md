@@ -80,14 +80,15 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
 ## Current state (2026-11-24; update or delete when done)
-- Released v0.1.0 (PR #1) and v0.1.1 (PR #2, corrected credits). The repo `PaJson/8-bit-pc-recompiler` was
-  made PUBLIC on 2026-11-24 (history checked first: `Docs/notes/history.md`, last entry).
-  Release flow + Check workflow: `Docs/notes/launcher-and-release.md` "Release flow". Next releases: same flow.
-- Sandbox tests by the user: launcher + Golvellius Plus (workflow zip of run 45450461783), PS Rev A dark
-  dungeon refused + nothing on the map (Check zip of PR #1). PSRP in the sandbox: not reported yet.
-- Decided: all profiles (Sonic too) stay in the release; a few private releases before going public; next
-  profiles planned: Golden Axe Warrior, Ultima IV, Wonder Boy, Ys.
-- Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation warning; dev PC, workflows, bundled compiler).
-- Verified by the user's play (2026-11-24): PS cave map (stairs / exits visited, surroundings on arrival),
-  launcher text fitting (nothing cut off), build progress bar, launcher message cleared on moving, cover
-  changes only after releasing a held direction. Nothing left to verify from the 2026-11-24 work.
+- Latest release **v0.1.4** (tag on `eea713b`); v0.1.0-v0.1.4 = PRs #1-#5 (first release, corrected credits,
+  public repo + README.txt wording, "license" spelling, clearer README). The repo `PaJson/8-bit-pc-recompiler`
+  is PUBLIC since 2026-11-24 (history checked first: `Docs/notes/history.md`). Every release: the flow in
+  `Docs/notes/launcher-and-release.md` "Release flow" (release PR -> Check -> user merges -> tag on the
+  user's word). Small repo-only fixes go straight to `main` (on the user's go-ahead).
+- Verified by the user (2026-11-24): the release zip in Windows Sandbox (launcher, Golvellius Plus, PS dark
+  dungeon refused + nothing on the map); by play: PS cave map, launcher text fitting, build progress bar,
+  launcher message cleared on moving, cover changes only after releasing a held direction. Nothing open.
+- Decided: all profiles (Sonic too) stay in the release; American spelling in project texts.
+- Next (user's plan): new profiles Golden Axe Warrior, Ultima IV, Wonder Boy, Ys (their ROMs are in
+  `ROMs/sms/`; discuss each before building). Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation
+  warning; dev PC, workflows, bundled compiler).
