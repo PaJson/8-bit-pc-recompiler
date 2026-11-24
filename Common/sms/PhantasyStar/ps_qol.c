@@ -111,6 +111,8 @@ static int s_panel_i = 0;                      /* widescreen side panel (party, 
 static int s_hover_i = 0;                      /* hovercraft also drives on land: off / on */
 static int s_diag_i = 0;                       /* DIAGONAL WALKING: off / on */
 static int s_fix_i = 0;                        /* ORIGINAL BUG FIXES: off / on (ps_fixes.c) */
+static int s_run_i = 0;                        /* RUN AWAY: original / always (not the 5 bosses), ps_run_away */
+static const char *const k_run_names[] = { "ORIGINAL", "ALWAYS (NOT BOSSES)" };
 extern void ps_fixes_set(bool on);
 static int s_flyall_i = 0, s_flyfree_i = 0;    /* FLY page: visited places / all; the spell's rules / free */
 static const char *const k_flylist_names[] = { "VISITED", "ALL" };
@@ -181,6 +183,7 @@ static void load_config(void)
         else if (!strcmp(key, "fly_list_all")) s_flyall_i = v != 0;
         else if (!strcmp(key, "fly_free")) s_flyfree_i = v != 0;
         else if (!strcmp(key, "bug_fixes")) s_fix_i = v != 0;
+        else if (!strcmp(key, "run_away")) s_run_i = v != 0;
         else if (!strcmp(key, "music_volume")) s_bgm_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sfx_volume")) s_sfx_i = v < 0 ? 0 : v > 100 ? 100 : (int)(v + 0.5);
         else if (!strcmp(key, "sound_chip")) {
@@ -208,6 +211,7 @@ static void save_config(void)
     fprintf(f, "damage_dealt       = %-6g ; damage the party deals: 1 = original (0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 10)\n", k_dmg_vals[s_dealt_i] / 100.0);
     fprintf(f, "damage_received    = %-6g ; damage the party takes: 1 = original, 0 = invincible\n", k_dmg_vals[s_recv_i] / 100.0);
     fprintf(f, "encounter_percent  = %d      ; random encounter chance: 100 = original, 50 = half, 0 = none\n", enc_pct());
+    fprintf(f, "run_away           = %d      ; 1 = RUN in battle always gets away (not from the 5 bosses the game never lets you flee)\n", s_run_i);
     fprintf(f, "automap            = %d      ; extra auto-map side window (the map is always on the HUD's MAP page)\n", s_map_i);
     fprintf(f, "walk_speed         = %-6u ; 1 = original, 2 or 4 = faster walking on maps (vehicles x2 max)\n", walk_mult());
     fprintf(f, "map_reveal         = %d      ; dungeon map: 0 = explored cells only, 1 = the whole floor\n", s_reveal_i);
@@ -256,6 +260,7 @@ static void apply_overworld_rate(void)
  *   ps_walk_follow_y @$5B7B -> $5B86 `sub 2 ; jr nz,+ ; dec a ; add a,(iy+4) ; ld (iy+4),a`
  * With walk speed x1 every hook returns 0 and the original instructions run. */
 #include "sms_runtime.h"
+#include "glue.h"
 #include "z80_ops.h"
 #include "audio/sn76489.h"
 #include "audio/ym2413.h"
@@ -385,6 +390,37 @@ static void hover_init(void)
     s_it_addr = (uint16_t)(rom[b + 11] | (rom[b + 12] << 8));
     s_water_fn = (uint16_t)(rom[b + 19] | (rom[b + 20] << 8));
 }
+/* RUN AWAY. BattleMenu_Run (Rev A $19A5 `ld a,($C2E7)`, after the menu windows are closed): $C2E7 =
+   the enemy's run chance (byte 32 of its record); the original gets away when a random byte is below
+   it and, in random dungeon battles (Interaction_Type 0), the cell behind or beside the party is open
+   (LABEL_687A); else "<ENEMY> BLOCKS YOUR RETREAT." and the enemies attack. ALWAYS: straight to the
+   success path (`ld a,$BC ; ld ($C004),a ; ld a,5 ; ld ($C267),a`, resume +21). Run chance 0 = Tarzimal,
+   Gold Dragon, Lassic, Dark Falz, Saccubus: the game never lets you flee them (the Escaper item
+   neither) -> original code (user decision 2026-11-24). Tools/sms/ps_find_hooks.py group "run away",
+   found in all 17 PS builds. Test env PS_RUN_LOG=1. */
+static int s_run_log = -1;                     /* test: PS_RUN_LOG=1 */
+static uint64_t s_run_check;                   /* test: frame at which to print the outcome */
+int ps_run_away(void)
+{
+    uint8_t chance = sms_read8(0xC2E7);
+    bool go = s_run_i && chance != 0;
+    if (s_run_log < 0) s_run_log = getenv("PS_RUN_LOG") != NULL;
+    if (s_run_log){
+        fprintf(stderr, "[run] frame %llu run chance %u: %s\n", (unsigned long long)glue_frame_count(), chance, go ? "always (forced)" : "original");
+        s_run_check = glue_frame_count() + 1;
+    }
+    return go;
+}
+/* test: the game's own verdict one frame later: $C267 = 5 got away; otherwise blocked (the "BLOCKS YOUR
+   RETREAT" text is on screen, $C267 still = the character who chose RUN, 4 only after the text) */
+static void run_log_frame(uint64_t frame)
+{
+    if (!s_run_check || frame < s_run_check) return;
+    uint8_t c = sms_read8(0xC267);
+    fprintf(stderr, "[run]   -> $C267 = %u (%s)\n", c, c == 5 ? "got away" : "blocked");
+    s_run_check = 0;
+}
+
 int ps_hover_pass(void)
 {
     if (!s_hover_i) return 0;
@@ -801,6 +837,7 @@ static const HudOption k_mult_opts[] = {
 };
 static const HudOption k_opts[] = {
     { "ENCOUNTERS",        k_enc_names,  N_ENC,  &s_enc_i, on_enc_changed },
+    { "RUN AWAY",          k_run_names,  2,      &s_run_i, NULL },
     { "MAP SIDE WINDOW",   k_onoff,      2,      &s_map_i, on_map_changed },
     { "WALK SPEED",        k_walk_names, 3,      &s_walk_i, NULL },
     { "FAST FORWARD",      k_ff_names,   N_FF,   &s_ff_i, on_ff_changed },
@@ -962,6 +999,7 @@ void ps_on_post_reset(void)
 
 void ps_on_frame_post(uint64_t frame)
 {
+    run_log_frame(frame);
     ps_automap_frame(frame);
     ps_worldmap_frame();
     {   uint8_t mode = sms_read8(0xC202);

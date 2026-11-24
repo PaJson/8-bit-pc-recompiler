@@ -117,6 +117,12 @@ GROUPS = [
         ("ps_battle_round_open", "af 32 67 c2 32 d4 c2 cd .. .. cd .. ..", 7, 6),
         ("ps_battle_round_close", "af 32 67 c2 cd .. .. cd .. .. cd .. .. 21 a0 c2 06 0c", 4, 6),
     ]),
+    # RUN AWAY (ps_qol.c ps_run_away): BattleMenu_Run `ld a,($C2E7) ; ld b,a ; call UpdateRNGSeed ; cp b ;
+    #   jr nc,fail ; ld a,(Interaction_Type) ; or a ; jr nz,+ ; call LABEL_687A ; jr nz,fail ;
+    #   + ld a,$BC ; ld ($C004),a` (Rev A $19A5, resume = the success path +21). Found in all 17 PS builds.
+    ("run away", [
+        ("ps_run_away", "3a e7 c2 47 cd .. .. b8 30 .. 3a 9e c2 b7 20 .. cd .. .. 20 .. 3e bc 32 04 c0", 0, 21),
+    ]),
     # ORIGINAL BUG FIXES (ps_fixes.c; all only observe). Text box: the engine's character fetch
     # LABEL_31FA `ld a,(hl) ; or a ; jp m,.. ; cp $65 ; jp nc,.. ; cp $62 ; ret z` and its re-entry
     # with the box still open LABEL_31CB `dec hl ; jp LABEL_3235` (right before ShowDialogue_B12's

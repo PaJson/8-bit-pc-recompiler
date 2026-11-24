@@ -448,7 +448,10 @@ void mw_map_panel(uint32_t *b, int w, int h)
     if (!s_rom || sms_read8(0xC440) == 0) {          /* title / name entry */
         box(b, w, h, 8, 8, w - 8, h - 8);
         if (hud_logo(NULL, NULL)) hud_draw_logo(b, w, h, HUD_SPACE_PANEL, 24.f, (float)(h / 2 - 70), (float)(w - 48), 120.f, true);
-        else hud_text_scaled(b, w, h, (w - 8 * 12) / 2, h / 2 - 7, "MIRACLE", CYAN, 2);
+        else {                                        /* two lines, like Phantasy Star's panel */
+            hud_text_scaled(b, w, h, (w - 7 * 12) / 2, h / 2 - 30, "MIRACLE", CYAN, 2);
+            hud_text_scaled(b, w, h, (w - 8 * 12) / 2, h / 2 - 6, "WARRIORS", CYAN, 2);
+        }
         return;
     }
     char t[48];

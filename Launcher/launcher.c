@@ -12,7 +12,8 @@
  * .zip), applied, checked against `crc32` and written to ROMs/Patched/<rom_name>. Without the patch
  * file the entry says which file to put there.
  * A game is started like its play.ps1 does: <exe> "<rom>" --window <scale>, working directory = the
- * game folder, SMS_SAVE_DIR = Games/<slug>/saves; exe = `exe = "..."` next to game.toml (Release)
+ * game folder, SMS_SAVE_DIR = Games/<slug>/saves, no console window (output -> Games/<slug>/run.log), focus
+ * handed to the game's window before the launcher hides; exe = `exe = "..."` next to game.toml (Release)
  * or the .exe in Games/<slug>/build. A game that is not built yet is built first (its build.ps1, output in
  * Games/<slug>/build_log.txt; this recompiles the ROM and can take minutes; the Release layout has no
  * build.ps1). The launcher hides while a game runs.
@@ -48,6 +49,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <SDL.h>
+#include <SDL_syswm.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -639,6 +641,28 @@ static uint32_t g_status_col = 0xFFA0A0B0;
 static char g_build_log[MAX_PATH];
 static bool g_play_after_build;
 
+static bool g_wait_win; static Uint32 g_wait_win_until;   /* game started, its window not focused yet */
+
+/* the visible top-level window of a process (the game's main window) */
+typedef struct { DWORD pid; HWND found; } FindWin;
+static BOOL CALLBACK find_win_cb(HWND h, LPARAM lp)
+{
+    FindWin *f = (FindWin *)lp; DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    char cls[64] = "";
+    GetClassNameA(h, cls, sizeof cls);                 /* never a console window (Windows reports the client's pid for those) */
+    if (!strcmp(cls, "ConsoleWindowClass") || !strcmp(cls, "PseudoConsoleWindow")) return TRUE;
+    if (pid == f->pid && IsWindowVisible(h) && !GetWindow(h, GW_OWNER)) { f->found = h; return FALSE; }
+    return TRUE;
+}
+static HWND process_window(DWORD pid) { FindWin f = { pid, NULL }; EnumWindows(find_win_cb, (LPARAM)&f); return f.found; }
+static HWND sdl_hwnd(SDL_Window *w)
+{
+    SDL_SysWMinfo info; SDL_VERSION(&info.version);
+    return w && SDL_GetWindowWMInfo(w, &info) ? info.info.win.window : NULL;
+}
+static void take_focus(HWND h) { if (h) { if (IsIconic(h)) ShowWindow(h, SW_RESTORE); SetForegroundWindow(h); } }
+
 static bool start_game(const Game *g)
 {
     char saves[MAX_PATH]; snprintf(saves, sizeof saves, "%s\\saves", g->dir);
@@ -646,12 +670,32 @@ static bool start_game(const Game *g)
     char cmd[3 * MAX_PATH];
     const char *extra = getenv("LAUNCHER_GAME_EXTRA");                  /* test: extra runner arguments */
     snprintf(cmd, sizeof cmd, "\"%s\" \"%s\" --window %d %s", g->exe, g->rom, g_game_scale, extra ? extra : "");
+    /* The game exes are console programs: started plainly, Windows opened a console (terminal) window
+       for each, which took the focus from the game's window (user report). No console now; the game's
+       text output (statistics, dispatch misses) goes to <game folder>\run.log instead. */
+    char logp[MAX_PATH]; snprintf(logp, sizeof logp, "%s\\run.log", g->dir);
+    SECURITY_ATTRIBUTES sa = { sizeof sa, NULL, TRUE };
+    HANDLE log = CreateFileA(logp, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     STARTUPINFOA si; memset(&si, 0, sizeof si); si.cb = sizeof si;
+    if (log != INVALID_HANDLE_VALUE) { si.dwFlags = STARTF_USESTDHANDLES; si.hStdOutput = log; si.hStdError = log; si.hStdInput = NULL; }
     SetEnvironmentVariableA("SMS_SAVE_DIR", saves);
-    BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, g->dir, &si, &g_proc);
+    char pid[16]; snprintf(pid, sizeof pid, "%lu", (unsigned long)GetCurrentProcessId());
+    SetEnvironmentVariableA("SMS_FRONTEND_PID", pid);              /* the game hands the focus back when it closes */
+    BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, log != INVALID_HANDLE_VALUE, CREATE_NO_WINDOW, NULL, g->dir, &si, &g_proc);
+    if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
     SetEnvironmentVariableA("SMS_SAVE_DIR", NULL);
+    SetEnvironmentVariableA("SMS_FRONTEND_PID", NULL);
     if (!ok) { snprintf(g_status, sizeof g_status, "Could not start %s", g->exe); g_status_col = 0xFFFF6060; return false; }
     g_proc_kind = 1; snprintf(g_proc_slug, sizeof g_proc_slug, "%s", g->slug);
+    fprintf(stderr, "[launcher] started %s\n", g->slug);
+    /* Focus: Windows lets only the foreground program bring a window to the front. Hiding the launcher
+       right away gave the foreground to the window behind it (e.g. a terminal) before the game's window
+       existed, so the game came up without the focus (user report). Now the launcher allows the game to
+       take the foreground, stays visible until the game's window is there, gives it the focus itself and
+       only then hides (main loop, g_wait_win). */
+    AllowSetForegroundWindow(g_proc.dwProcessId);
+    g_wait_win = true; g_wait_win_until = SDL_GetTicks() + 15000;
+    snprintf(g_status, sizeof g_status, "Starting %s ...", g->name); g_status_col = 0xFFFFE040;
     return true;
 }
 
@@ -1252,7 +1296,7 @@ static void play_selected(bool force_build)
     }
     if (force_build || g->state == ST_NOT_BUILT) { start_build(g, !force_build); return; }
     g_status[0] = 0;
-    if (start_game(g)) SDL_HideWindow(g_win);
+    start_game(g);                                 /* the launcher hides once the game window has the focus */
 }
 
 static void poll_process(void)
@@ -1269,11 +1313,15 @@ static void poll_process(void)
     char slug[64]; snprintf(slug, sizeof slug, "%s", g_proc_slug);
     scan_games();
     for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
-    if (kind == 1) { SDL_ShowWindow(g_win); SDL_RaiseWindow(g_win); return; }
+    if (kind == 1) {
+        SDL_ShowWindow(g_win); SDL_RaiseWindow(g_win); take_focus(sdl_hwnd(g_win)); g_wait_win = false;
+        fprintf(stderr, "[launcher] game ended; foreground = launcher: %s\n", GetForegroundWindow() == sdl_hwnd(g_win) ? "yes" : "no");
+        return;
+    }
     Game *g = (g_sel >= 0 && g_sel < g_ngames) ? &g_games[g_sel] : NULL;
     if (code != 0 || !g || g->state != ST_READY) { snprintf(g_status, sizeof g_status, "Build failed - see build_log.txt in the game folder (%s)", slug); g_status_col = 0xFFFF6060; return; }
     snprintf(g_status, sizeof g_status, "Build finished."); g_status_col = 0xFF7CE07C;
-    if (g_play_after_build) { g_status[0] = 0; if (start_game(g)) SDL_HideWindow(g_win); }
+    if (g_play_after_build) { g_status[0] = 0; start_game(g); }
 }
 
 /* ---------------- title screens: captured from the ROMs in the background ----------------
@@ -1380,15 +1428,12 @@ int main(int argc, char **argv)
         }
     }
     bool quit = false; Uint32 last_click = 0; int last_click_row = -1;
-    {   /* test: LAUNCHER_AUTO=play:<slug> | build:<slug> starts that action; LAUNCHER_EXIT_AFTER=1 quits when it ends */
-        const char *a = getenv("LAUNCHER_AUTO");
-        if (a && (!strncmp(a, "play:", 5) || !strncmp(a, "build:", 6))) {
-            const char *slug = strchr(a, ':') + 1;
-            g_splash = false;
-            for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
-            play_selected(a[0] == 'b');
-        }
-    }
+    /* test: LAUNCHER_AUTO=play:<slug> | build:<slug> starts that action (LAUNCHER_AUTO_MS=<ms> after the
+       start, e.g. once a test script has brought the launcher to the front); LAUNCHER_EXIT_AFTER=1 quits when it ends */
+    const char *auto_act = getenv("LAUNCHER_AUTO");
+    Uint32 auto_at = getenv("LAUNCHER_AUTO_MS") ? (Uint32)atol(getenv("LAUNCHER_AUTO_MS")) : 0;
+    if (auto_act && strncmp(auto_act, "play:", 5) && strncmp(auto_act, "build:", 6)) auto_act = NULL;
+    if (auto_act) g_splash = false;
     bool exit_after = getenv("LAUNCHER_EXIT_AFTER") != NULL;
     Uint32 nav_t = 0; int nav_dir = 0; Uint32 nav_next = 0;
     g_splash_t = SDL_GetTicks();
@@ -1471,11 +1516,29 @@ int main(int argc, char **argv)
             Uint32 held = SDL_GetTicks() - nav_t;
             nav_next = SDL_GetTicks() + (held > 1500 ? 40 : held > 800 ? 80 : 120);
         }
+        if (auto_act && SDL_GetTicks() >= auto_at) {              /* test: LAUNCHER_AUTO */
+            const char *slug = strchr(auto_act, ':') + 1;
+            for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
+            play_selected(auto_act[0] == 'b');
+            auto_act = NULL;
+        }
         int was = g_proc_kind;
         poll_process();
         title_capture_tick();
         if (exit_after && was && !g_proc_kind) { fprintf(stderr, "[launcher] %s\n", g_status[0] ? g_status : "game ended"); quit = true; }
-        if (g_proc_kind == 1) { SDL_Delay(100); continue; }        /* game running: launcher hidden */
+        if (g_proc_kind == 1 && g_wait_win) {                     /* game started: focus its window, then hide */
+            HWND gw = process_window(g_proc.dwProcessId);
+            if (gw || SDL_GetTicks() >= g_wait_win_until) {
+                take_focus(gw);
+                fprintf(stderr, "[launcher] game window %s; foreground = game: %s\n", gw ? "found" : "NOT found (timeout)",
+                        gw && GetForegroundWindow() == gw ? "yes" : "no");
+                SDL_HideWindow(g_win); g_wait_win = false; g_status[0] = 0;
+            } else { render(); SDL_Delay(15); continue; }
+        }
+        if (g_proc_kind == 1) {                                     /* game running: launcher hidden */
+            WaitForSingleObject(g_proc.hProcess, 100);             /* wakes at once when the game ends (focus back sooner) */
+            continue;
+        }
         render();
         art_warm();
         SDL_Delay(g_proc_kind ? 30 : 15);

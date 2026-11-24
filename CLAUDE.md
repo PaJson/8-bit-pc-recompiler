@@ -71,6 +71,35 @@ templates in `mkgame.py`, then the same folders. Candidate engines (user's forks
   `Images/<platform>/` only with `--with-images`.
 - Not done (discussed): the PS side panel's pre-game screen could show the `(title)` picture (panel is 256 px wide) instead of the text.
 
+## Quit prompt, PS RUN AWAY (2026-11-24)
+- **Esc in a game window asks "QUIT THE GAME?"** (user: accidental presses closed the game). Engine `host_sdl.c` (`g_quit_ask`,
+  `host_quit_asking()`), `hud.c hud_draw_quit_prompt` (solid box, fits the GG picture), `main.c` pauses the emulation like the HUD.
+  Enter / Space / Z / pad A = quit; Esc / X / Backspace / F1 / pad B / Start / Back = keep playing (a double Esc never quits). The
+  window's X button / Alt+F4 still close at once (user's choice). Not in the GPU `--internal-scale` path (no pause loop there; Enter
+  still quits). Engine test env `SMS_TEST_KEYS="<frame>:<SDL key name>,..."` injects key presses (verified: Esc+Esc = plays on,
+  Esc+Return = quits at that frame, arrows ignored).
+- **PS RUN AWAY = ORIGINAL / ALWAYS (NOT BOSSES)** (OPTIONS tab after ENCOUNTERS, ini `run_away`). BattleMenu_Run (Rev A `$19A5`):
+  random byte < `$C2E7` (enemy record byte 32, run chance) and, in random dungeon battles (`Interaction_Type` 0), an open cell
+  behind / beside the party (LABEL_687A); else "<ENEMY> BLOCKS YOUR RETREAT." Hook `ps_run_away` (ps_find_hooks group "run away",
+  all 17 builds, resume +21 = the success path). Run chance 0 = Tarzimal, Gold Dragon, Lassic, Dark Falz, Saccubus (the game and
+  the Escaper item never let you flee them): kept original (user decision). Others 76..255 (Barbarian lowest). Verified Rev A with
+  forced run chance 1: off 16 / 16 blocked, on 7 / 7 got away; chance 0 + on: blocked; soaks Japan / Korea / EN 2.6.1 / AGES Ja
+  20000 frames clean; lockstep `rand1` 20000 (off) final SAME. Test env `PS_RUN_LOG=1` (the game's verdict one frame later:
+  `$C267` = 5 got away, else the blocked text is showing).
+- **Launcher focus (user report: the game window came up without the focus, intermittently; a terminal had it):** the game exes
+  are CONSOLE programs, so starting one plainly opened a console window that took the focus. Now the launcher starts games with
+  `CREATE_NO_WINDOW` (their output -> `Games/<platform>/<slug>/run.log`, git-ignored by `*.log`), calls
+  `AllowSetForegroundWindow(game pid)`, stays visible until the game's window exists (EnumWindows by pid, console window classes
+  skipped), `SetForegroundWindow`s it and only then hides (15 s timeout). Back: the launcher passes `SMS_FRONTEND_PID`; the runner
+  (`main.c`, after `glue_run`, window still focused) calls `AllowSetForegroundWindow(that pid)`; the launcher wakes on the
+  process handle and `SetForegroundWindow`s itself. Verified with `scratchpad`-style test: launcher brought to front, then
+  `LAUNCHER_AUTO=play:<slug>` + new `LAUNCHER_AUTO_MS=<ms>` (delayed auto action) + `SMS_TEST_KEYS="400:Escape,400:Return"`
+  (the game quits itself), polling `GetForegroundWindow`: 3 / 3 runs game focused, launcher focused again (a 0.1-0.2 s gap while
+  the game process shuts down). The launcher logs `[launcher] started / game window found; foreground = game: yes / game ended;
+  foreground = launcher: yes` on stderr.
+- **Rebuilding after a `game.toml` hook change:** `cmake --build` does NOT regenerate (build dirs have `SMSGG_REGENERATE=OFF`);
+  run the game's `build.ps1` or `SmsRecomp.exe <rom> --game game.toml` in the game folder first.
+
 ## Layout (project root = this folder)
 
 **Renaming the project folder** (user wish 2026-11-15: "SEGA Master System PC Re-compiler"; 2026-11-22: "SMS PC Recompiler", renamed by the user the same day; later 2026-11-22: "8-bit PC Recompiler" = the script's default now): run `Tools/rename_project.ps1` from a plain PowerShell window with VS Code, Claude Code, the launcher and all games closed. It renames the folder, copies Claude Code's project data (`%USERPROFILE%\.claude\projects\<path with non-alphanumerics as '-'>`: memory + conversations; old copy kept) and repairs every CMake build folder in place (old path replaced in CMakeCache.txt, CMakeFiles/ + ninja state removed, reconfigured with its own settings; `-Rebuild` also builds all). Tested on a scratch copy (launcher build renamed into a name with `#` and spaces, then built). Nothing else stores the absolute path (sources, scripts, git incl. the submodule, saves, ini files). Done by the user 2026-11-15.
