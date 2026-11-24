@@ -13,11 +13,13 @@ patched ROM (header + checksum by .SMSHEADER). Then:
   - writes the patched ROM to ROMs/sms/Patched/ (not with --no-rom), for the recompiled build
     Games/sms/golvellius-plus
   - copies the .ips / .bps + a player's readme (.txt) to ROMs/sms/Patches/Golvellius - Valley of Doom/
-    Golvellius Plus/ (git-ignored), for other emulators and flash carts
+    Golvellius Plus/ (git-ignored), for other emulators and flash carts, and the same three files to
+    Patches/sms/Golvellius/dist/ (COMMITTED: the release ships them; built on GitHub without a ROM)
+  - keeps "# ROM CRC32 XXXXXXXX" in Games/sms/golvellius-plus/game.toml up to date (make_release.py)
 WLA-DX is the git submodule External/wla-dx (the user's fork); it is built on first use into
 External/build/wla-dx with the MSYS2 tool chain (C:/msys64/mingw64).
 """
-import sys, os, shutil, subprocess, zlib
+import sys, os, re, shutil, subprocess, zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.dirname(HERE))   # Tools/sms (sms_checksum), Tools (apply_patch)
 import apply_patch, sms_checksum
@@ -245,6 +247,26 @@ def main(argv):
     with open(os.path.join(rel, NAME + '.txt'), 'w', encoding='utf-8', newline='\r\n') as f:
         f.write(README % {'crc_src': CRC_ORIG, 'crc_dst': crc(dst), 'sum': c})
     print('wrote %s (.ips, .bps, .txt)' % os.path.relpath(rel, ROOT))
+
+    # committed copy (Patches/sms/Golvellius/dist/): the release ships it (Tools/make_release.py, also on
+    # GitHub, where no ROM is there to build the patch from). Our code bytes + the header checksum only.
+    dist = os.path.join(SRC_DIR, 'dist')
+    os.makedirs(dist, exist_ok=True)
+    for ext in ('.ips', '.bps', '.txt'):
+        shutil.copyfile(os.path.join(rel, NAME + ext), os.path.join(dist, NAME + ext))
+    print('wrote %s (.ips, .bps, .txt)' % os.path.relpath(dist, ROOT))
+    # the game folder's ROM CRC32 (header comment read by make_release.py)
+    gt = os.path.join(ROOT, 'Games', 'sms', 'golvellius-plus', 'game.toml')
+    if os.path.isfile(gt):
+        t = open(gt, encoding='utf-8').read()
+        line = '# ROM CRC32 %08X (the patched ROM; written by Tools/sms/gv_build_patch.py)' % crc(dst)
+        if re.search(r'^# ROM CRC32 ', t, re.M):
+            t2 = re.sub(r'^# ROM CRC32 [0-9A-F]{8} .*$', line, t, count=1, flags=re.M)
+        else:
+            t2 = t.replace('\n[game]', '\n' + line + '\n\n[game]', 1)
+        if t2 != t:
+            open(gt, 'w', encoding='utf-8', newline='\n').write(t2)
+            print('updated %s: %s' % (os.path.relpath(gt, ROOT), line))
     return 0
 
 

@@ -1,0 +1,74 @@
+# Release: builds "<name> v<version>.zip" (Tools/make_release.py) on a clean Windows machine.
+#
+#   push a tag v<version> (= `version` in app_info.toml, e.g. v0.1.0)  -> a GitHub Release with the zip
+#   Actions tab -> "Release" -> "Run workflow"                         -> the zip as a workflow artifact only
+#
+# No ROMs are involved: the zip holds the launcher, the recompiler, a C compiler (whole MSYS2 packages)
+# and the prebuilt runner; games are built on the player's PC from the player's ROMs. make_release.py
+# ends with a smoke test (a tiny ROM of our own built and run with nothing but the release on PATH).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        id: ver
+        shell: pwsh
+        run: |
+          $m = Select-String -Path app_info.toml -Pattern '^name\s*=\s*"([^"]+)"'
+          $v = Select-String -Path app_info.toml -Pattern '^version\s*=\s*"([^"]+)"'
+          $name = $m.Matches[0].Groups[1].Value; $version = $v.Matches[0].Groups[1].Value
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$version") {
+            throw "tag ${{ github.ref_name }} does not match app_info.toml version $version (expected tag v$version)"
+          }
+          "title=$name v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build the release
+        shell: pwsh
+        run: python -I Tools/make_release.py out --zip --msys "${{ steps.msys2.outputs.msys2-location }}"
+
+      - name: Upload (workflow artifact)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.ver.outputs.title }}
+          path: out/${{ steps.ver.outputs.title }}.zip
+          compression-level: 0
+
+      - name: GitHub Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" "out/${{ steps.ver.outputs.title }}.zip" `
+            --title "${{ steps.ver.outputs.title }}" `
+            --notes "Unzip, put your own ROMs into ROMs\sms\ (see ROMs\README.txt), start Launcher.exe. No games or ROMs are included; each game is built on your PC from your ROM. See README.txt."

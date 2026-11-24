@@ -141,6 +141,35 @@ static void load_objects(void)
     if (getenv("PS_AUTOMAP_ASCII")) fprintf(stderr, "[automap] %d objects, %d hidden at start\n", g_nobj, nhid);
 }
 
+/* ---- the floor layouts in ROM (B15_DungeonLayouts: 128 bytes per floor, a nibble per cell, high nibble
+   first), found by the first floor's first row + 1 cell. Used to know when RAM $CB00 holds the floor
+   Dungeon_index names: entering a dungeon switches the index first, and $CB00 still holds the previous
+   dungeon's layout for some frames (the first recording then used the wrong floor: user report 2026-11-24,
+   stairs / exit behind the party not shown after entering a second dungeon). ---- */
+static long g_layouts = -1;                 /* ROM offset, -1 = not found (then: hash-stable only, as before) */
+#define N_FLOORS 61
+static void load_layouts(void)
+{
+    g_layouts = -1;
+    size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
+    static const uint8_t lay0[16] = { 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+                                      0x11, 0x11, 0xA0, 0x00, 0x01, 0x01, 0x11, 0xA1 };
+    if (!rom) return;
+    for (size_t i = 0; i + 128 * N_FLOORS <= n; i++)
+        if (rom[i] == 0x11 && !memcmp(rom + i, lay0, sizeof lay0)) { g_layouts = (long)i; break; }
+    if (g_layouts < 0) fprintf(stderr, "[automap] dungeon layouts not found in the ROM: recording waits for a stable layout only\n");
+}
+/* number of cells of $CB00 (low nibble) that equal floor f's layout (256 = all; doors / chests change a few) */
+static int layout_match(int f, const uint8_t *map)
+{
+    size_t n = 0; const uint8_t *rom = glue_rom_image(&n);
+    if (g_layouts < 0 || !rom || f < 0 || f >= N_FLOORS) return 256;
+    const uint8_t *b = rom + g_layouts + 128 * f;
+    int m = 0;
+    for (int i = 0; i < 256; i++) m += (map[i] & 0x0F) == ((i & 1) ? (b[i >> 1] & 15) : (b[i >> 1] >> 4));
+    return m;
+}
+
 static const MapObject *object_at(uint8_t floor, int pos)
 {
     for (int i = 0; i < g_nobj; i++) if (g_obj[i].floor == floor && g_obj[i].pos == pos) return &g_obj[i];
@@ -716,6 +745,9 @@ static void ascii_dump(int px, int py, int dir)
         }
         fprintf(stderr, "[automap] %s\n", row);
     }
+    fprintf(stderr, "[automap] visited:");
+    for (int p = 0; p < 256; p++) if (g_cur->flags[p] & VISITED) fprintf(stderr, " %02X", p);
+    fprintf(stderr, "\n");
 }
 
 void ps_automap_init(void)
@@ -723,6 +755,7 @@ void ps_automap_init(void)
     build_path();
     load_file();
     load_objects();
+    load_layouts();
     memset(&g_work, 0, sizeof g_work); g_cur = NULL;
     g_prev_mode = -1; g_load_window = 0;
 }
@@ -797,12 +830,24 @@ void ps_automap_enable(bool on)       /* the side window (the HUD page is always
     if (!on) window_hide();
 }
 
-/* Stairs / doors: the game moves the party 2 cells (past the stairs or door), so the party never
-   stands on them. Reveal the 3x3 around such a cell when the party arrives next to it. */
+/* Stairs / doors: the game moves the party 2 cells (past the stairs or door; LABEL_6731: position +=
+   2 steps, facing kept), so the party never stands on them. A passage the party used counts as VISITED
+   and the 3x3 around it is revealed: the one behind the party when it arrives (stairs from another
+   floor, a door walked through, the exit of a dungeon entrance: all 44 entrance records put the party
+   on a floor cell with the exit right behind it, facing away), the stairs ahead of its last cell when
+   it leaves a floor, and the exit ahead when it leaves the dungeon (user report 2026-11-24). */
 static bool is_passage(uint8_t cell) { int t = cell & 7; return t >= 2 && t <= 6; }
+static bool is_stairs(uint8_t cell) { int t = cell & 7; return t == 2 || t == 3; }
+static bool is_exit(uint8_t cell) { return (cell & 8) && is_passage(cell); }   /* leads out (B03_DungeonTransitionData) */
 static void reveal_around(DungeonMemory *m, int x, int y)
 {
     for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) reveal(m, x + dx, y + dy, SEEN);
+}
+static void mark_used(DungeonMemory *m, int x, int y)
+{
+    if (!m || x < 0 || x > 15 || y < 0 || y > 15) return;
+    reveal(m, x, y, VISITED | SEEN);
+    reveal_around(m, x, y);
 }
 
 /* Settling: on a floor change (stairs, pit) the game switches Dungeon_index and the layout at once,
@@ -813,13 +858,25 @@ static void reveal_around(DungeonMemory *m, int x, int y)
 static bool g_was_in, g_pending;
 static int  g_pend_frames, g_pend_pos, g_last_floor = -1, g_last_pos = -1;
 
+/* the cell ahead of the party's last recorded cell (on the floor it was on), if `want` says so: used */
+static void mark_ahead(bool (*want)(uint8_t))
+{
+    if (!g_cur || g_last_pos < 0) return;
+    int x = (g_last_pos & 15) + DX[g_cur_dir], y = (g_last_pos >> 4) + DY[g_cur_dir];
+    if (x < 0 || x > 15 || y < 0 || y > 15 || !want(g_cur->cells[y * 16 + x])) return;
+    mark_used(g_cur, x, y);
+}
+
 void ps_automap_frame(uint64_t frame)
 {
     (void)frame;
     uint8_t mode = sms_read8(RAM_GAME_MODE);
     track_saves(mode);
     g_in_dungeon = (mode == MODE_DUNGEON);
-    if (!g_in_dungeon) { g_was_in = false; g_last_pos = -1; window_hide(); return; }
+    if (!g_in_dungeon) {
+        if (g_was_in) mark_ahead(is_exit);                 /* left the dungeon: through the exit ahead */
+        g_was_in = false; g_last_pos = -1; window_hide(); return;
+    }
 
     uint8_t map[256]; bool any = false;
     for (int i = 0; i < 256; i++) { map[i] = sms_read8((uint16_t)(RAM_DNG_MAP + i)); any |= map[i] != 0; }
@@ -832,17 +889,28 @@ void ps_automap_frame(uint64_t frame)
     static uint32_t prev_hsh;
     bool stable = hsh == prev_hsh; prev_hsh = hsh;
     if (!any || !stable) return;                         /* layout not (fully) loaded yet: loads over 1-2 frames */
+    {   int m = layout_match(floor, map);                /* $CB00 still the previous floor / dungeon */
+        static int tr = -1; if (tr < 0) tr = getenv("PS_AUTOMAP_TRACE") != NULL;
+        if (tr && m < 256) fprintf(stderr, "[amtrace] f=%llu floor %02X: %d/256 cells match the ROM layout\n", (unsigned long long)frame, floor, m);
+        if (m < 224) return;
+    }
 
-    bool arrived = false;
+    /* how the party got here: 1 = entered the dungeon (exit behind), 2 = stairs from another floor
+       (stairs behind), 0 = walking (a door walked through is found below), pit / timeout = 0 */
+    int arrived = 0;
     if (!g_was_in) {                                     /* entered from outside: position is final */
-        g_was_in = true; g_pending = false; arrived = true;
+        g_was_in = true; g_pending = false; arrived = 1;
     } else if (floor != g_last_floor) {                  /* stairs / pit: wait for the position */
+        if (!(g_cur && g_last_pos >= 0 && (g_cur->cells[g_last_pos] & 0x0F) == 8))   /* not a fall through a pit */
+            mark_ahead(is_stairs);                       /* the stairs taken, on the floor just left */
         g_pending = true; g_pend_frames = 0; g_pend_pos = g_last_pos;
     }
     g_last_floor = floor;
     if (g_pending) {
         if (pos == g_pend_pos && ++g_pend_frames < SETTLE_TIMEOUT) return;
-        g_pending = false; arrived = true;
+        g_pending = false;
+        arrived = pos != g_pend_pos ? 2 : 0;             /* a pit keeps the position */
+        g_last_pos = -1;
     }
 
     int px = pos & 15, py = pos >> 4;
@@ -854,12 +922,15 @@ void ps_automap_frame(uint64_t frame)
     for (int i = 0; i < g_nobj; i++)                     /* hidden-at-start chests: remember once available */
         if (g_obj[i].hidden && g_obj[i].floor == floor && sms_read8(g_obj[i].flag) != 0xFF) g_cur->flags[g_obj[i].pos] |= AVAIL;
     reveal_around(g_cur, px, py);
-    {   /* arrived past stairs (or walked through a door): also show around the stairs/door cell */
+    {   /* arrived past stairs / an exit, or walked through a door: that cell was used */
         int bx = px - DX[dir], by = py - DY[dir];
         bool jumped = !arrived && g_last_pos >= 0 && g_last_pos != pos
                       && px - 2 * DX[dir] == (g_last_pos & 15) && py - 2 * DY[dir] == (g_last_pos >> 4);
-        if ((arrived || jumped) && bx >= 0 && bx < 16 && by >= 0 && by < 16 && is_passage(map[by * 16 + bx]))
-            reveal_around(g_cur, bx, by);
+        if (bx >= 0 && bx < 16 && by >= 0 && by < 16) {
+            uint8_t b = map[by * 16 + bx];
+            if ((arrived == 1 && is_exit(b)) || (arrived == 2 && is_stairs(b)) || (jumped && is_passage(b)))
+                mark_used(g_cur, bx, by);
+        }
     }
     g_last_pos = pos;
     {   /* what the 3D view shows (LABEL_6AED / LABEL_6C46, cell offsets LABEL_6C06): cells 1..3 ahead,

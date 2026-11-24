@@ -6,8 +6,25 @@ set(SMSGG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../Recomp/smsggrecomp" CACHE PATH "s
 
 find_package(SDL2 CONFIG REQUIRED)
 
-add_executable(Launcher WIN32 launcher.c "${SMSGG_ROOT}/runner/hud.c" "${SMSGG_ROOT}/runner/art.c")
+add_executable(Launcher WIN32 launcher.c release_build.c "${SMSGG_ROOT}/runner/hud.c" "${SMSGG_ROOT}/runner/art.c")
 target_include_directories(Launcher PRIVATE "${SMSGG_ROOT}/runner")
+# Name / version from app_info.toml (the project's one place for them)
+set(APP_INFO "${CMAKE_CURRENT_SOURCE_DIR}/../app_info.toml")
+file(READ "${APP_INFO}" _ai)
+string(REGEX MATCH "
+name[ 	]*=[ 	]*\"([^\"]*)\"" _m "
+${_ai}")
+set(APP_NAME "${CMAKE_MATCH_1}")
+string(REGEX MATCH "
+version[ 	]*=[ 	]*\"([0-9]+)\.([0-9]+)\.([0-9]+)\"" _m "
+${_ai}")
+set(APP_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+set(APP_VERSION_COMMA "${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0")
+if(NOT APP_NAME OR NOT CMAKE_MATCH_3 MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "app_info.toml: name / version (MAJOR.MINOR.PATCH) not found")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${APP_INFO}")
+target_compile_definitions(Launcher PRIVATE "APP_NAME=\"${APP_NAME}\"" "APP_VERSION=\"${APP_VERSION}\"")
 target_compile_options(Launcher PRIVATE -Wall -Wextra -Wno-format-truncation -Wno-missing-field-initializers -O2)
 if (TARGET SDL2::SDL2main)
     target_link_libraries(Launcher PRIVATE SDL2::SDL2main)

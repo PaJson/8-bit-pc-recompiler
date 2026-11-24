@@ -1,0 +1,51 @@
+GOLVELLIUS PLUS
+===============
+
+A patch for "Golvellius - Valley of Doom" (Sega Master System): save slots, a title menu and an
+OPTIONS page. Every option starts at the original game's behaviour, and passwords still work.
+
+Base ROM:   Golvellius - Valley of Doom (USA, Europe, Brazil) (En).sms
+            256 KB, CRC32 A51376FE (No-Intro). Use the original, unpatched ROM.
+Result:     512 KB, CRC32 9D195ED1, header checksum $FE19 (valid for the real BIOS).
+
+Apply "Golvellius Plus.bps" (it refuses a wrong base ROM) or "Golvellius Plus.ips" with any
+IPS / BPS patcher (for example Flips). Only one patch, nothing else to apply first.
+
+Needs battery-backed cartridge RAM (every emulator has it; on hardware a flash cart or board
+with 512 KB ROM, the Sega mapper and battery RAM).
+
+WHAT IS NEW
+-----------
+Title screen: button 1 shows START / OPTIONS. Button 1 = select, button 2 = back.
+  START    -> the original NEW GAME / CONTINUE.
+  CONTINUE -> PASSWORD (the original password continues) / SAVE (the save slots).
+  Once a game is saved, the cursor starts on CONTINUE, then on SAVE, then on the newest save.
+Save slots: AUTO + 5.
+  - AUTO is written whenever Winkle tells you the password ("GAME SAVED TO AUTO.").
+  - Pause on the overworld (the status screen shows "1:SAVE  2:MAP" under its frame), then button 1:
+    SAVE GAME into slot 1-5.
+  - Game Over asks "SAVE THIS GAME?" under the password (you continue at the start house).
+  - SAVE page: button 1 on a slot = LOAD / DELETE. A loaded game starts where it was saved.
+  - Each slot shows its screen, play time, gold, power and crystals.
+OPTIONS page (stored in the battery RAM; * marks the original game's value; two pages: the PAGE row
+at the bottom, left / right there switches):
+  TEXT FIXES        PASSWARD, three "GOLD" that should be "FIND", DESGINED in the credits
+  MAP FIXES         screen C5 gets its own room, H4 the right cave picture (SMS Power fix)
+  SWORD HIT FIX     every new swing can hurt (original: often only knocks back)
+  SWORD REACH       the sword's hit area 4 or 8 pixels larger
+  EASY CAVE ENTRY   walk into a cave when HALF of you is over the entrance, or already a QUARTER
+                    (at a corner); original: only when you are exactly lined up with it
+  CAVE DOWN SPEED   walking down in top-down caves 1.5x / 2x as fast
+  OVERWORLD SPEED   walking on the overworld 1.5x / 2x as fast
+  KEEP GOLD         continuing no longer halves your gold
+  page 2: GOLD DROPS, DAMAGE DEALT, DAMAGE RECEIVED   0X .. 10X (1X = original)
+
+THE MAP (Pause on the overworld, then button 2): every screen you have seen, in its area's colour
+(a mark in the upper left corner once you have been inside its cave: white = a cave, black =
+Winkle's, white with a black centre = a dungeon), your screen blinks. Button 1 on a square: a picture of
+that screen (half size, drawn from your ROM) and what is there (the cave's person, item and price,
+BOUGHT, the advice text; only for caves you have entered).
+Arrows on that page jump to the next screen you have seen. Pause on the map = straight back to the
+game. The map is saved with each save slot.
+
+Passwords work as before (passwords from the original game too).

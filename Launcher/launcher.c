@@ -13,10 +13,12 @@
  * file the entry says which file to put there.
  * A game is started like its play.ps1 does: <exe> "<rom>" --window <scale>, working directory = the
  * game folder, SMS_SAVE_DIR = Games/<slug>/saves, no console window (output -> Games/<slug>/run.log), focus
- * handed to the game's window before the launcher hides; exe = `exe = "..."` next to game.toml (Release)
- * or the .exe in Games/<slug>/build. A game that is not built yet is built first (its build.ps1, output in
- * Games/<slug>/build_log.txt; this recompiles the ROM and can take minutes; the Release layout has no
- * build.ps1). The launcher hides while a game runs.
+ * handed to the game's window before the launcher hides; exe = Games/<slug>/build/<`exe = "..."` of
+ * game.toml> (release) or the .exe in Games/<slug>/build. A game that is not built yet is built first,
+ * output in Games/<slug>/build_log.txt (this recompiles the ROM and can take minutes): in the developer
+ * tree by its build.ps1, in a release folder (Tools/make_release.py: no build scripts, but Engine\ with
+ * the recompiler, a C compiler and the prebuilt runner) by `Launcher.exe --build <game folder> <rom>`
+ * (release_build.c). The launcher hides while a game runs.
  *
  * Background: `background = <path>` in launcher.ini, else the app's Images/Background.png (committed,
  * like Logo.png, Icon.png, IconLarge.png, Icon.ico), else another picture in Images/, else a generic
@@ -28,9 +30,10 @@
  * details. <title> is matched against the game's name / ROM file name ("Phantasy Star" = every
  * Phantasy Star entry); `art.<slug> = <title>` in launcher.ini picks a title by hand. Files named
  * "<x> (<kind>)" are never taken as the background.
- * Without a cover, a built game shows its own title screen: Images/<platform>/<display name>
+ * Without a cover, a game shows its own title screen: Images/<platform>/<display name>
  * (title).png, captured from the player's ROM by the game exe (--title-shot) in the background, one
- * game at a time (title_capture_tick); drawn pixel-sharp. Delete the file to capture it again;
+ * game at a time (title_capture_tick); a game not built yet by Engine\<platform>\SmsInterp.exe where
+ * that exists (release: the engine's generic interpreter, no game code in it); drawn pixel-sharp. Delete the file to capture it again;
  * game.toml `title_frame = N` picks the frame by hand. Test env: LAUNCHER_NO_TITLES=1 (no capture),
  * LAUNCHER_CAPTURE_ONLY=1 (capture every missing title without a window, then quit).
  * Text uses the engine HUD font (runner/hud.c). Images are decoded with GDI+ (part of Windows).
@@ -58,6 +61,14 @@
 #include <math.h>
 #include "hud.h"
 #include "art.h"
+#include "release_build.h"
+
+#ifndef APP_NAME                                /* from app_info.toml (Launcher/CMakeLists.txt) */
+#define APP_NAME "8-bit PC Recompiler"
+#endif
+#ifndef APP_VERSION
+#define APP_VERSION "0.0.0"
+#endif
 
 /* ---------------- GDI+ flat API (declared here: mingw's gdiplus headers are C++) ---------------- */
 typedef struct { UINT32 GdiplusVersion; void *DebugEventCallback; BOOL SuppressBackgroundThread; BOOL SuppressExternalCodecs; } GpStartupInput;
@@ -473,9 +484,9 @@ static bool toml_str(const char *path, const char *key, char *out, size_t n)
 
 static void find_exe(Game *g, const char *toml)
 {
-    char exe[200];                                   /* Release layout: `exe = "<file>"` next to game.toml */
+    char exe[200];                                   /* release: `exe = "<file>"` = the program in build\ */
     if (toml_str(toml, "exe", exe, sizeof exe)) {
-        snprintf(g->exe, sizeof g->exe, "%s\\%s", g->dir, exe);
+        snprintf(g->exe, sizeof g->exe, "%s\\build\\%s", g->dir, exe);
         if (!is_file(g->exe)) g->exe[0] = 0;
         return;
     }
@@ -640,6 +651,15 @@ static char g_status[200];                    /* message line */
 static uint32_t g_status_col = 0xFFA0A0B0;
 static char g_build_log[MAX_PATH];
 static bool g_play_after_build;
+/* build progress (drawn under the status line): elapsed time + a bar. Release builds (release_build.c)
+   report 4 steps; step 2 (compiling) is long and silent, so its share of the bar follows an estimate
+   from the size of the generated <prefix>_full.c (~12 s per MB measured here, at -O1 and -O2) and stops
+   at 97 % of the step until the step really ends. Developer builds: ninja's [n/m]. */
+static Uint32 g_build_t0, g_step_t0;
+static int g_build_step;                      /* release build step 1..4, 0 = none / developer build */
+static float g_build_frac;                    /* 0..1 */
+static double g_compile_est_ms;
+static char g_build_dir[MAX_PATH];
 
 static bool g_wait_win; static Uint32 g_wait_win_until;   /* game started, its window not focused yet */
 
@@ -699,20 +719,36 @@ static bool start_game(const Game *g)
     return true;
 }
 
+/* how a game is built here: its build.ps1 (developer tree) or the release kit (Engine\<platform>\build.txt) */
+static bool has_build_script(const Game *g) { char p[MAX_PATH]; snprintf(p, sizeof p, "%s\\build.ps1", g->dir); return is_file(p); }
+static bool has_release_kit(const Game *g)
+{
+    char p[MAX_PATH]; snprintf(p, sizeof p, "%s\\Engine\\%s\\build.txt", g_root, g->platform[0] ? g->platform : "sms");
+    return is_file(p);
+}
+
 static bool start_build(const Game *g, bool play_after)
 {
+    { char sf[MAX_PATH]; snprintf(sf, sizeof sf, "%s\\build_step.txt", g->dir); DeleteFileA(sf); }   /* release build: a fresh step file */
     snprintf(g_build_log, sizeof g_build_log, "%s\\build_log.txt", g->dir);
     SECURITY_ATTRIBUTES sa = { sizeof sa, NULL, TRUE };
     HANDLE log = CreateFileA(g_build_log, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (log == INVALID_HANDLE_VALUE) { snprintf(g_status, sizeof g_status, "Cannot write %s", g_build_log); g_status_col = 0xFFFF6060; return false; }
-    char cmd[2 * MAX_PATH];
-    snprintf(cmd, sizeof cmd, "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\\build.ps1\"", g->dir);
+    char cmd[4 * MAX_PATH];
+    if (has_build_script(g))
+        snprintf(cmd, sizeof cmd, "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\\build.ps1\"", g->dir);
+    else {                                           /* release: this exe in build mode (release_build.c) */
+        char self[MAX_PATH]; GetModuleFileNameA(NULL, self, sizeof self);
+        snprintf(cmd, sizeof cmd, "\"%s\" --build \"%s\" \"%s\"", self, g->dir, g->rom);
+    }
     STARTUPINFOA si; memset(&si, 0, sizeof si); si.cb = sizeof si;
     si.dwFlags = STARTF_USESTDHANDLES; si.hStdOutput = log; si.hStdError = log; si.hStdInput = NULL;
     BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, g->dir, &si, &g_proc);
     CloseHandle(log);
     if (!ok) { snprintf(g_status, sizeof g_status, "Could not start the build"); g_status_col = 0xFFFF6060; return false; }
     g_proc_kind = 2; snprintf(g_proc_slug, sizeof g_proc_slug, "%s", g->slug);
+    g_build_t0 = g_step_t0 = SDL_GetTicks(); g_build_step = 0; g_build_frac = 0; g_compile_est_ms = 0;
+    snprintf(g_build_dir, sizeof g_build_dir, "%s", g->dir);
     g_play_after_build = play_after;
     snprintf(g_status, sizeof g_status, "Building %s ...", g->name); g_status_col = 0xFFFFE040;
     return true;
@@ -738,11 +774,34 @@ static void build_log_tail(char *out, size_t n)
 
 /* the build's stage from the log's last line: ninja's "[n/m] Building / Linking ...", else the
    recompiler / CMake steps before it */
+/* estimated compile time of the generated C (release build step 2) from the size of <prefix>_full.c */
+static double compile_estimate_ms(void)
+{
+    char toml[MAX_PATH], prefix[128], full[MAX_PATH];
+    snprintf(toml, sizeof toml, "%s\\game.toml", g_build_dir);
+    if (!toml_str(toml, "output_prefix", prefix, sizeof prefix)) return 60000;
+    snprintf(full, sizeof full, "%s\\generated\\%s_full.c", g_build_dir, prefix);
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExA(full, GetFileExInfoStandard, &fa)) return 60000;
+    double mb = ((double)fa.nFileSizeHigh * 4294967296.0 + fa.nFileSizeLow) / 1e6;
+    return mb * 12000.0 + 3000.0;
+}
+
 static void build_stage(const char *tail, char *out, size_t n)
 {
     int a, b;
     const char *br = strchr(tail, '[');
+    if (tail[0] == '[' && sscanf(tail, "[%d/%d]", &a, &b) == 2 && b == 4 && strstr(tail, "] ")) {   /* release build: its own words */
+        snprintf(out, n, "Building: %s", strstr(tail, "] ") + 2);
+        if (a != g_build_step) {
+            g_build_step = a; g_step_t0 = SDL_GetTicks();
+            if (a == 2) g_compile_est_ms = compile_estimate_ms();
+        }
+        return;
+    }
+    if (tail[0] == '>') { out[0] = 0; return; }        /* release build: a command line, keep the stage shown */
     if (br && sscanf(br, "[%d/%d]", &a, &b) == 2 && b > 0) {
+        g_build_frac = (float)a / (float)b;
         if (strstr(br, "Linking")) snprintf(out, n, "Building: linking the game (%d/%d)", a, b);
         else snprintf(out, n, "Building: compiling (%d/%d)", a, b);
         return;
@@ -757,6 +816,9 @@ static SDL_Window *g_win; static SDL_Renderer *g_ren;
 static SDL_Texture *g_bg_tex; static int g_bg_w, g_bg_h; static bool g_bg_generic;
 static SDL_Texture *g_ui_tex; static uint32_t *g_ui; static int g_ui_w, g_ui_h;
 static int g_sel, g_top;
+/* the game whose cover / logo is shown: follows g_sel only when no navigation key / button is held and the
+   selection has rested 120 ms (holding a direction scrolled through every cover = flicker; user report) */
+static int g_art_sel = -1;
 static int g_rows = 10;                        /* visible list rows (set while drawing): one page */
 
 static uint32_t mix(uint32_t a, uint32_t b, float t)
@@ -967,8 +1029,9 @@ static void draw_ui(void)
     text(L.x1 - 8 * sc - 6 * 2 * sc * (int)strlen(cnt), L.y0 + 8 * sc, cnt, 0xFFA0A0B0, sc * 2);
     if (g_ngames == 0) {
         text(tx, L.row_y, "No games found.", 0xFFFFFFFF, sc);
-        text(tx, L.row_y + 12 * sc, "Put your ROMs (.sms) in", 0xFFA0A0B0, sc);
-        text(tx, L.row_y + 22 * sc, "the ROMs folder.", 0xFFA0A0B0, sc);
+        text(tx, L.row_y + 12 * sc, "Put your ROMs into the ROMs folder", 0xFFA0A0B0, sc);
+        text(tx, L.row_y + 22 * sc, "(see ROMs\\README.txt), then start", 0xFFA0A0B0, sc);
+        text(tx, L.row_y + 32 * sc, "the launcher again.", 0xFFA0A0B0, sc);
     }
     g_rows = L.rows > 1 ? L.rows : 1;
     if (g_sel < g_top) g_top = g_sel;
@@ -1013,7 +1076,25 @@ static void draw_ui(void)
             text(tx, dy + 33 * sc, line, 0xFFA0A0B0, sc);
         }
     }
-    if (g_status[0]) { char line[260]; snprintf(line, sizeof line, "%.*s", (L.x1 - L.x0 - 16 * sc) / (6 * sc), g_status); text(tx, dy + 33 * sc, line, g_status_col, sc); }
+    if (g_proc_kind == 2) {                                        /* building: status + elapsed time + bar */
+        Uint32 el = (SDL_GetTicks() - g_build_t0) / 1000;
+        char tm[24]; snprintf(tm, sizeof tm, "%u:%02u", el / 60, el % 60);
+        int tw = 6 * sc * (int)strlen(tm);
+        char line[260]; snprintf(line, sizeof line, "%.*s", (L.x1 - L.x0 - 24 * sc - tw) / (6 * sc), g_status);
+        text(tx, dy + 33 * sc, line, g_status_col, sc);
+        text(L.x1 - 8 * sc - tw, dy + 33 * sc, tm, 0xFFA0A0B0, sc);
+        int bx0 = tx, bx1 = L.x1 - 8 * sc, by0 = dy + 43 * sc, by1 = by0 + 3 * sc;
+        fill(bx0, by0, bx1, by1, 0xFF28406C);
+        int fx = bx0 + (int)((bx1 - bx0) * (g_build_frac < 0 ? 0 : g_build_frac > 1 ? 1 : g_build_frac));
+        if (fx > bx0) fill(bx0, by0, fx, by1, 0xFF60D0FF);
+        int span = (bx1 - bx0) / 6, pos = (int)((SDL_GetTicks() / 4) % (Uint32)(bx1 - bx0 + span)) - span;   /* "alive": a light sweeping over the bar */
+        int s0 = bx0 + pos, s1 = s0 + span;
+        if (s0 < bx0) s0 = bx0;
+        if (s1 > bx1) s1 = bx1;
+        if (s1 > s0 && s0 < fx) fill(s0, by0, s1 < fx ? s1 : fx, by1, 0xFFC8F0FF);   /* over the done part */
+        if (s1 > s0 && s1 > fx) fill(s0 > fx ? s0 : fx, by0, s1, by1, 0xFF5A88C8);   /* over the rest */
+    }
+    else if (g_status[0]) { char line[260]; snprintf(line, sizeof line, "%.*s", (L.x1 - L.x0 - 16 * sc) / (6 * sc), g_status); text(tx, dy + 33 * sc, line, g_status_col, sc); }
     text(tx, L.y1 - 13 * sc, g_proc_kind == 2 ? "Please wait ...   ESC QUIT" : "ENTER/A PLAY   R/Y REBUILD   ESC/B BACK", 0xFF8890A0, sc);
     SDL_UpdateTexture(g_ui_tex, NULL, g_ui, w * 4);
 }
@@ -1178,6 +1259,11 @@ static void draw_splash(void)
                 if (dx || dy) hud_text_scaled(g_ui, w, h, x + dx * (sc / 2 + 1), y + dy * (sc / 2 + 1), msg, 0xE0000814u, sc);
         hud_text_scaled(g_ui, w, h, x, y, msg, 0xFFFFE040, sc);
     }
+    {   /* version, bottom right */
+        int sc = layout(w, h).sc;
+        const char *v = "v" APP_VERSION;
+        hud_text_scaled(g_ui, w, h, w - 6 * sc * (int)strlen(v) - 6 * sc, h - 12 * sc, v, 0xA0A0A0B0, sc);
+    }
     SDL_UpdateTexture(g_ui_tex, NULL, g_ui, w * 4);
 }
 static void leave_splash(void) { g_splash = false; g_list_t = g_no_fade ? 0 : SDL_GetTicks(); }
@@ -1218,7 +1304,7 @@ static void render(void)
         return;
     }
     Layout L = layout(w, h);
-    const Game *sel = (g_sel >= 0 && g_sel < g_ngames) ? &g_games[g_sel] : NULL;
+    const Game *sel = (g_art_sel >= 0 && g_art_sel < g_ngames) ? &g_games[g_art_sel] : NULL;
     fade_set(&g_fade_cover, sel ? sel->cover : "");
     fade_set(&g_fade_logo, sel ? sel->logo : "");
     {   /* cover: background dimmed behind it, cross-fade from the previous one */
@@ -1282,16 +1368,15 @@ static void play_selected(bool force_build)
 {
     if (g_proc_kind || g_sel < 0 || g_sel >= g_ngames) return;
     Game *g = &g_games[g_sel];
-    if (g->state == ST_NO_PROFILE) { set_error("This ROM has no build profile (Games folder)."); return; }
+    if (g->state == ST_NO_PROFILE) { set_error("Cannot play this one yet."); return; }
     if (g->state == ST_NEEDS_PATCH) { char m[200]; snprintf(m, sizeof m, "Put %s into ROMs\\<platform>\\Patches first.", g->patch_name[0] ? g->patch_name : "the patch"); set_error(m); return; }
     if (g->state == ST_PATCH) {
         if (!make_patched_rom(g)) return;
         g = &g_games[g_sel];
         if (force_build) return;
     }
-    char ps1[MAX_PATH]; snprintf(ps1, sizeof ps1, "%s\\build.ps1", g->dir);
-    if ((force_build || g->state == ST_NOT_BUILT) && !is_file(ps1)) {      /* Release layout: no sources here */
-        set_error(force_build ? "Rebuilding needs the developer project folder." : "The game program is missing in its Games folder.");
+    if ((force_build || g->state == ST_NOT_BUILT) && !has_build_script(g) && !has_release_kit(g)) {
+        set_error("Cannot build: no build.ps1 and no Engine folder of a release here.");
         return;
     }
     if (force_build || g->state == ST_NOT_BUILT) { start_build(g, !force_build); return; }
@@ -1303,8 +1388,30 @@ static void poll_process(void)
 {
     if (!g_proc_kind) return;
     if (g_proc_kind == 2) {
-        char tail[200]; build_log_tail(tail, sizeof tail);
-        if (tail[0]) { build_stage(tail, g_status, sizeof g_status); g_status_col = 0xFFFFE040; }
+        char tail[200], st[200], sf[MAX_PATH];
+        snprintf(sf, sizeof sf, "%s\\build_step.txt", g_build_dir);   /* release build: its current step */
+        FILE *f = fopen(sf, "r");
+        if (f) {
+            char line[200] = ""; int a = 0, b = 0, used = 0;
+            if (fgets(line, sizeof line, f) && sscanf(line, "%d/%d %n", &a, &b, &used) == 2 && used > 0) {
+                trim(line + used);
+                snprintf(tail, sizeof tail, "[%d/%d] %s", a, b, line + used);
+                build_stage(tail, st, sizeof st);
+                snprintf(g_status, sizeof g_status, "%s", st); g_status_col = 0xFFFFE040;
+            }
+            fclose(f);
+        }
+        else {                                           /* developer build: the log's last line */
+            build_log_tail(tail, sizeof tail);
+            if (tail[0]) { build_stage(tail, st, sizeof st); if (st[0]) { snprintf(g_status, sizeof g_status, "%s", st); g_status_col = 0xFFFFE040; } }
+        }
+        if (g_build_step) {                           /* release build: 1 recompile 0-5 %, 2 compile 5-95 %, 3 link, 4 done */
+            float t = (float)(SDL_GetTicks() - g_step_t0);
+            if (g_build_step == 1) g_build_frac = 0.05f * (t / (t + 3000.0f));
+            else if (g_build_step == 2) { float f = g_compile_est_ms > 0 ? t / (float)g_compile_est_ms : 0; g_build_frac = 0.05f + 0.90f * (f < 0.97f ? f : 0.97f); }
+            else if (g_build_step == 3) g_build_frac = 0.95f + 0.04f * (t / (t + 2000.0f));
+            else g_build_frac = 1.0f;
+        }
     }
     if (WaitForSingleObject(g_proc.hProcess, 0) != WAIT_OBJECT_0) return;
     DWORD code = 1; GetExitCodeProcess(g_proc.hProcess, &code);
@@ -1325,8 +1432,8 @@ static void poll_process(void)
 }
 
 /* ---------------- title screens: captured from the ROMs in the background ----------------
-   A built game without the user's cover and without its title file gets one: its exe runs headless
-   with --title-shot (finds the title screen in the first 60 s; game.toml `title_frame = N` takes that
+   A game without the user's cover and without its title file gets one: its exe (not built yet: the
+   generic Engine\<platform>\SmsInterp.exe of a release, if there) runs headless with --title-shot (finds the title screen in the first 60 s; game.toml `title_frame = N` takes that
    frame instead; never reads or writes saves) and writes Images\<platform>\<name> (title).png. One at a
    time, never while a game or a build runs; ~2 s each. A failure is not retried in this session. */
 static PROCESS_INFORMATION g_ts_proc; static bool g_ts_running; static char g_ts_slug[64];
@@ -1358,11 +1465,17 @@ static void title_capture_tick(void)
     if (g_proc_kind || g_ts_idle) return;
     for (int i = 0; i < g_ngames; i++) {
         const Game *g = &g_games[i];
-        if (g->state != ST_READY || !g->exe[0] || !g->rom[0] || g->cover[0] || !g->title[0] || is_file(g->title) || ts_failed(g->slug)) continue;
+        if ((g->state != ST_READY && g->state != ST_NOT_BUILT) || !g->rom[0] || g->cover[0] || !g->title[0] || is_file(g->title) || ts_failed(g->slug)) continue;
+        char shooter[MAX_PATH];
+        if (g->exe[0]) snprintf(shooter, sizeof shooter, "%s", g->exe);
+        else {
+            snprintf(shooter, sizeof shooter, "%s\\Engine\\%s\\SmsInterp.exe", g_root, g->platform[0] ? g->platform : "sms");
+            if (!is_file(shooter)) continue;
+        }
         char dir[MAX_PATH]; snprintf(dir, sizeof dir, "%s\\Images", g_root); CreateDirectoryA(dir, NULL);
         { size_t dl = strlen(dir); snprintf(dir + dl, sizeof dir - dl, "\\%s", g->platform[0] ? g->platform : "sms"); } CreateDirectoryA(dir, NULL);
         char cmd[4 * MAX_PATH];
-        int n = snprintf(cmd, sizeof cmd, "\"%s\" \"%s\" --title-shot \"%s\"", g->exe, g->rom, g->title);
+        int n = snprintf(cmd, sizeof cmd, "\"%s\" \"%s\" --title-shot \"%s\"", shooter, g->rom, g->title);
         if (g->title_frame > 0) snprintf(cmd + n, sizeof cmd - (size_t)n, " --title-frame %d", g->title_frame);
         STARTUPINFOA si; memset(&si, 0, sizeof si); si.cb = sizeof si;
         if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, NULL, g->dir, &si, &g_ts_proc)) {
@@ -1385,9 +1498,26 @@ static void move_sel(int d)
 /* held direction: +-1 = one row, +-2 = one page (left / right, LB / RB) */
 static int nav_step(int dir) { return dir == 2 ? g_rows : dir == -2 ? -g_rows : dir; }
 
+/* test: the window's picture as a PPM file */
+static void write_shot(const char *path)
+{
+    int w, h; SDL_GetRendererOutputSize(g_ren, &w, &h);
+    uint32_t *px = (uint32_t *)malloc((size_t)w * h * 4);
+    if (px && SDL_RenderReadPixels(g_ren, NULL, SDL_PIXELFORMAT_ARGB8888, px, w * 4) == 0) {
+        FILE *f = fopen(path, "wb");
+        if (f) { fprintf(f, "P6\n%d %d\n255\n", w, h);
+            for (int i = 0; i < w * h; i++) { uint8_t c[3] = { (uint8_t)(px[i] >> 16), (uint8_t)(px[i] >> 8), (uint8_t)px[i] }; fwrite(c, 1, 3, f); }
+            fclose(f); }
+    }
+    free(px);
+}
+
 int main(int argc, char **argv)
 {
-    (void)argc; (void)argv;
+    if (argc == 4 && !strcmp(argv[1], "--build")) {          /* release: build one game (start_build runs this) */
+        find_root();
+        return release_build(g_root, argv[2], argv[3]);
+    }
     find_root();
     load_ini();
     find_background();
@@ -1403,7 +1533,7 @@ int main(int argc, char **argv)
     }
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-    g_win = SDL_CreateWindow("8-bit PC Recompiler", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+    g_win = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0));
     if (!g_win) return 1;
     g_ren = SDL_CreateRenderer(g_win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -1415,16 +1545,10 @@ int main(int argc, char **argv)
             const char *sel = getenv("LAUNCHER_SEL"); if (sel) g_sel = atoi(sel);
             g_no_fade = true;
             g_splash = getenv("LAUNCHER_SPLASH") != NULL;          /* test: shoot the PRESS START screen */
+            g_art_sel = g_sel;
             render(); render();
-            int w, h; SDL_GetRendererOutputSize(g_ren, &w, &h);
-            uint32_t *px = (uint32_t *)malloc((size_t)w * h * 4);
-            if (px && SDL_RenderReadPixels(g_ren, NULL, SDL_PIXELFORMAT_ARGB8888, px, w * 4) == 0) {
-                FILE *f = fopen(shot, "wb");
-                if (f) { fprintf(f, "P6\n%d %d\n255\n", w, h);
-                    for (int i = 0; i < w * h; i++) { uint8_t c[3] = { (uint8_t)(px[i] >> 16), (uint8_t)(px[i] >> 8), (uint8_t)px[i] }; fwrite(c, 1, 3, f); }
-                    fclose(f); }
-            }
-            free(px); SDL_Quit(); return 0;
+            write_shot(shot);
+            SDL_Quit(); return 0;
         }
     }
     bool quit = false; Uint32 last_click = 0; int last_click_row = -1;
@@ -1435,6 +1559,8 @@ int main(int argc, char **argv)
     if (auto_act && strncmp(auto_act, "play:", 5) && strncmp(auto_act, "build:", 6)) auto_act = NULL;
     if (auto_act) g_splash = false;
     bool exit_after = getenv("LAUNCHER_EXIT_AFTER") != NULL;
+    /* test: LAUNCHER_SHOT_MS=<ms>[,<ms>...] + LAUNCHER_SHOT_OUT=<file with %d> = window pictures while it runs */
+    const char *shot_ms = getenv("LAUNCHER_SHOT_MS"), *shot_out = getenv("LAUNCHER_SHOT_OUT");
     Uint32 nav_t = 0; int nav_dir = 0; Uint32 nav_next = 0;
     g_splash_t = SDL_GetTicks();
     while (!quit) {
@@ -1516,6 +1642,18 @@ int main(int argc, char **argv)
             Uint32 held = SDL_GetTicks() - nav_t;
             nav_next = SDL_GetTicks() + (held > 1500 ? 40 : held > 800 ? 80 : 120);
         }
+        {   /* selection changed: old message away; the cover follows once the selection rests */
+            static int last_sel = -1; static Uint32 sel_t;
+            if (g_sel != last_sel) {
+                if (last_sel >= 0 && !g_proc_kind) g_status[0] = 0;
+                last_sel = g_sel; sel_t = SDL_GetTicks();
+            }
+            const Uint8 *ks = SDL_GetKeyboardState(NULL);
+            bool held = nav_dir || ks[SDL_SCANCODE_UP] || ks[SDL_SCANCODE_DOWN] || ks[SDL_SCANCODE_LEFT] || ks[SDL_SCANCODE_RIGHT]
+                        || ks[SDL_SCANCODE_PAGEUP] || ks[SDL_SCANCODE_PAGEDOWN];
+            if (g_art_sel < 0 || g_art_sel >= g_ngames) g_art_sel = g_sel;                  /* first list / after a rescan */
+            else if (g_art_sel != g_sel && !held && SDL_GetTicks() - sel_t >= 120) g_art_sel = g_sel;
+        }
         if (auto_act && SDL_GetTicks() >= auto_at) {              /* test: LAUNCHER_AUTO */
             const char *slug = strchr(auto_act, ':') + 1;
             for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
@@ -1540,6 +1678,11 @@ int main(int argc, char **argv)
             continue;
         }
         render();
+        if (shot_ms && shot_out && *shot_ms && SDL_GetTicks() >= (Uint32)atol(shot_ms)) {
+            char fn[MAX_PATH]; snprintf(fn, sizeof fn, shot_out, atoi(shot_ms));
+            write_shot(fn);
+            shot_ms = strchr(shot_ms, ','); if (shot_ms) shot_ms++;
+        }
         art_warm();
         SDL_Delay(g_proc_kind ? 30 : 15);
     }

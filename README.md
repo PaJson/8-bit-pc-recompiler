@@ -14,7 +14,24 @@ Golvellius (+ our own *Golvellius Plus* ROM patch), Miracle Warriors, and Sonic 
 
 **No ROMs are included.** Every build reads its own ROM at run time (CRC32-checked); you supply it.
 
-## Setup on a new PC
+Not affiliated with or endorsed by Sega. Game names are trademarks of their owners and are used only to
+say which game a profile is for.
+
+## Just playing: the release zip
+
+Download `8-bit PC Recompiler v<version>.zip` from the Releases page, unzip it anywhere, put your own
+ROMs into `ROMs\sms\` (see `ROMs\README.txt`) and start `Launcher.exe`. Nothing else is needed: the zip
+holds the launcher, the recompiler, a C compiler (complete MSYS2 gcc packages; versions and sources in
+`Engine\Compiler\SOURCES.txt`) and the prebuilt engine runner. The launcher shows each game's title
+screen taken from your ROM, and the first time you play a game it builds it on your PC from your ROM
+(1-2 minutes, Golvellius about 5). The zip contains no game programs and nothing taken from any ROM.
+
+Making a release: set `version` in `app_info.toml`, commit, push a tag `v<version>`: the GitHub workflow
+`.github/workflows/release.yml` runs `Tools/make_release.py` (which ends with a smoke test: a tiny test
+ROM of our own built and run with only the release on the PATH) and attaches the zip to a GitHub Release.
+Locally: `python -I Tools/make_release.py --zip` -> `Release/<name> v<version>/` + `.zip`.
+
+## Setup on a new PC (developing)
 
 1. **MSYS2** in `C:\msys64`, then in an MSYS2 shell:
    `pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-SDL2`
@@ -44,11 +61,15 @@ Golvellius (+ our own *Golvellius Plus* ROM patch), Miracle Warriors, and Sonic 
 
 ## Patched ROMs (optional)
 
+(The launcher can also make them itself: it finds the patch by CRC32 in `ROMs/sms/Patches/`. The PSRP
+2.6.1 zips are also in `ThirdParty/`, unchanged, because their terms allow passing them on; the release
+ships them.)
 Put the patch authors' original downloads into `ROMs/sms/Patches/` (links in `CREDITS.md`), then:
 - PSRP 2.6.1 retranslations (need the original **Japan** ROM; the zips go into
   `ROMs/sms/Patches/Phantasy Star/Retranslation 2.6.1 (PSRP, SMS Power)/`): `sh Tools/sms/regen_patched.sh`
   (English) and `sh Tools/sms/regen_patched_langs.sh` (other languages). They write `ROMs/sms/Patched/`.
-- Golvellius Plus (our own patch, source in `Patches/Golvellius/`): `python -I Tools/sms/gv_build_patch.py`.
+- Golvellius Plus (our own patch, source in `Patches/sms/Golvellius/`, the built .ips / .bps committed in
+  `Patches/sms/Golvellius/dist/`): `python -I Tools/sms/gv_build_patch.py`.
 
 ## Not in this repository (git-ignored, copy by hand when moving to another PC)
 
