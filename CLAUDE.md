@@ -80,14 +80,12 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
 ## Current state (2026-11-24; update or delete when done)
-- Committed + pushed: engine `598153c`, project `e6924d7` (release zip flow, `Docs/notes/` split, launcher
-  fixes, PS cave map fix). Release workflow ran by hand (run 45450461783, OK, 2.5 min); its zip tested by the
-  user in Windows Sandbox (`Tools/sandbox_test.ps1`): launcher + Golvellius Plus work. Sandbox has no Notepad.
-- On branch `release/v0.1.0` (PR "Release v0.1.0"): PS pitch-black floors record nothing, release README
-  (PSRP needs the first Japanese ROM), `Tools/sandbox_test.ps1`, launcher text fitting, `check.yml`,
-  `CHANGELOG.md`, release.yml notes from CHANGELOG. Release flow: `Docs/notes/launcher-and-release.md`.
-  Next: Check passes -> user tests its zip in Sandbox -> user merges -> tag `v0.1.0` (on the user's word).
+- v0.1.0 released (private): PR #1 merged (`701acca`, engine `8f18b70`), tag `v0.1.0` -> Release workflow.
+  Release flow + Check workflow: `Docs/notes/launcher-and-release.md` "Release flow". Next releases: same flow.
+- Sandbox tests by the user: launcher + Golvellius Plus (workflow zip of run 45450461783), PS Rev A dark
+  dungeon refused + nothing on the map (Check zip of PR #1). PSRP in the sandbox: not reported yet.
 - Decided: all profiles (Sonic too) stay in the release; a few private releases before going public; next
-  profiles planned: Golden Axe Warrior, Ultima IV, Wonder Boy, Ys. Old flat files in `Release/` deleted.
+  profiles planned: Golden Axe Warrior, Ultima IV, Wonder Boy, Ys.
+- Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation warning; dev PC, workflows, bundled compiler).
 - To verify by playing: PS cave map (stairs / exits visited, surroundings on arrival), launcher (message
   cleared on moving, cover changes only after releasing a held direction), build progress bar.
