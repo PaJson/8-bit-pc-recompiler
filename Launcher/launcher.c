@@ -41,8 +41,9 @@
  * Start screen: the background with a blinking PRESS START; Enter / click / pad Start shows the game
  * list (fades in), Esc quits. In the list: Enter / pad A / double click play, R / pad Y rebuild,
  * A / pad X build all (every game not built yet, see build_all), Esc / pad B / Back return to the
- * start screen (while a build runs, Esc quits; during Build all Esc / pad B first stop it after the
- * current game). launcher.ini:
+ * start screen. While a build runs, Esc / pad B cancel it (the whole build: script, cmake, gcc); during
+ * Build all the first press stops it after the current game, a second one cancels that game too. The
+ * key help shows the keys of the device used last (keyboard or pad). launcher.ini:
  * `splash = 0` skips it, `press_start_y = 50` = its height (% of the window, centre of the text).
  * Keys: Up/Down (PgUp/PgDn, Home/End) select, Enter play (build first if needed), R rebuild,
  * A build all, F11 / Alt+Enter fullscreen. Gamepad: D-pad / stick, A play, Y rebuild, X build all.
@@ -653,6 +654,13 @@ static char g_status[200];                    /* message line */
 static uint32_t g_status_col = 0xFFA0A0B0;
 static char g_build_log[MAX_PATH];
 static bool g_play_after_build;
+/* A build runs in a job object with every process it starts (powershell / the release build mode,
+   cmake, ninja, gcc): cancelling or quitting ends all of them. Before, only the first process was
+   ended and the compiler kept running (user report). */
+static HANDLE g_build_job;
+static bool g_build_cancel;                   /* the running build was cancelled (Esc / pad B) */
+static FILETIME g_build_ft;                   /* when it started (a cancelled build's new exe is removed) */
+static bool g_pad_ui;                         /* key help: the pad was used last (else the keyboard) */
 /* Build all (build_all, below) */
 #define MAX_QUEUE 128
 static char g_q[MAX_QUEUE][64];
@@ -753,9 +761,22 @@ static bool start_build(const Game *g, bool play_after)
     }
     STARTUPINFOA si; memset(&si, 0, sizeof si); si.cb = sizeof si;
     si.dwFlags = STARTF_USESTDHANDLES; si.hStdOutput = log; si.hStdError = log; si.hStdInput = NULL;
-    BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, g->dir, &si, &g_proc);
+    GetSystemTimeAsFileTime(&g_build_ft);
+    g_build_job = CreateJobObjectA(NULL, NULL);       /* closing its last handle ends every process in it */
+    if (g_build_job) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li; memset(&li, 0, sizeof li);
+        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(g_build_job, JobObjectExtendedLimitInformation, &li, sizeof li);
+    }
+    BOOL ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, NULL, g->dir, &si, &g_proc);
     CloseHandle(log);
+    if (ok) {                                         /* in the job before it can start anything */
+        if (g_build_job && !AssignProcessToJobObject(g_build_job, g_proc.hProcess)) { CloseHandle(g_build_job); g_build_job = NULL; }
+        ResumeThread(g_proc.hThread);
+    }
+    else if (g_build_job) { CloseHandle(g_build_job); g_build_job = NULL; }
     if (!ok) { snprintf(g_status, sizeof g_status, "Could not start the build"); g_status_col = 0xFFFF6060; return false; }
+    g_build_cancel = false;
     g_proc_kind = 2; snprintf(g_proc_slug, sizeof g_proc_slug, "%s", g->slug);
     g_build_t0 = g_step_t0 = SDL_GetTicks(); g_build_step = 0; g_build_frac = 0; g_compile_est_ms = 0;
     snprintf(g_build_dir, sizeof g_build_dir, "%s", g->dir);
@@ -1124,11 +1145,16 @@ static void draw_ui(void)
         if (s1 > s0 && s1 > fx) fill(s0 > fx ? s0 : fx, by0, s1, by1, 0xFF5A88C8);   /* over the rest */
     }
     else if (g_status[0]) { char line[260]; fit_text(line, sizeof line, g_status, (L.x1 - L.x0 - 16 * sc) / (6 * sc), false); text(tx, dy + 33 * sc, line, g_status_col, sc); }
-    {   /* key help, two lines (keyboard / pad): 26 characters each fit the narrowest panel (29) */
+    {   /* key help, two lines, the keys of the device used last (one letter must not mean two things:
+           keyboard A = Build all, pad A = Play); at most 29 characters (the narrowest panel) */
         int hc = (L.x1 - L.x0 - 16 * sc) / (6 * sc);
-        const char *h1 = "ENTER/A PLAY   R/Y REBUILD", *h2 = "A/X BUILD ALL   ESC/B BACK";
-        if (g_q_on) { h1 = g_q_stop ? "Stopping after this game." : "Building all games ..."; h2 = g_q_stop ? "ESC QUIT" : "ESC/B STOP AFTER THIS GAME"; }
-        else if (g_proc_kind == 2) { h1 = "Please wait ..."; h2 = "ESC QUIT"; }
+        const char *back = g_pad_ui ? "B" : "ESC";
+        char h1[48], h2[48];
+        if (g_pad_ui) { snprintf(h1, sizeof h1, "A PLAY   Y REBUILD"); snprintf(h2, sizeof h2, "X BUILD ALL   B BACK"); }
+        else { snprintf(h1, sizeof h1, "ENTER PLAY   R REBUILD"); snprintf(h2, sizeof h2, "A BUILD ALL   ESC BACK"); }
+        if (g_q_on && !g_q_stop) { snprintf(h1, sizeof h1, "Building all games ..."); snprintf(h2, sizeof h2, "%s STOP AFTER THIS GAME", back); }
+        else if (g_q_on) { snprintf(h1, sizeof h1, "Stopping after this game."); snprintf(h2, sizeof h2, "%s CANCEL THIS ONE TOO", back); }
+        else if (g_proc_kind == 2) { snprintf(h1, sizeof h1, "Please wait ..."); snprintf(h2, sizeof h2, "%s CANCEL THE BUILD", back); }
         char line[80];
         fit_text(line, sizeof line, h1, hc, false); text(tx, L.y1 - 23 * sc, line, 0xFF8890A0, sc);
         fit_text(line, sizeof line, h2, hc, false); text(tx, L.y1 - 13 * sc, line, 0xFF8890A0, sc);
@@ -1426,23 +1452,25 @@ static void play_selected(bool force_build)
    patch gets its patched ROM first); built games, games without a profile and games whose patch file
    is missing are left alone. A failure does not stop it; the end message counts what was built and
    names what failed (each game folder has its build_log.txt). Esc / pad B stops it after the current
-   game. Games are kept by slug: every build ends with a rescan that can reorder the list. */
+   game, a second press cancels that game too (build_escape). Games are kept by slug: every build ends
+   with a rescan that can reorder the list. */
 static int game_index(const char *slug) { for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) return i; return -1; }
 static void queue_failed(const char *slug) { if (!g_q_failed++) snprintf(g_q_fail, sizeof g_q_fail, "%s", slug); }
 /* the end message; with failures the first failed game is selected, so its name shows above the
    message (a name in the message itself would be cut in a narrow panel) */
-static void queue_finish(void)
+static void queue_finish(bool cancelled)
 {
     g_q_on = false;
     if (g_q_failed) {
         int i = game_index(g_q_fail);
         if (i >= 0) g_sel = i;
-        snprintf(g_status, sizeof g_status, "Built %d, failed %d (%s; see its build_log.txt)", g_q_built, g_q_failed,
-                 i < 0 ? "?" : g_q_failed == 1 ? "selected" : "first one selected");
+        snprintf(g_status, sizeof g_status, "%sBuilt %d, failed %d (%s; see its build_log.txt)", cancelled ? "Cancelled. " : "",
+                 g_q_built, g_q_failed, i < 0 ? "?" : g_q_failed == 1 ? "selected" : "first one selected");
         g_status_col = 0xFFFF6060;
     } else {
-        snprintf(g_status, sizeof g_status, g_q_stop ? "Build all stopped: %d built." : "Build all finished: %d built.", g_q_built);
-        g_status_col = 0xFF7CE07C;
+        snprintf(g_status, sizeof g_status, cancelled ? "Build all cancelled: %d built." : g_q_stop ? "Build all stopped: %d built."
+                 : "Build all finished: %d built.", g_q_built);
+        g_status_col = cancelled ? 0xFFFFE040 : 0xFF7CE07C;
     }
     g_msg_sel = g_sel;
 }
@@ -1464,7 +1492,7 @@ static void queue_next(void)
         if (start_build(g, false)) return;
         queue_failed(g->slug);
     }
-    queue_finish();
+    queue_finish(false);
 }
 static void build_all(void)
 {
@@ -1476,6 +1504,43 @@ static void build_all(void)
     if (!g_nq) { snprintf(g_status, sizeof g_status, "Nothing to build: every game here is built."); g_status_col = 0xFF7CE07C; g_msg_sel = g_sel; return; }
     g_q_on = true;
     queue_next();
+}
+
+/* ends the running build and every process it started (quitting, cancelling) */
+static void end_build_now(void)
+{
+    if (g_proc_kind != 2) return;
+    if (g_build_job) TerminateJobObject(g_build_job, 1); else TerminateProcess(g_proc.hProcess, 1);
+}
+/* Esc / pad B while a build runs: during Build all the first press stops it after the current game;
+   else the build is cancelled now (poll_process sees it end and reports it) */
+static void build_escape(void)
+{
+    if (g_proc_kind != 2 || g_build_cancel) return;
+    if (g_q_on && !g_q_stop) { g_q_stop = true; return; }
+    g_build_cancel = true; g_play_after_build = false;
+    end_build_now();
+}
+/* after a cancel: wait (up to 2 s) until the job's processes are gone, then remove an exe written during
+   the build (the linker may have been stopped while writing it; a rebuild writes it anew anyway) */
+static void cancelled_cleanup(void)
+{
+    for (int i = 0; g_build_job && i < 100; i++) {
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION ai;
+        if (!QueryInformationJobObject(g_build_job, JobObjectBasicAccountingInformation, &ai, sizeof ai, NULL) || !ai.ActiveProcesses) break;
+        Sleep(20);
+    }
+    char pat[MAX_PATH]; snprintf(pat, sizeof pat, "%s\\build\\*.exe", g_build_dir);
+    WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (CompareFileTime(&fd.ftLastWriteTime, &g_build_ft) >= 0) {
+            char p[MAX_PATH]; snprintf(p, sizeof p, "%s\\build\\%s", g_build_dir, fd.cFileName);
+            DeleteFileA(p);
+            fprintf(stderr, "[launcher] build cancelled: removed %s\n", p);
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
 }
 
 static void poll_process(void)
@@ -1510,7 +1575,11 @@ static void poll_process(void)
     if (WaitForSingleObject(g_proc.hProcess, 0) != WAIT_OBJECT_0) return;
     DWORD code = 1; GetExitCodeProcess(g_proc.hProcess, &code);
     CloseHandle(g_proc.hProcess); CloseHandle(g_proc.hThread);
-    int kind = g_proc_kind; g_proc_kind = 0;
+    int kind = g_proc_kind;
+    bool cancelled = kind == 2 && g_build_cancel;
+    if (cancelled) cancelled_cleanup();
+    if (kind == 2 && g_build_job) { CloseHandle(g_build_job); g_build_job = NULL; }   /* ends anything left in it */
+    g_proc_kind = 0; g_build_cancel = false;
     char slug[64]; snprintf(slug, sizeof slug, "%s", g_proc_slug);
     scan_games();
     for (int i = 0; i < g_ngames; i++) if (!strcmp(g_games[i].slug, slug)) g_sel = i;
@@ -1521,6 +1590,11 @@ static void poll_process(void)
     }
     Game *g = (g_sel >= 0 && g_sel < g_ngames && !strcmp(g_games[g_sel].slug, slug)) ? &g_games[g_sel] : NULL;
     g_msg_sel = g_sel;                               /* the message is about this game: keep it */
+    if (cancelled) {
+        if (g_q_on) queue_finish(true);
+        else { snprintf(g_status, sizeof g_status, "Build cancelled."); g_status_col = 0xFFFFE040; }
+        return;
+    }
     if (g_q_on) {                                    /* Build all: count it, start the next one */
         if (code == 0 && g && g->state == ST_READY) g_q_built++; else queue_failed(slug);
         queue_next();
@@ -1663,11 +1737,37 @@ int main(int argc, char **argv)
     bool exit_after = getenv("LAUNCHER_EXIT_AFTER") != NULL;
     /* test: LAUNCHER_SHOT_MS=<ms>[,<ms>...] + LAUNCHER_SHOT_OUT=<file with %d> = window pictures while it runs */
     const char *shot_ms = getenv("LAUNCHER_SHOT_MS"), *shot_out = getenv("LAUNCHER_SHOT_OUT");
+    /* test: LAUNCHER_KEYS=<ms>:<input>[,...] = input pushed at those times (esc, enter, a, r, pada, padb,
+       padx, padd = D-pad down, quit = the window's close button), through the same event handling as
+       real input */
+    const char *keys = getenv("LAUNCHER_KEYS");
     Uint32 nav_t = 0; int nav_dir = 0; Uint32 nav_next = 0;
     g_splash_t = SDL_GetTicks();
     while (!quit) {
+        if (keys && *keys && SDL_GetTicks() >= (Uint32)atol(keys)) {
+            const char *c = strchr(keys, ':');
+            if (c) {
+                c++; SDL_Event ev; memset(&ev, 0, sizeof ev);
+                if (!strncmp(c, "quit", 4)) ev.type = SDL_QUIT;
+                else if (!strncmp(c, "pad", 3)) {
+                    ev.type = SDL_CONTROLLERBUTTONDOWN;
+                    ev.cbutton.button = c[3] == 'b' ? SDL_CONTROLLER_BUTTON_B : c[3] == 'x' ? SDL_CONTROLLER_BUTTON_X
+                                      : c[3] == 'd' ? SDL_CONTROLLER_BUTTON_DPAD_DOWN : SDL_CONTROLLER_BUTTON_A;
+                } else {
+                    ev.type = SDL_KEYDOWN;
+                    ev.key.keysym.sym = !strncmp(c, "esc", 3) ? SDLK_ESCAPE : !strncmp(c, "enter", 5) ? SDLK_RETURN : (SDL_Keycode)c[0];
+                }
+                fprintf(stderr, "[launcher] test input %.*s\n", (int)strcspn(c, ","), c);
+                SDL_PushEvent(&ev);
+            }
+            keys = strchr(keys, ','); if (keys) keys++;
+        }
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
+            /* key help: the device used last (a pad connected at the start counts as used) */
+            if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_CONTROLLERBUTTONDOWN
+                || (e.type == SDL_CONTROLLERAXISMOTION && (e.caxis.value < -16000 || e.caxis.value > 16000))) g_pad_ui = true;
+            else if (e.type == SDL_KEYDOWN || e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEWHEEL) g_pad_ui = false;
             if (e.type == SDL_QUIT) quit = true;
             else if (e.type == SDL_CONTROLLERDEVICEADDED) SDL_GameControllerOpen(e.cdevice.which);
             else if (g_splash) {                                   /* PRESS START: only continue / quit / fullscreen */
@@ -1688,8 +1788,8 @@ int main(int argc, char **argv)
             }
             else if (e.type == SDL_KEYDOWN) {
                 SDL_Keycode k = e.key.keysym.sym;
-                if (k == SDLK_ESCAPE && !e.key.repeat) {      /* Build all: stop after this game; building: ESC QUIT */
-                    if (g_q_on && !g_q_stop) g_q_stop = true; else if (g_proc_kind == 2) quit = true; else enter_splash();
+                if (k == SDLK_ESCAPE && !e.key.repeat) {      /* building: cancel (Build all: stop after this game first) */
+                    if (g_proc_kind == 2) build_escape(); else enter_splash();
                 }
                 else if (k == SDLK_F11 || (k == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT))) {
                     bool fs = (SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
@@ -1712,7 +1812,7 @@ int main(int argc, char **argv)
                 else if (b == SDL_CONTROLLER_BUTTON_DPAD_LEFT || b == SDL_CONTROLLER_BUTTON_LEFTSHOULDER) { move_sel(-g_rows); nav_dir = -2; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
                 else if (b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT || b == SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) { move_sel(g_rows); nav_dir = 2; nav_t = SDL_GetTicks(); nav_next = nav_t + 400; }
                 else if (b == SDL_CONTROLLER_BUTTON_A) play_selected(false);
-                else if ((b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) && g_q_on) g_q_stop = true;
+                else if ((b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) && g_proc_kind == 2) build_escape();
                 else if ((b == SDL_CONTROLLER_BUTTON_B || b == SDL_CONTROLLER_BUTTON_BACK) && !g_proc_kind) enter_splash();
                 else if (b == SDL_CONTROLLER_BUTTON_Y) play_selected(true);
                 else if (b == SDL_CONTROLLER_BUTTON_X) build_all();
@@ -1797,7 +1897,7 @@ int main(int argc, char **argv)
         art_warm();
         SDL_Delay(g_proc_kind ? 30 : 15);
     }
-    if (g_proc_kind == 2) TerminateProcess(g_proc.hProcess, 1);
+    if (g_proc_kind == 2) { end_build_now(); cancelled_cleanup(); }   /* the whole build (gcc too), not only its script */
     if (g_ts_running) TerminateProcess(g_ts_proc.hProcess, 1);   /* it writes <file>.tmp and renames it at the end: never a half title file */
     SDL_Quit();
     return 0;
