@@ -1,6 +1,6 @@
 # 8-bit PC Recompiler
 
-A static recompiler for 8-bit Sega games (Master System, Game Gear).
+A static recompiler for 8-bit console games (currently only Sega Master System and Sega Game Gear).
 
 Native Windows builds of Master System games, made by **static recompilation** of the Z80 ROM
 to C with the [smsggrecomp](https://github.com/PaJson/smsggrecomp) engine (a fork of

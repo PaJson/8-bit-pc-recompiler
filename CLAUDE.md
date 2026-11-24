@@ -88,5 +88,6 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - Decided: all profiles (Sonic too) stay in the release; a few private releases before going public; next
   profiles planned: Golden Axe Warrior, Ultima IV, Wonder Boy, Ys.
 - Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation warning; dev PC, workflows, bundled compiler).
-- To verify by playing: PS cave map (stairs / exits visited, surroundings on arrival), launcher (message
-  cleared on moving, cover changes only after releasing a held direction), build progress bar.
+- Verified by the user's play (2026-11-24): PS cave map (stairs / exits visited, surroundings on arrival),
+  launcher text fitting (nothing cut off), build progress bar, launcher message cleared on moving, cover
+  changes only after releasing a held direction. Nothing left to verify from the 2026-11-24 work.
