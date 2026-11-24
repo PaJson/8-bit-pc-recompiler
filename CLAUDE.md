@@ -80,7 +80,8 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
 ## Current state (2026-11-24; update or delete when done)
-- v0.1.0 released (private): PR #1 merged (`701acca`, engine `8f18b70`), tag `v0.1.0` -> Release workflow.
+- Released v0.1.0 (PR #1) and v0.1.1 (PR #2, corrected credits). The repo `PaJson/8-bit-pc-recompiler` was
+  made PUBLIC on 2026-11-24 (history checked first: `Docs/notes/history.md`, last entry).
   Release flow + Check workflow: `Docs/notes/launcher-and-release.md` "Release flow". Next releases: same flow.
 - Sandbox tests by the user: launcher + Golvellius Plus (workflow zip of run 45450461783), PS Rev A dark
   dungeon refused + nothing on the map (Check zip of PR #1). PSRP in the sandbox: not reported yet.
