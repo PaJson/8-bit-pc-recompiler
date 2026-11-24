@@ -4,6 +4,15 @@ One section per release, newest first. The section `## v<version>` becomes the t
 Release for the tag `v<version>` (`.github/workflows/release.yml`); a release branch is checked for it
 (`.github/workflows/check.yml`).
 
+## v0.1.1
+
+Corrected credits; the launcher and the games work as in v0.1.0.
+
+- `CREDITS.md`: the licence of the recompiler engine (PolyForm Noncommercial 1.0.0 with additional
+  permissions: donations and advertising are allowed, payment must never buy access), the patch files
+  that come with the zip (Golvellius Plus, the Phantasy Star Retranslation 2.6.1 zips), the bundled C
+  compiler (MSYS2 MinGW-w64 packages) and SDL2 with their licences, and the original smssum repository.
+
 ## v0.1.0
 
 First release (private test release).

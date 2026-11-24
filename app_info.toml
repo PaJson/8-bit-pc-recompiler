@@ -4,5 +4,5 @@
 #   Launcher/CMakeLists.txt       compiled into Launcher.exe (shown on its screens, Windows file properties)
 # Version = semantic versioning MAJOR.MINOR.PATCH (0.x = before the first "finished" release).
 name       = "8-bit PC Recompiler"
-version    = "0.1.0"
+version    = "0.1.1"
 repository = "https://github.com/PaJson/8-bit-pc-recompiler"
