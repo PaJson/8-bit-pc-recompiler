@@ -1,2 +1,11 @@
 * text=auto eol=lf
 *.pdf binary
+# never touch line endings in binary files (the PSRP zips must stay byte-identical: ThirdParty/README.md)
+*.zip binary
+*.bps binary
+*.ips binary
+*.sms binary
+*.gg binary
+*.png binary
+*.ico binary
+*.jpg binary
