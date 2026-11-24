@@ -66,19 +66,11 @@ Put the patch authors' original downloads into `ROMs/sms/Patches/` (links in `CR
 - Golvellius Plus (our own patch, source in `Patches/sms/Golvellius/`, the built .ips / .bps committed in
   `Patches/sms/Golvellius/dist/`): `python -I Tools/sms/gv_build_patch.py`.
 
-## Making a release (maintainers)
+## Making a release
 
-1. Branch `release/v<version>`: set `version` in `app_info.toml`, add a `## v<version>` section to
-   `CHANGELOG.md` (it becomes the release text).
-2. Open a pull request to `main`. The `Check` workflow (`.github/workflows/check.yml`) runs the engine
-   self-tests, builds the release zip with `Tools/make_release.py` (ends with a smoke test: a tiny ROM of
-   our own built and run with only the release on the PATH) and attaches the zip to the run. Test that
-   zip, e.g. in Windows Sandbox: `Tools\sandbox_test.ps1 -Zip <zip>`.
-3. Merge, then push the tag `v<version>`: `.github/workflows/release.yml` builds the zip again and
-   publishes the GitHub Release.
-
-Locally: `python -I Tools/make_release.py --zip` -> `Release/<name> v<version>/` + `.zip`. Details:
-`Docs/notes/launcher-and-release.md`.
+Releases are built by GitHub Actions from a `release/v<version>` pull request and a `v<version>` tag; the
+steps are in `Docs/notes/launcher-and-release.md` ("Release flow"). A local build of the release folder and
+zip: `python -I Tools/make_release.py --zip`.
 
 ## License
 
