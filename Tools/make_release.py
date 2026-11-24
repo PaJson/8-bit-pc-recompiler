@@ -27,7 +27,7 @@ It builds, with MSYS2's gcc: the recompiler (Recomp/smsggrecomp/recompiler/build
       Engine/sms/                   build.txt (how release_build.c builds a game), include/ (the headers the
                                     generated C includes), lib/ (libsmsgg_runner.a, libhooks_<Family>.a,
                                     app_icon.o), SmsInterp.exe (title screens before a game is built)
-      Engine/LICENSES/              the engine's licences (PolyForm Noncommercial + permissions, MIT parts)
+      Engine/LICENSES/              the engine's licenses (PolyForm Noncommercial + permissions, MIT parts)
 
 NOTHING derived from a ROM is in it: no game programs, no generated C, no title screens, no ROMs, no
 saves, no game art. The folder is rebuilt from scratch on every run (it must be a fresh release folder,
@@ -144,7 +144,7 @@ F11 fullscreen.
 Not affiliated with or endorsed by Sega. All game names are trademarks of their owners and are used
 only to say which game a profile is for. Use ROMs you own.
 
-Licences: our own code MIT (LICENSE.txt); the recompiler engine (smsggrecomp, z80-recomp-core)
+Licenses: our own code MIT (LICENSE.txt); the recompiler engine (smsggrecomp, z80-recomp-core)
 PolyForm Noncommercial 1.0.0 (Engine\\LICENSES\\), so the whole may not be sold; the C compiler: see
 Engine\\Compiler\\SOURCES.txt; credits: CREDITS.md.
 """
@@ -224,7 +224,7 @@ def main():
     with open(os.path.join(rel, "ROMs", "README.txt"), "w", newline="\r\n") as f:
         f.write(ROMS_README)
 
-    # 3. engine: recompiler, compiler, kit per platform, licences
+    # 3. engine: recompiler, compiler, kit per platform, licenses
     e = os.path.join(rel, "Engine")
     for plat, exe in RECOMPILERS.items():
         cp(os.path.join(eng, "recompiler", "build", exe), os.path.join(e, exe))
@@ -260,10 +260,10 @@ def main():
         stb = f.read()
     i = stb.rfind("This software is available under 2 licenses")
     if i < 0:
-        sys.exit("stb_image.h: licence text not found")
+        sys.exit("stb_image.h: license text not found")
     os.makedirs(os.path.join(lic, "stb_image"), exist_ok=True)
     with open(os.path.join(lic, "stb_image", "LICENSE.txt"), "w", newline="\r\n") as f:
-        f.write("stb_image.h (Sean Barrett), the licence text at the end of the header:\n\n" + stb[i:])
+        f.write("stb_image.h (Sean Barrett), the license text at the end of the header:\n\n" + stb[i:])
 
     # 4. patches the launcher can apply
     gp_src = os.path.join(ROOT, "Patches", "sms", "Golvellius", "dist")

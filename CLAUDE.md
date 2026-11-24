@@ -76,7 +76,7 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - `Docs/notes/engine.md`: our recompiler / runner changes, idioms, reviews, Sonic regression.
 - `Docs/notes/testing.md`: lockstep, scenarios, coverage, diagnostic build, test env vars.
 - `Docs/notes/launcher-and-release.md`: launcher, art / titles, release zip + GitHub workflow.
-- `Docs/notes/history.md`: renames, moves, repo / licence / going-public decisions, old plans.
+- `Docs/notes/history.md`: renames, moves, repo / license / going-public decisions, old plans.
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
 ## Current state (2026-11-24; update or delete when done)

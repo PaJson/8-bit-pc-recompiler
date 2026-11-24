@@ -7,7 +7,7 @@ ships a C compiler. It ships WHOLE packages (user decision 2026-11-24: no hand-p
 be missing later): the packages ROOTS and everything they depend on, resolved from pacman's database
 (Depends On, with virtual names resolved through Provides). Every file of every one of those packages is
 copied to the same place under <out>/mingw64/ (MSYS2's gcc finds its headers through the sysroot
-<gcc dir>/../../mingw64, so the folder must have that name). Each package brings its own licence folder
+<gcc dir>/../../mingw64, so the folder must have that name). Each package brings its own license folder
 (mingw64/share/licenses/<name>/).
 
 <out>/SOURCES.txt lists the packages and versions and where their sources are (GCC and binutils are GPL:
@@ -106,7 +106,7 @@ def main():
 
     with open(os.path.join(top, "SOURCES.txt"), "w", newline="\r\n") as f:
         f.write("mingw64\\ holds complete MSYS2 MinGW-w64 packages: the C compiler that builds the games.\n"
-                "Licences: mingw64\\share\\licenses\\<name>\\. GCC and binutils: GNU GPL v3; the GCC runtime\n"
+                "Licenses: mingw64\\share\\licenses\\<name>\\. GCC and binutils: GNU GPL v3; the GCC runtime\n"
                 "libraries carry the GCC Runtime Library Exception, so programs built with it are not affected.\n"
                 "Sources of exactly these versions: https://repo.msys2.org/mingw/sources/ (file\n"
                 "<package name without the mingw-w64-x86_64- prefix>-<version>.src.tar.zst), build recipes:\n"

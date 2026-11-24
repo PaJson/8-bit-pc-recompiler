@@ -35,7 +35,7 @@ options; everything is our own implementation.
 
 ## Code in the engine (`Recomp/smsggrecomp`, its own repository)
 
-| Code | Author / licence | Used for |
+| Code | Author / license | Used for |
 |---|---|---|
 | smsggrecomp (upstream, https://github.com/mstan/smsggrecomp; our fork https://github.com/PaJson/smsggrecomp) | Matthew Stanley (mstan); PolyForm Noncommercial 1.0.0 + `PERMISSIONS.md` (voluntary donations and advertising allowed; payment must never buy access to the software, games built with it or game content) | The recompiler and runner this project is built on. |
 | z80-recomp-core (engine submodule) | Matthew Stanley; PolyForm Noncommercial 1.0.0 + `PERMISSIONS.md` (donations and advertising allowed; everything must stay free to get and play) | Shared Z80 state / instruction semantics used by the generated code. |
@@ -45,14 +45,14 @@ options; everything is our own implementation.
 
 ## Bundled in the release zip
 
-| Software | Author / licence | Used for |
+| Software | Author / license | Used for |
 |---|---|---|
-| MSYS2 MinGW-w64 packages: GCC, binutils, the mingw-w64 runtime and their dependencies (complete packages) | The GNU project, the mingw-w64 project and the other upstream authors, packaged by MSYS2 (https://www.msys2.org/); GCC and binutils GPL-3.0, the GCC runtime libraries with the GCC Runtime Library Exception; every package's licence in `Engine\Compiler\mingw64\share\licenses\` | The C compiler that builds each game on the player's PC. Versions and where to get their sources: `Engine\Compiler\SOURCES.txt`. |
-| SDL2 | Sam Lantinga and contributors, zlib licence | Window, graphics, sound and gamepads of the launcher and the games. |
+| MSYS2 MinGW-w64 packages: GCC, binutils, the mingw-w64 runtime and their dependencies (complete packages) | The GNU project, the mingw-w64 project and the other upstream authors, packaged by MSYS2 (https://www.msys2.org/); GCC and binutils GPL-3.0, the GCC runtime libraries with the GCC Runtime Library Exception; every package's license in `Engine\Compiler\mingw64\share\licenses\` | The C compiler that builds each game on the player's PC. Versions and where to get their sources: `Engine\Compiler\SOURCES.txt`. |
+| SDL2 | Sam Lantinga and contributors, zlib license | Window, graphics, sound and gamepads of the launcher and the games. |
 
 ## Tools for our ROM patches
 
-| Tool | Author / licence | Used for |
+| Tool | Author / license | Used for |
 |---|---|---|
 | WLA DX (git submodule `External/wla-dx`, our fork of https://github.com/vhelin/wla-dx) | Ville Helin and contributors, GPL-2.0-or-later | Assembles our own ROM patch "Golvellius Plus" (`Patches/sms/Golvellius`, `Tools/sms/gv_build_patch.py`). Only run as a tool; our sources and the patches it writes are ours. |
 | SMS ROM header checksum rule | SMS Power! "ROM header" page; smssum (https://github.com/masible/smssum: Bastien Nocera and contributors, after Daniel Hall's MSChecksumFixer, GPL-3.0; our fork https://github.com/PaJson/smssum) | `Tools/sms/sms_checksum.py` is our own code; smssum was used to cross-check its result. |

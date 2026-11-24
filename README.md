@@ -91,11 +91,11 @@ Locally: `python -I Tools/make_release.py --zip` -> `Release/<name> v<version>/`
 | Phantasy Star disassembly (only `Tools/sms/ps_scenario.py` reads it) | `Disasm/sms/ps1disasm-master/` |
 | Build output, generated C, release folder | `build*/`, `Games/*/*/generated/`, `Release/` |
 
-## Licence
+## License
 
 - Our own code (`Common/`, `Launcher/`, `Tools/`, `Patches/`, the build scripts): MIT, see `LICENSE`.
 - The engine `Recomp/smsggrecomp` and its core `external/z80-recomp-core` (git submodules) have their
-  own licences (PolyForm Noncommercial 1.0.0, plus the additional permissions in each `PERMISSIONS.md`:
+  own licenses (PolyForm Noncommercial 1.0.0, plus the additional permissions in each `PERMISSIONS.md`:
   voluntary donations and advertising are allowed, payment must never buy access), so every game build made
   with them may only be used and shared non-commercially. Third-party parts keep theirs (`CREDITS.md`).
 

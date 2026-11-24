@@ -15,10 +15,10 @@ The project is now public on GitHub. The launcher and the games work as in v0.1.
 
 Corrected credits; the launcher and the games work as in v0.1.0.
 
-- `CREDITS.md`: the licence of the recompiler engine (PolyForm Noncommercial 1.0.0 with additional
+- `CREDITS.md`: the license of the recompiler engine (PolyForm Noncommercial 1.0.0 with additional
   permissions: donations and advertising are allowed, payment must never buy access), the patch files
   that come with the zip (Golvellius Plus, the Phantasy Star Retranslation 2.6.1 zips), the bundled C
-  compiler (MSYS2 MinGW-w64 packages) and SDL2 with their licences, and the original smssum repository.
+  compiler (MSYS2 MinGW-w64 packages) and SDL2 with their licenses, and the original smssum repository.
 
 ## v0.1.0
 

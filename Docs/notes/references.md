@@ -7,7 +7,7 @@
 - **Ruled out** (nothing for SMS/Golvellius): msx.org "disassembly-rom-toolchain" (mentions z80dasm, Ghidra, Emulicious (auto-labels, loads symbols), openMSX debugger) and "msx-games-dissasembled-source-code-archives".
 - https://github.com/NationalSecurityAgency/ghidra - has a Z80 module but no SMS bank-switch awareness (import each 16 KB bank as an overlay block by hand). Prefer Emulicious' banking-aware debugger/tracer for manual investigation; the runner's `dispatch_misses.log` (failing addr + slot banks) is the first thing to read.
 - **Emulicious** (the user keeps it outside the project since 2026-11-15; banking-aware debugger/tracer; use it to trace a computed jump when static reading is not enough).
-- https://codeberg.org/chn/MasterlatorSDL/ - SMS/GG emulator + debugger (C/C++, SDL2, wla-dx .sym support), **GPL-3.0**. Was extracted in `Masterlator/` (never used; deleted 2026-11-15): **use it only as a tool to run/inspect ROMs** (disassembly, breakpoints, VDP/tile view). Never copy its source into this engine (licence clash).
+- https://codeberg.org/chn/MasterlatorSDL/ - SMS/GG emulator + debugger (C/C++, SDL2, wla-dx .sym support), **GPL-3.0**. Was extracted in `Masterlator/` (never used; deleted 2026-11-15): **use it only as a tool to run/inspect ROMs** (disassembly, breakpoints, VDP/tile view). Never copy its source into this engine (license clash).
 ## Audio references (for sound problems)
 
 - https://github.com/PaJson/banjo (user's fork — contents not reviewed yet)

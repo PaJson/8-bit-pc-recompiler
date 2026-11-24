@@ -1,7 +1,7 @@
 # ThirdParty
 
 Files by other people that this project passes on **unchanged**, because their terms allow it.
-They are not our work and not under our licence; each keeps its own terms. Tools/make_release.py
+They are not our work and not under our license; each keeps its own terms. Tools/make_release.py
 copies them into a release (`ROMs/<platform>/Patches/...`), where the launcher finds them by CRC32.
 
 ## sms/Patches/Phantasy Star/Retranslation 2.6.1 (PSRP, SMS Power)/
