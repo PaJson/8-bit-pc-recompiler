@@ -54,8 +54,8 @@ options; everything is our own implementation.
 
 | Tool | Author / licence | Used for |
 |---|---|---|
-| WLA DX (git submodule `External/wla-dx`, the user's fork of https://github.com/vhelin/wla-dx) | Ville Helin and contributors, GPL-2.0-or-later | Assembles our own ROM patch "Golvellius Plus" (`Patches/sms/Golvellius`, `Tools/sms/gv_build_patch.py`). Only run as a tool; our sources and the patches it writes are ours. |
-| SMS ROM header checksum rule | SMS Power! "ROM header" page; smssum (Bastien Nocera, after Daniel Hall's MSChecksumFixer, GPL-3; the user's fork https://github.com/PaJson/smssum) | `Tools/sms/sms_checksum.py` is our own code; smssum was used to cross-check its result. |
+| WLA DX (git submodule `External/wla-dx`, our fork of https://github.com/vhelin/wla-dx) | Ville Helin and contributors, GPL-2.0-or-later | Assembles our own ROM patch "Golvellius Plus" (`Patches/sms/Golvellius`, `Tools/sms/gv_build_patch.py`). Only run as a tool; our sources and the patches it writes are ours. |
+| SMS ROM header checksum rule | SMS Power! "ROM header" page; smssum (https://github.com/masible/smssum: Bastien Nocera and contributors, after Daniel Hall's MSChecksumFixer, GPL-3.0; our fork https://github.com/PaJson/smssum) | `Tools/sms/sms_checksum.py` is our own code; smssum was used to cross-check its result. |
 
 ## Tools used during development (not part of the project)
 
