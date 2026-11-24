@@ -49,7 +49,7 @@ screen taken from your ROM, and the first time you play a game it builds it on y
 
 - Double-click **`Launcher.cmd`**: builds the launcher on first use, lists every game whose ROM is
   present, builds a game the first time you play it (a few minutes), then starts it. A (pad X) builds
-  every game that is not built yet, one after the other.
+  every game that is not built yet, one after the other. Esc (pad B) cancels a build.
 - Or per game: `Games/<platform>/<slug>/build.ps1`, then `Games/<platform>/<slug>/play.ps1`.
 - Keys: arrows, Z / X = buttons 1 / 2, Enter = Pause, F1 = options overlay, F11 = fullscreen,
   Tab = fast forward. Gamepads work too (Start = options overlay).

@@ -9,8 +9,14 @@ Release for the tag `v<version>` (`.github/workflows/release.yml`); a release br
 Two new features: Build all in the launcher, and a save-slot preview in Miracle Warriors.
 
 - Launcher: A (pad X) builds every game that is not built yet, one after the other (patched games get
-  their patched ROM first). Esc (pad B) stops after the current game. If a build fails, the others still
-  run, and at the end the first failed game is selected (see its `build_log.txt`).
+  their patched ROM first). Esc (pad B) stops after the current game, a second press cancels that one
+  too. If a build fails, the others still run, and at the end the first failed game is selected (see
+  its `build_log.txt`).
+- Launcher: Esc (pad B) during a build now cancels it and keeps the launcher open (before, Esc closed
+  the launcher). Cancelling or closing the launcher during a build now also ends the C compiler, which
+  before kept running in the background.
+- Launcher: the key help shows the keys of what you used last, keyboard or pad (A is Build all on the
+  keyboard but Play on a pad).
 - Miracle Warriors: when loading (CONTINUE on the title screen) or saving (QUIT, SAVE in the game), the
   side panel shows the highlighted save slot: guilders, fangs, character points, the party, and where
   you saved on that save's own map, plus the world overview. Empty slots say so.

@@ -189,14 +189,31 @@
   finished: N built." / "Build all stopped: N built." / "Built N, failed M (selected; see its build_log.txt)":
   the first failed game is selected, so its name shows in the details (a name in the message was cut at
   960x540). Nothing to do: "Nothing to build: every game here is built."
-- Esc / pad B during Build all = stop after the current game (a second Esc quits, as during a single build).
-  The game being built shows "Build all: game i of n." on its state line.
-- Key help is now two lines ("ENTER/A PLAY   R/Y REBUILD" / "A/X BUILD ALL   ESC/B BACK", 26 characters: the
-  narrowest panel, 960x540, has 29); the details block moved up 12 * sc (one list row fewer).
+- The game being built shows "Build all: game i of n." on its state line. Key help is two lines (the
+  narrowest panel, 960x540, has 29 characters); the details block moved up 12 * sc (one list row fewer).
+- Fixes after the user's first try (2026-11-24, user's choices):
+  - The help said "ENTER/A PLAY" (Enter / pad A) and "A/X BUILD ALL" (key A / pad X): A meant two things.
+    Now the help shows only the keys of the device used last (`g_pad_ui`: a pad button / stick / a pad
+    connected = pad, a key / mouse = keyboard): "ENTER PLAY   R REBUILD" / "A BUILD ALL   ESC BACK" or
+    "A PLAY   Y REBUILD" / "X BUILD ALL   B BACK". The keys did not change.
+  - Esc during a build closed the launcher, and the compiler kept running: `TerminateProcess` ended only
+    powershell / the release build process, not cmake / ninja / gcc. Now every build runs in a job object
+    (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, the process created suspended and assigned before it starts);
+    cancelling (`TerminateJobObject`) or closing the launcher ends the whole tree. Esc / pad B during a
+    build = cancel ("Build cancelled.", the launcher stays); during Build all the first press = stop after
+    this game ("ESC STOP AFTER THIS GAME"), a second = cancel it too ("Build all cancelled: N built.", or
+    "Cancelled. Built N, failed M ..."). Quitting = the window's close button only.
+  - After a cancel (and on quit during a build) an exe in `build\` written since the build started is
+    deleted: the linker may have been stopped while writing it (a rebuild writes it anew anyway).
+  - Test env `LAUNCHER_KEYS=<ms>:<input>[,...]` (esc, enter, a, r, d, pada, padb, padx, padd, quit) pushes
+    input through the normal event handling. Verified in the scratch tree (sonic1 built from scratch, the
+    input at 25 s, cc1 / gcc / ninja / cmake / build.ps1 listed just before it): single Esc, Build all pad B
+    twice, quit: no build process left afterwards, no sonic1 exe; screenshots of all help / message states
+    at 960x540.
 - The message of a finished build now stays when the build moved the selection to its game (`g_msg_sel`
   replaces the main loop's private last selection; before, browsing during a build and the build's jump back
   cleared "Build finished." at once).
 - Test env `LAUNCHER_AUTO=buildall`. Verified in a scratch copy of the tree (junctions to ROMs / Recomp /
   Common, three game folders, one build.ps1 failing on purpose): real builds of Sonic 1 / Chaos / 2, the
-  failure counted and selected, screenshots at 960x540 / 1280x720 / 1920x1080. Not tested: Esc / pad B stop,
-  a PATCH game in the queue, the release `--build` path in a queue.
+  failure counted and selected, screenshots at 960x540 / 1280x720 / 1920x1080. Not tested: a PATCH game in
+  the queue, the release `--build` path in a queue (and cancelling it).

@@ -115,7 +115,8 @@ No games are included.
 3. Choose a game and press Enter (pad A). The first time, the launcher builds the game from your ROM:
    it recompiles the ROM to C and compiles that with the C compiler in Engine\\Compiler (about 1-2
    minutes, Golvellius about 5). After that the game starts at once. To build every game that is not
-   built yet in one go, press A (pad X); Esc (pad B) stops it after the current game.
+   built yet in one go, press A (pad X); Esc (pad B) stops it after the current game, a second press
+   cancels that one too. Esc (pad B) during a single build cancels it.
 
 The games run in their own window. In a game: F1 (pad Start) opens the options / map overlay, Esc asks
 before quitting, Tab = fast forward, F11 = fullscreen.
@@ -139,8 +140,8 @@ Pictures
   ("<game> (title).png", delete one to capture it again). launcher.ini.sample (copy it to
   launcher.ini) lists the launcher settings.
 
-Keys in the launcher: Up / Down select, Enter / pad A play, R / pad Y rebuild, Esc / pad B back,
-F11 fullscreen.
+Keys in the launcher: Up / Down select, Enter / pad A play, R / pad Y rebuild, A / pad X build all,
+Esc / pad B back (during a build: cancel it), F11 fullscreen.
 
 Not affiliated with or endorsed by Sega. All game names are trademarks of their owners and are used
 only to say which game a profile is for. Use ROMs you own.
