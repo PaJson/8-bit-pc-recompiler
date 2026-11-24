@@ -4,6 +4,17 @@ One section per release, newest first. The section `## v<version>` becomes the t
 Release for the tag `v<version>` (`.github/workflows/release.yml`); a release branch is checked for it
 (`.github/workflows/check.yml`).
 
+## v0.2.0
+
+Two new features: Build all in the launcher, and a save-slot preview in Miracle Warriors.
+
+- Launcher: A (pad X) builds every game that is not built yet, one after the other (patched games get
+  their patched ROM first). Esc (pad B) stops after the current game. If a build fails, the others still
+  run, and at the end the first failed game is selected (see its `build_log.txt`).
+- Miracle Warriors: when loading (CONTINUE on the title screen) or saving (QUIT, SAVE in the game), the
+  side panel shows the highlighted save slot: guilders, fangs, character points, the party, and where
+  you saved on that save's own map, plus the world overview. Empty slots say so.
+
 ## v0.1.4
 
 A clearer README on GitHub; the zip is the same as v0.1.3 apart from the version number.
