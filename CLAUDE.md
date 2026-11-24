@@ -80,7 +80,10 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
 ## Current state (2026-11-24; update or delete when done)
-- Latest release **v0.1.4** (tag on `eea713b`); v0.1.0-v0.1.4 = PRs #1-#5 (first release, corrected credits,
+- Latest release **v0.2.0** (tag on `6789164`; PRs #6 + #7): launcher Build all (A / pad X), Esc / pad B
+  cancel a build (the whole process tree, job object), key help per device; Miracle Warriors save-slot
+  preview in the panel. Not tested yet: a patched game in the Build all queue.
+  v0.1.0-v0.1.4 = PRs #1-#5 (first release, corrected credits,
   public repo + README.txt wording, "license" spelling, clearer README). The repo `PaJson/8-bit-pc-recompiler`
   is PUBLIC since 2026-11-24 (history checked first: `Docs/notes/history.md`). Every release: the flow in
   `Docs/notes/launcher-and-release.md` "Release flow" (release PR -> Check -> user merges -> tag on the
