@@ -2,7 +2,7 @@
 #
 #   1. a release branch (release/v<version>): name = app_info.toml version, CHANGELOG.md has a "## v<version>"
 #      section, the tag v<version> does not exist yet
-#   2. the engine self-tests (Recomp/smsggrecomp/tests/run_selftests.sh)
+#   2. the engine self-tests (Recomp/smsggrecomp/tests/run_selftests.sh; gpu_jobs skipped: no GPU here)
 #   3. the whole release build (Tools/make_release.py --zip, ends with the smoke test: a tiny ROM of our own
 #      built and run with nothing but the release on PATH)
 #   4. the zip is attached to the run (Artifacts), so the exact zip can be tested before merging
@@ -27,13 +27,14 @@ permissions:
 jobs:
   check:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       # the runner's own MSYS2 (C:\msys64): the same path as on the developer's PC, which the engine's
-      # self-test script uses; mesa = software OpenGL for the GPU self-tests (the runner has no GPU)
+      # self-test script uses; mesa = software OpenGL (the runner has no GPU) for reference_present
       - uses: msys2/setup-msys2@v2
         id: msys2
         with:
@@ -47,7 +48,7 @@ jobs:
             mingw-w64-x86_64-SDL2
             mingw-w64-x86_64-mesa
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -75,10 +76,11 @@ jobs:
       - name: Engine self-tests
         shell: msys2 {0}
         working-directory: Recomp/smsggrecomp
+        timeout-minutes: 10
         env:
-          # Mesa's own CPU renderer: without this Mesa uses D3D12 on the Microsoft Basic Render Driver,
-          # where gpu_jobs failed (first run of this workflow, PR #1)
-          GALLIUM_DRIVER: llvmpipe
+          # no GPU here: gpu_jobs fails on Mesa's default D3D12 path (Microsoft Basic Render Driver) and hangs
+          # on Mesa llvmpipe (PR #1, runs 1-2); it runs on the developer's PC. reference_present passes here.
+          SMS_SELFTEST_SKIP_GPU: "1"
         run: |
           mkdir -p build_selftest
           ls /mingw64/bin | grep -i -E "^(opengl32|libgallium|libglapi)" || true
@@ -88,11 +90,12 @@ jobs:
           sh tests/run_selftests.sh build_selftest
 
       - name: Build the release (+ smoke test)
+        timeout-minutes: 30
         shell: pwsh
         run: python -I Tools/make_release.py out --zip --msys "${{ steps.msys2.outputs.msys2-location }}"
 
       - name: Attach the zip
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.ver.outputs.title }}
           path: out/${{ steps.ver.outputs.title }}.zip
@@ -101,7 +104,7 @@ jobs:
 
       - name: Self-test logs (on failure)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: selftest-logs
           path: Recomp/smsggrecomp/build_selftest/*.log

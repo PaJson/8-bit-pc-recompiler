@@ -167,3 +167,10 @@
   narrow panel ("ENTER PLAY R REBUILD ESC BACK").
 - Test env `LAUNCHER_SIZE=<w>x<h>` (window size, for `LAUNCHER_SHOT` pictures). Checked by screenshots at
   960x540 / 1280x720 / 1920x1080 and during a real build (LAUNCHER_AUTO=build:sonic1, LAUNCHER_SHOT_MS).
+- First Check runs (PR #1): run 1 `gpu_jobs` failed (Mesa's default D3D12 path on the Microsoft Basic Render
+  Driver), run 2 hung > 12 min with `GALLIUM_DRIVER=llvmpipe` (cancelled). Now: engine `run_selftests.sh`
+  `SMS_SELFTEST_SKIP_GPU=1` (engine `8f18b70`) skips only `gpu_jobs` on GitHub (it runs locally, release
+  step 2); `reference_present` passes there on Mesa D3D12. Job time limit 45 min (self-tests 10, build 30).
+  Actions updated to checkout / setup-python / upload-artifact v7 (Node 20 deprecation warning).
+- Open (later release): setup-msys2 warns "MINGW64 is deprecated, migrate to UCRT64": a toolchain move
+  (dev PC, workflows, the release's bundled compiler); left visible as a reminder.
