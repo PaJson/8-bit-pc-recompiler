@@ -47,8 +47,11 @@ Games/*/*/build_log.txt
 # user bug reports (screenshots / recordings of the game)
 Bugs/
 
-# the user's own artwork: launcher background, game covers "(front)" and logos "(logo)" (never committed)
-Images/
+# Images/: the app's own art at the top level (Background.png, Logo.png, Icon*.png, Icon.ico) is committed;
+# the platform subfolders (Images/sms/ ...) hold the user's game art ("(front)", "(logo)": SEGA artwork,
+# never committed) and the title screens the launcher captures from the user's ROMs ("(title)").
+Images/*/
+!Images/*.png
 
 # launcher: local settings and build output
 launcher.ini

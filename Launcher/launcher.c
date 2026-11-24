@@ -17,14 +17,21 @@
  * Games/<slug>/build_log.txt; this recompiles the ROM and can take minutes; the Release layout has no
  * build.ps1). The launcher hides while a game runs.
  *
- * Background: the first .jpg/.png/.bmp in Images/ (the user's own picture, not part of the repo) or
- * `background = <path>` in launcher.ini; without one a generic background is drawn (no logos).
- * Game art (optional, also the user's own, see runner/art.h): Images/<title> (front).jpg|png = the
- * cover shown beside the list for the selected game (background dimmed behind it, cross-fade),
- * Images/<title> (logo).png = its title logo (white outline added) above the details. <title> is
- * matched against the game's name / ROM file name ("Phantasy Star" = every Phantasy Star entry);
- * `art.<slug> = <title>` in launcher.ini picks a title by hand. Files named "<x> (<kind>)" are
- * never taken as the background.
+ * Background: `background = <path>` in launcher.ini, else the app's Images/Background.png (committed,
+ * like Logo.png, Icon.png, IconLarge.png, Icon.ico), else another picture in Images/, else a generic
+ * background drawn here. Over any background but the app's own, the PRESS START screen shows
+ * Images/Logo.png. Transparent borders of every picture are trimmed when it is loaded.
+ * Game art (optional, the user's own, in Images/ or Images/<platform>/, see runner/art.h):
+ * <title> (front).jpg|png = the cover shown beside the list for the selected game (background
+ * dimmed behind it, cross-fade), <title> (logo).png = its title logo (white outline added) above the
+ * details. <title> is matched against the game's name / ROM file name ("Phantasy Star" = every
+ * Phantasy Star entry); `art.<slug> = <title>` in launcher.ini picks a title by hand. Files named
+ * "<x> (<kind>)" are never taken as the background.
+ * Without a cover, a built game shows its own title screen: Images/<platform>/<display name>
+ * (title).png, captured from the player's ROM by the game exe (--title-shot) in the background, one
+ * game at a time (title_capture_tick); drawn pixel-sharp. Delete the file to capture it again;
+ * game.toml `title_frame = N` picks the frame by hand. Test env: LAUNCHER_NO_TITLES=1 (no capture),
+ * LAUNCHER_CAPTURE_ONLY=1 (capture every missing title without a window, then quit).
  * Text uses the engine HUD font (runner/hud.c). Images are decoded with GDI+ (part of Windows).
  *
  * Start screen: the background with a blinking PRESS START; Enter / click / pad Start shows the game
@@ -139,24 +146,40 @@ static void load_ini(void)
     fclose(f);
 }
 
-/* first image in Images/ when launcher.ini names none */
+/* The app's own art (Images\, committed): Background.png = the launcher background (it contains the
+   app's logo), Logo.png = the logo alone (shown on the PRESS START screen over any other background),
+   Icon.png / IconLarge.png -> Icon.ico (Tools/make_icon.py, embedded in the exes). */
+static char g_app_logo[MAX_PATH];                  /* Images\Logo.png, "" = none */
+static bool g_bg_is_app;                           /* the background is Images\Background.* */
+
+/* launcher.ini `background =`, else Images\Background.(png|jpg|jpeg|bmp), else the first other picture
+   in Images\ that is not the app's logo / icon nor game art ("<title> (front|full|logo|back|title)") */
 static void find_background(void)
 {
-    if (g_bg_path[0] && is_file(g_bg_path)) return;
-    g_bg_path[0] = 0;
-    static const char *const ext[] = { "*.jpg", "*.jpeg", "*.png", "*.bmp" };
+    { char p[MAX_PATH]; snprintf(p, sizeof p, "%s\\Images\\Logo.png", g_root); if (is_file(p)) snprintf(g_app_logo, sizeof g_app_logo, "%s", p); }
+    static const char *const ext[] = { "png", "jpg", "jpeg", "bmp" };
+    if (!(g_bg_path[0] && is_file(g_bg_path))) {
+        g_bg_path[0] = 0;
+        for (int i = 0; i < 4 && !g_bg_path[0]; i++) {
+            char p[MAX_PATH]; snprintf(p, sizeof p, "%s\\Images\\Background.%s", g_root, ext[i]);
+            if (is_file(p)) snprintf(g_bg_path, sizeof g_bg_path, "%s", p);
+        }
+    }
     for (int i = 0; i < 4 && !g_bg_path[0]; i++) {
-        char pat[MAX_PATH]; snprintf(pat, sizeof pat, "%s\\Images\\%s", g_root, ext[i]);
+        char pat[MAX_PATH]; snprintf(pat, sizeof pat, "%s\\Images\\*.%s", g_root, ext[i]);
         WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pat, &fd);
         if (h == INVALID_HANDLE_VALUE) continue;
-        do {                                                /* not game art: "<title> (front|full|logo|back).ext" */
+        do {
             const char *f = fd.cFileName, *dot = strrchr(f, '.');
             size_t stem = dot ? (size_t)(dot - f) : strlen(f);
-            if (stem > 0 && f[stem - 1] == ')' && (strstr(f, " (front)") || strstr(f, " (full)") || strstr(f, " (logo)") || strstr(f, " (back)"))) continue;
+            if (!_strnicmp(f, "Logo.", 5) || !_strnicmp(f, "Icon", 4)) continue;
+            if (stem > 0 && f[stem - 1] == ')' && (strstr(f, " (front)") || strstr(f, " (full)") || strstr(f, " (logo)") || strstr(f, " (back)") || strstr(f, " (title)"))) continue;
             snprintf(g_bg_path, sizeof g_bg_path, "%s\\Images\\%s", g_root, f); break;
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
+    const char *b = strrchr(g_bg_path, '\\'); b = b ? b + 1 : g_bg_path;
+    g_bg_is_app = !_strnicmp(b, "Background.", 11);
 }
 
 /* ---------------- files, CRC32 ---------------- */
@@ -415,6 +438,8 @@ enum { ST_READY, ST_NOT_BUILT, ST_PATCH, ST_NEEDS_PATCH, ST_NO_PROFILE };
 typedef struct {
     char slug[64], platform[32], name[160], dir[MAX_PATH], rom[MAX_PATH], exe[MAX_PATH], romfile[200];
     char cover[MAX_PATH], logo[MAX_PATH];        /* optional art (Images/), "" = none */
+    char title[MAX_PATH];                        /* Images\<platform>\<name> (title).png: captured from the ROM */
+    int  title_frame;                            /* game.toml `title_frame = N`: take that frame (0 = find it) */
     int  state;
     uint32_t crc;                                /* the ROM this build is made for */
     /* a patched ROM the launcher can make (game.toml patch_* keys): base ROM + patch, out = ROMs/Patched/<rom_name> */
@@ -492,7 +517,27 @@ static bool toml_hex(const char *toml, const char *key, uint32_t *v)
     *v = (uint32_t)x; return true;
 }
 
+/* unquoted integer value `key = 123` */
+static bool toml_int(const char *path, const char *key, int *v)
+{
+    FILE *f = fopen(path, "r"); if (!f) return false;
+    char line[1024]; bool ok = false; size_t kl = strlen(key);
+    while (!ok && fgets(line, sizeof line, f)) {
+        char *p = line; while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, key, kl) || (p[kl] != ' ' && p[kl] != '=' && p[kl] != '\t')) continue;
+        char *q = strchr(p, '='); if (!q) continue;
+        char *e; long x = strtol(q + 1, &e, 10);
+        if (e != q + 1) { *v = (int)x; ok = true; }
+    }
+    fclose(f);
+    return ok;
+}
+
 static bool g_any_logo;
+static bool g_ts_idle;                         /* title capture: nothing left to do (until the next scan) */
+/* Covers: the user's own "<title> (front)" first; without one, the game's title screen captured from
+   its ROM (Images\<platform>\<display name> (title).png, made by the game exe's --title-shot, see
+   title_capture_tick; exact file name, never a prefix match: every build has its own title). */
 static void find_art(Game *g)
 {
     char dir[MAX_PATH]; snprintf(dir, sizeof dir, "%s\\Images", g_root);
@@ -502,6 +547,12 @@ static void find_art(Game *g)
     if (!art_find(dir, name, "front", g->cover, sizeof g->cover)) art_find(dir, stem, "front", g->cover, sizeof g->cover);
     if (!art_find(dir, name, "logo", g->logo, sizeof g->logo)) art_find(dir, stem, "logo", g->logo, sizeof g->logo);
     if (g->logo[0]) g_any_logo = true;
+    g->title[0] = 0;
+    if (g->state == ST_NO_PROFILE) return;
+    char fn[200]; snprintf(fn, sizeof fn, "%s", g->name);
+    for (char *c = fn; *c; c++) if (strchr("<>:\"/\\|?*", *c) || (unsigned char)*c < 32) *c = '_';
+    snprintf(g->title, sizeof g->title, "%s\\%s\\%s (title).png", dir, g->platform[0] ? g->platform : "sms", fn);
+    if (!g->cover[0] && is_file(g->title)) snprintf(g->cover, sizeof g->cover, "%s", g->title);
 }
 
 static void scan_games(void)
@@ -567,13 +618,14 @@ static void scan_games(void)
             }
             find_exe(g, toml);
             g->state = st >= 0 ? st : g->exe[0] ? ST_READY : ST_NOT_BUILT;
+            toml_int(toml, "title_frame", &g->title_frame);
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
     } while (FindNextFileA(ph, &pd));
     if (ph != INVALID_HANDLE_VALUE) FindClose(ph);
     add_unprofiled_roms();
-    g_any_logo = false;
+    g_any_logo = false; g_ts_idle = false;
     for (int i = 0; i < g_ngames; i++) find_art(&g_games[i]);
     qsort(g_games, (size_t)g_ngames, sizeof(Game), cmp_games);
 }
@@ -779,7 +831,8 @@ static void draw_generic_bg(uint32_t *px, int w, int h, int ccx, int cx_area_w)
                 if (X >= 0 && Y >= 0 && X < w && Y < h) px[(size_t)Y * w + X] = (yy == 0 && ch == 'X') ? 0xFF3A5478 : col;
             }
         }
-    /* title */
+    /* title (with Images\Logo.png the PRESS START screen shows that instead) */
+    if (g_app_logo[0]) return;
     const char *t1 = "PC RECOMPILER", *t2 = "8-BIT CONSOLE CLASSICS";
     int s1 = cx_area_w * 7 / 10 / (6 * (int)strlen(t1)); if (s1 < 2) s1 = 2;
     int s2 = s1 * 6 / 10; if (s2 < 2) s2 = 2;
@@ -943,6 +996,20 @@ static ArtTex *art_tex(const char *path, bool logo, int bw, int bh, bool load)
     snprintf(lru->path, sizeof lru->path, "%s", path); lru->logo = logo; lru->bw = bw; lru->bh = bh; lru->used = ++g_art_clock;
     int w = 0, h = 0; uint32_t *img = load_image(path, &w, &h);
     if (!img) img = art_load(path, &w, &h);
+    if (img) {                                           /* trim fully transparent borders (logos with margins) */
+        int x0 = w, y0 = h, x1 = -1, y1 = -1;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                if ((img[(size_t)y * w + x] >> 24) > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; y1 = y; }
+        if (x1 >= 0 && (x0 > 0 || y0 > 0 || x1 < w - 1 || y1 < h - 1)) {
+            int cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+            uint32_t *c = (uint32_t *)malloc((size_t)cw * ch * 4);
+            if (c) {
+                for (int y = 0; y < ch; y++) memcpy(c + (size_t)y * cw, img + (size_t)(y + y0) * w + x0, (size_t)cw * 4);
+                free(img); img = c; w = cw; h = ch;
+            }
+        }
+    }
     if (img && logo) {
         int r = (w > h ? w : h) / 100, ow, oh; if (r < 2) r = 2;
         uint32_t *o = art_outline(img, w, h, r, 0xFFFFFFFFu, &ow, &oh);
@@ -955,6 +1022,17 @@ static ArtTex *art_tex(const char *path, bool logo, int bw, int bh, bool load)
     if (sc < 1) {                                        /* shrink in software (area average): sharp */
         tw = (int)(w * sc + 0.5); th = (int)(h * sc + 0.5); if (tw < 1) tw = 1; if (th < 1) th = 1;
         px = art_shrink(img, w, h, tw, th);
+    } else if (strstr(path, " (title).")) {              /* captured title screen: pixel art, keep it crisp */
+        int k = (int)ceil(sc);                           /* whole-pixel enlargement, then area average */
+        tw = (int)(w * sc + 0.5); th = (int)(h * sc + 0.5);
+        uint32_t *up = (uint32_t *)malloc((size_t)w * k * h * k * 4);
+        if (up) {
+            for (int y = 0; y < h * k; y++)
+                for (int x = 0; x < w * k; x++) up[(size_t)y * w * k + x] = img[(size_t)(y / k) * w + x / k];
+            if (w * k == tw && h * k == th) px = up;
+            else { px = art_shrink(up, w * k, h * k, tw, th); free(up); }
+        }
+        if (!px) { px = img; tw = w; th = h; }
     }
     if (px) {
         lru->tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, tw, th);
@@ -1078,6 +1156,19 @@ static void render(void)
         SDL_RenderCopy(g_ren, g_bg_tex, &src, NULL);
     }
     if (g_splash) {
+        if (g_app_logo[0] && !g_bg_is_app) {                       /* the app's logo above PRESS START */
+            int area = w * 58 / 100;                               /* generated background: its composition */
+            int bw = g_bg_generic ? area * 90 / 100 : w * 62 / 100, bh = g_bg_generic ? h * 22 / 100 : h * 30 / 100;
+            ArtTex *t = art_tex(g_app_logo, false, bw, bh, true);
+            if (t) {
+                float y = h * g_press_y / 100.f - h * 0.06f - t->dh, x = (w - t->dw) / 2;
+                if (g_bg_generic) { y = h * 0.66f; x = (g_panel_left ? w - area / 2 : area / 2) - t->dw / 2; }
+                if (y < h * 0.03f) y = h * 0.03f;
+                SDL_FRect d = { x, y, t->dw, t->dh };
+                SDL_SetTextureAlphaMod(t->tex, 255);
+                SDL_RenderCopyF(g_ren, t->tex, NULL, &d);
+            }
+        }
         if (g_ui_tex) { SDL_SetTextureAlphaMod(g_ui_tex, 255); SDL_RenderCopy(g_ren, g_ui_tex, NULL, NULL); }
         SDL_RenderPresent(g_ren);
         return;
@@ -1185,6 +1276,57 @@ static void poll_process(void)
     if (g_play_after_build) { g_status[0] = 0; if (start_game(g)) SDL_HideWindow(g_win); }
 }
 
+/* ---------------- title screens: captured from the ROMs in the background ----------------
+   A built game without the user's cover and without its title file gets one: its exe runs headless
+   with --title-shot (finds the title screen in the first 60 s; game.toml `title_frame = N` takes that
+   frame instead; never reads or writes saves) and writes Images\<platform>\<name> (title).png. One at a
+   time, never while a game or a build runs; ~2 s each. A failure is not retried in this session. */
+static PROCESS_INFORMATION g_ts_proc; static bool g_ts_running; static char g_ts_slug[64];
+#define MAX_TS_FAIL 64
+static char g_ts_failed[MAX_TS_FAIL][64]; static int g_ts_nfailed;
+
+static bool ts_failed(const char *slug)
+{
+    for (int i = 0; i < g_ts_nfailed; i++) if (!strcmp(g_ts_failed[i], slug)) return true;
+    return false;
+}
+
+static void title_capture_tick(void)
+{
+    if (g_ts_running) {
+        if (WaitForSingleObject(g_ts_proc.hProcess, 0) != WAIT_OBJECT_0) return;
+        DWORD code = 1; GetExitCodeProcess(g_ts_proc.hProcess, &code);
+        CloseHandle(g_ts_proc.hProcess); CloseHandle(g_ts_proc.hThread);
+        g_ts_running = false;
+        for (int i = 0; i < g_ngames; i++) {
+            Game *g = &g_games[i];
+            if (strcmp(g->slug, g_ts_slug)) continue;
+            if (code == 0 && is_file(g->title)) { if (!g->cover[0]) snprintf(g->cover, sizeof g->cover, "%s", g->title); }
+            else if (g_ts_nfailed < MAX_TS_FAIL) snprintf(g_ts_failed[g_ts_nfailed++], sizeof g_ts_failed[0], "%s", g->slug);
+        }
+        return;
+    }
+    if (getenv("LAUNCHER_NO_TITLES")) { g_ts_idle = true; return; }
+    if (g_proc_kind || g_ts_idle) return;
+    for (int i = 0; i < g_ngames; i++) {
+        const Game *g = &g_games[i];
+        if (g->state != ST_READY || !g->exe[0] || !g->rom[0] || g->cover[0] || !g->title[0] || is_file(g->title) || ts_failed(g->slug)) continue;
+        char dir[MAX_PATH]; snprintf(dir, sizeof dir, "%s\\Images", g_root); CreateDirectoryA(dir, NULL);
+        { size_t dl = strlen(dir); snprintf(dir + dl, sizeof dir - dl, "\\%s", g->platform[0] ? g->platform : "sms"); } CreateDirectoryA(dir, NULL);
+        char cmd[4 * MAX_PATH];
+        int n = snprintf(cmd, sizeof cmd, "\"%s\" \"%s\" --title-shot \"%s\"", g->exe, g->rom, g->title);
+        if (g->title_frame > 0) snprintf(cmd + n, sizeof cmd - (size_t)n, " --title-frame %d", g->title_frame);
+        STARTUPINFOA si; memset(&si, 0, sizeof si); si.cb = sizeof si;
+        if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, NULL, g->dir, &si, &g_ts_proc)) {
+            if (g_ts_nfailed < MAX_TS_FAIL) snprintf(g_ts_failed[g_ts_nfailed++], sizeof g_ts_failed[0], "%s", g->slug);
+            return;
+        }
+        g_ts_running = true; snprintf(g_ts_slug, sizeof g_ts_slug, "%s", g->slug);
+        return;
+    }
+    g_ts_idle = true;                                  /* nothing left; scan_games() looks again */
+}
+
 static void move_sel(int d)
 {
     if (!g_ngames) return;
@@ -1200,9 +1342,17 @@ int main(int argc, char **argv)
     (void)argc; (void)argv;
     find_root();
     load_ini();
-    if (getenv("LAUNCHER_NO_IMAGE")) g_bg_path[0] = 0;     /* test: the generic background */
-    else find_background();
+    find_background();
+    if (getenv("LAUNCHER_NO_IMAGE")) { g_bg_path[0] = 0; g_bg_is_app = false; }   /* test: the generic background */
     scan_games();
+    if (getenv("LAUNCHER_CAPTURE_ONLY")) {                  /* test / batch: every missing title, no window */
+        do { title_capture_tick(); Sleep(20); } while (g_ts_running || !g_ts_idle);
+        for (int i = 0; i < g_ngames; i++)
+            if (g_games[i].state != ST_NO_PROFILE)
+                fprintf(stderr, "[launcher] %-12s %s\n", g_games[i].cover[0] ? (!strcmp(g_games[i].cover, g_games[i].title) ? "title" : "cover")
+                        : ts_failed(g_games[i].slug) ? "FAILED" : "-", g_games[i].name);
+        return 0;
+    }
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
     g_win = SDL_CreateWindow("8-bit PC Recompiler", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
@@ -1323,6 +1473,7 @@ int main(int argc, char **argv)
         }
         int was = g_proc_kind;
         poll_process();
+        title_capture_tick();
         if (exit_after && was && !g_proc_kind) { fprintf(stderr, "[launcher] %s\n", g_status[0] ? g_status : "game ended"); quit = true; }
         if (g_proc_kind == 1) { SDL_Delay(100); continue; }        /* game running: launcher hidden */
         render();
@@ -1330,6 +1481,7 @@ int main(int argc, char **argv)
         SDL_Delay(g_proc_kind ? 30 : 15);
     }
     if (g_proc_kind == 2) TerminateProcess(g_proc.hProcess, 1);
+    if (g_ts_running) TerminateProcess(g_ts_proc.hProcess, 1);   /* it writes <file>.tmp and renames it at the end: never a half title file */
     SDL_Quit();
     return 0;
 }

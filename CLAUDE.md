@@ -44,6 +44,33 @@ templates in `mkgame.py`, then the same folders. Candidate engines (user's forks
 (nothing checked yet: licence, CPU coverage, runner API); 16-bit-or-more ones belong to the 16-bit project / elsewhere (`segagenesisrecomp`,
 `snesrecomp`, `gbarecomp`).
 
+## App art, icon, captured title screens (2026-11-24)
+- **`Images/` top level = the app's own art, committed** (user's pictures, made 2026-11-23/24, same set in the 16-bit project): `Background.png`
+  (launcher background, 2730x1536, contains the logo; kept PNG by the user's choice: JPG q92 was 6x smaller but rings at hard pixel edges),
+  `Logo.png`, `Icon.png` ("8 BIT"), `IconLarge.png` ("8-BIT PC RECOMP"), `Icon.ico`. The user saved them with a yellow `#FFFF00` colour key
+  (tRNS); converted to real alpha 2026-11-24 with the edge pixels un-blended from the old WHITE background (else a 1-px light halo on dark
+  backgrounds); yellow-key originals only in that session's scratchpad. `.gitignore`: `Images/*/` (platform folders = the user's SEGA covers
+  + captured titles, never committed) and `!Images/*.png` (the general `*.png` rule is for test dumps).
+- **`python -I Tools/make_icon.py [<Images dir>]`** (stdlib only, shared with the 16-bit project) -> `Images/Icon.ico`: 16-96 px from
+  `Icon.png`, 128 + 256 from `IconLarge.png` (square crop around the visible pixels + 2 %, premultiplied area average, BMP entries + 256 PNG).
+  Re-run after changing the pictures. Embedded by the launcher (`Launcher/CMakeLists.txt`) and every game exe (engine `cmake/SmsGame.cmake`:
+  `SMSGG_ICON` or `Images/Icon.ico` in the game folder or up to 4 parents, RC via `check_language(RC)`; no per-game CMakeLists edits).
+  SDL2 uses the exe's first icon for the window / taskbar.
+- **Title screens from the player's ROM** (no SEGA art shipped): runner `--title-shot <png> [--title-frames N] [--title-frame F]`
+  (engine `runner/main.c`): headless, forces `SMS_NO_SAVE` / `SMS_NO_ART`, picks the longest stretch of a near-still (< 10 % pixels
+  changed vs its first frame) non-blank (>= 5 % lit, >= 4 colours) picture in the first 3600 frames, and within it the frame with the
+  most pixels outside the main background colour ("most lit" failed on Sonic Chaos' cyan title: lettering missing). ~2 s per game. Verified
+  on all 24 builds (all titles correct incl. 7 PSRP languages, Korea). The launcher (`title_capture_tick`) runs it in the background for
+  every built game without the user's `(front)` cover and without `Images/<platform>/<display name> (title).png` (exact name, no prefix
+  match), one at a time, never during a game / build; failures not retried per session; game.toml `title_frame = N` overrides (carried into
+  Release by `make_release.py`). Shown in the cover box pixel-sharp (whole-pixel enlarge + area average). Delete a file to recapture.
+  Test env: `LAUNCHER_CAPTURE_ONLY=1` (all missing titles, no window, prints a table; 24 games = 51 s), `LAUNCHER_NO_TITLES=1`.
+- Launcher background: `launcher.ini background=` > `Images/Background.*` > another picture in `Images/` (not Logo / Icon / game art) >
+  generated one. Over any background but the app's own, the PRESS START screen shows `Logo.png` (generated bg: under its ring, replacing
+  its drawn title text). Transparent borders of every loaded picture are trimmed. `make_release.py`: top-level `Images/` always copied,
+  `Images/<platform>/` only with `--with-images`.
+- Not done (discussed): the PS side panel's pre-game screen could show the `(title)` picture (panel is 256 px wide) instead of the text.
+
 ## Layout (project root = this folder)
 
 **Renaming the project folder** (user wish 2026-11-15: "SEGA Master System PC Re-compiler"; 2026-11-22: "SMS PC Recompiler", renamed by the user the same day; later 2026-11-22: "8-bit PC Recompiler" = the script's default now): run `Tools/rename_project.ps1` from a plain PowerShell window with VS Code, Claude Code, the launcher and all games closed. It renames the folder, copies Claude Code's project data (`%USERPROFILE%\.claude\projects\<path with non-alphanumerics as '-'>`: memory + conversations; old copy kept) and repairs every CMake build folder in place (old path replaced in CMakeCache.txt, CMakeFiles/ + ninja state removed, reconfigured with its own settings; `-Rebuild` also builds all). Tested on a scratch copy (launcher build renamed into a name with `#` and spaces, then built). Nothing else stores the absolute path (sources, scripts, git incl. the submodule, saves, ini files). Done by the user 2026-11-15.

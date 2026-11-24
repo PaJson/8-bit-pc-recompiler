@@ -12,7 +12,10 @@ The result is the intended running environment, without sources or a compiler:
       ROMs/Patches/   patch files (IPS / BPS, loose or in the author's .zip): ours (Golvellius Plus) and
                       the PSRP 2.6.1 zips (their terms allow passing them on unchanged, free of charge)
       ROMs/Patched/   ROMs the launcher makes from a base ROM + a patch
-      Images/         optional art: background, "<title> (front).jpg", "<title> (logo).png"
+      Images/         the app's own art (Background.png, Logo.png, Icon*.png, Icon.ico); always copied
+      Images/<plat>/  game art: the user's "<title> (front).jpg" / "(logo).png" and the title screens the
+                      launcher captured from the user's ROMs, "<name> (title).png" (--with-images only;
+                      without them the launcher captures the titles again on its first start)
 
 Only games with a built exe (Games/<slug>/build/*.exe) and their ROM present are copied. A game whose ROM
 is made by a patch gets a recipe in its game.toml: every .bps in ROMs/Patches (loose or inside a zip) is
@@ -20,7 +23,8 @@ read, and a BPS whose target CRC32 is that game's ROM gives the base ROM's CRC32
 (the launcher finds both by CRC32, so renamed files work too).
 
 NEVER copied: ROMs, saves, the user's .ini settings, third-party patch files other than those in
-REDISTRIBUTABLE (whole zips, byte-identical; CREDITS.md has the official pages). --with-images copies the user's own Images/ (personal use only: SEGA artwork).
+REDISTRIBUTABLE (whole zips, byte-identical; CREDITS.md has the official pages). --with-images copies the
+platform folders Images/<plat>/ (the user's own covers, personal use only: SEGA artwork; captured titles).
 Existing files in the output folder (saves, settings, ROMs) are kept; exes are replaced when they changed.
 The Games/*/ exes contain the game's program translated to PC code (derived from the ROM): the Release
 folder is for this PC, not for sharing (it is git-ignored).
@@ -108,8 +112,10 @@ Saves and settings
   Each game keeps its saves in Games\\sms\\<game>\\saves\\ and its options (the in-game HUD: F1 or pad Start)
   in an .ini file in Games\\sms\\<game>\\.
 
-Pictures (optional)
-  Images\\ : the first .jpg / .png there is the launcher background; "<title> (front).jpg" = a cover,
+Pictures
+  Images\\Background.png is the launcher background. For every built game the launcher shows the game's
+  own title screen, taken from your ROM the first time (Images\\sms\\<game> (title).png; delete it to take
+  it again). Your own pictures go into Images\\sms\\ and win over it: "<title> (front).jpg" = a cover,
   "<title> (logo).png" = a title logo (e.g. "Phantasy Star (front).jpg"). launcher.ini.sample (copy it
   to launcher.ini) lists the launcher settings.
 
@@ -135,6 +141,11 @@ def main():
     out = os.path.abspath(args[0]) if args else os.path.join(ROOT, "Release")
     for d in ("Games", "ROMs", "Images"):
         os.makedirs(os.path.join(out, d), exist_ok=True)
+    images = os.path.join(ROOT, "Images")             # the app's own art (top level, committed)
+    if os.path.isdir(images):
+        for f in os.listdir(images):
+            if os.path.isfile(os.path.join(images, f)) and not f.endswith(".tmp"):
+                copy_if_changed(os.path.join(images, f), os.path.join(out, "Images", f))
 
     sdl = os.path.join(ROOT, "Launcher", "build", "SDL2.dll")
     launcher = os.path.join(ROOT, "Launcher", "build", "Launcher.exe")
@@ -187,11 +198,13 @@ def release_platform(plat, out, sdl, with_images, done, skipped):
             if f.lower().endswith(".zip"):
                 copy_if_changed(os.path.join(src, f), os.path.join(dst, f))
 
-    if with_images and os.path.isdir(os.path.join(ROOT, "Images")):
-        for f in os.listdir(os.path.join(ROOT, "Images")):
-            p = os.path.join(ROOT, "Images", f)
-            if os.path.isfile(p):
-                copy_if_changed(p, os.path.join(out, "Images", f))
+    pimg = os.path.join(ROOT, "Images", plat)          # game art: the user's covers + captured titles
+    if with_images and os.path.isdir(pimg):
+        os.makedirs(os.path.join(out, "Images", plat), exist_ok=True)
+        for f in os.listdir(pimg):
+            p = os.path.join(pimg, f)
+            if os.path.isfile(p) and not f.endswith(".tmp"):
+                copy_if_changed(p, os.path.join(out, "Images", plat, f))
 
     patches = scan_patches(os.path.join(roms, "Patches"))
     rom_crcs = {}
@@ -225,6 +238,9 @@ def release_platform(plat, out, sdl, with_images, done, skipped):
                  'crc32        = "%08X"   # the ROM this game program is made for (any file name in ROMs\\)' % crc,
                  'exe          = "%s"' % exes[0],
                  'rom_name     = "%s"   # file name of a ROM the launcher makes (ROMs\\Patched\\)' % rom_name]
+        m = re.search(r"^\s*title_frame\s*=\s*(\d+)", text, re.M)
+        if m:
+            lines.append("title_frame  = %s   # the launcher's title screen = this frame" % m.group(1))
         recipe = patches.get(crc)
         if recipe and recipe[0] != crc:
             base_crc, pcrc, pname, pfrom = recipe

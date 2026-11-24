@@ -13,5 +13,18 @@ if (TARGET SDL2::SDL2main)
     target_link_libraries(Launcher PRIVATE SDL2::SDL2main)
 endif()
 target_link_libraries(Launcher PRIVATE SDL2::SDL2 gdiplus m)
+# Program icon: Images/Icon.ico (made by Tools/make_icon.py from Images/Icon.png + IconLarge.png).
+include(CheckLanguage)
+check_language(RC)
+set(LAUNCHER_ICON "${CMAKE_CURRENT_SOURCE_DIR}/../Images/Icon.ico")
+if(CMAKE_RC_COMPILER AND EXISTS "${LAUNCHER_ICON}")
+    enable_language(RC)
+    get_filename_component(LAUNCHER_ICON "${LAUNCHER_ICON}" ABSOLUTE)
+    set(_rc "${CMAKE_CURRENT_BINARY_DIR}/app_icon.rc")
+    file(CONFIGURE OUTPUT "${_rc}" CONTENT "1 ICON \"${LAUNCHER_ICON}\"\n")
+    set_source_files_properties("${_rc}" PROPERTIES OBJECT_DEPENDS "${LAUNCHER_ICON}")
+    target_sources(Launcher PRIVATE "${_rc}")
+endif()
+
 add_custom_command(TARGET Launcher POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:SDL2::SDL2>" "$<TARGET_FILE_DIR:Launcher>")
