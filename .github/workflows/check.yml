@@ -75,6 +75,10 @@ jobs:
       - name: Engine self-tests
         shell: msys2 {0}
         working-directory: Recomp/smsggrecomp
+        env:
+          # Mesa's own CPU renderer: without this Mesa uses D3D12 on the Microsoft Basic Render Driver,
+          # where gpu_jobs failed (first run of this workflow, PR #1)
+          GALLIUM_DRIVER: llvmpipe
         run: |
           mkdir -p build_selftest
           ls /mingw64/bin | grep -i -E "^(opengl32|libgallium|libglapi)" || true
