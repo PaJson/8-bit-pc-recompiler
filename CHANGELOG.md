@@ -4,6 +4,13 @@ One section per release, newest first. The section `## v<version>` becomes the t
 Release for the tag `v<version>` (`.github/workflows/release.yml`); a release branch is checked for it
 (`.github/workflows/check.yml`).
 
+## v0.1.2
+
+The project is now public on GitHub. The launcher and the games work as in v0.1.1.
+
+- `README.txt`: describes the project as a recompiler for 8-bit console games (so far Sega Master
+  System games).
+
 ## v0.1.1
 
 Corrected credits; the launcher and the games work as in v0.1.0.
