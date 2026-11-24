@@ -103,8 +103,9 @@ def scan_patches(pdir):
 README = """%(name)s v%(version)s
 %(line)s
 
-Native PC versions of 8-bit Sega games (Master System), made on YOUR PC from YOUR OWN ROMs by static
-recompilation, with optional extras (maps, options, quality-of-life features). No games are included.
+Native PC versions of 8-bit console games (so far Sega Master System games), made on YOUR PC from YOUR
+OWN ROMs by static recompilation, with optional extras (maps, options, quality-of-life features).
+No games are included.
 %(repository)s
 
 1. Put your ROM files into ROMs\\sms\\ (see ROMs\\README.txt). Any file names: the launcher recognises
