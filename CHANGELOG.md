@@ -4,6 +4,12 @@ One section per release, newest first. The section `## v<version>` becomes the t
 Release for the tag `v<version>` (`.github/workflows/release.yml`); a release branch is checked for it
 (`.github/workflows/check.yml`).
 
+## v0.1.3
+
+American spelling in the texts of the zip; the launcher and the games work as in v0.1.2.
+
+- `README.txt`, `CREDITS.md` and `Engine\Compiler\SOURCES.txt`: "license" instead of "licence".
+
 ## v0.1.2
 
 The project is now public on GitHub. The launcher and the games work as in v0.1.1.
