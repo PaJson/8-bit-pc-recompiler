@@ -4,6 +4,13 @@ One section per release, newest first. The section `## v<version>` becomes the t
 Release for the tag `v<version>` (`.github/workflows/release.yml`); a release branch is checked for it
 (`.github/workflows/check.yml`).
 
+## v0.1.4
+
+A clearer README on GitHub; the zip is the same as v0.1.3 apart from the version number.
+
+- `README.md` (GitHub page): the "Patched games" section explains the included patches, which original
+  ROM each needs and how the launcher applies them; maintainer-only text moved to the notes.
+
 ## v0.1.3
 
 American spelling in the texts of the zip; the launcher and the games work as in v0.1.2.
