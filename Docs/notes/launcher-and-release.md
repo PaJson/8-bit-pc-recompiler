@@ -156,7 +156,8 @@
   6. `git switch main && git pull`, `git tag v<version> && git push origin v<version>` -> Release
      workflow -> GitHub Release with the zip (private repo: visible to its collaborators only).
 - All other work goes through PRs too (any branch -> Check runs): since 2026-11-25 `main` takes no direct
-  pushes (ruleset, `Docs/notes/history.md` "Ruleset on main"). Step 6's tag push is not affected.
+  pushes and a PR merges only after Check passes (ruleset, `Docs/notes/history.md` "Ruleset on main").
+  Step 6's tag push is not affected.
 
 ## Launcher text fitting (2026-11-24, user report from the Sandbox test)
 - `fit_text()`: long text is cut with "..": list names and the 2nd line of the selected name in the MIDDLE

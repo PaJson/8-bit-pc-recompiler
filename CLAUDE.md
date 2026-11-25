@@ -11,8 +11,8 @@ the recompiler or runner.
 - **Never commit or push without the user's explicit go-ahead.** Engine first: commit + push in
   `Recomp/smsggrecomp` (branch `sms-pc-recompiler`), then `git add Recomp/smsggrecomp` + commit here.
 - **`main` takes no direct pushes** (ruleset "Protect main branch", a copy of GHAADD's, no bypass): every
-  change here, even a one-line doc fix, goes on a branch + PR; the user merges. No force push, no deleting
-  `main`. Tags are not covered (release tags are pushed as before).
+  change here, even a one-line doc fix, goes on a branch + PR; the user merges once Check (`check`, a
+  required status check) has passed. No force push, no deleting `main`. Tags are not covered.
 - Nothing ROM-derived or SEGA artwork in git or in a release: no ROMs, `generated/`, game exes,
   captured `(title)` pictures, `Images/<platform>/`. Only `Images/*.png|ico` (the app's own art).
 - Every game option defaults to the original game; features are our own C hooks (`[insn_hooks]`,
