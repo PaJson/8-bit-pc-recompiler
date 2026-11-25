@@ -227,8 +227,9 @@ bool gv_panel_entrance(int s, int *cell, uint8_t px[256])
 
 /* the cells of screen s as the game shows them: the hero's screen live ($CA00: opened caves, cut
    bushes), others from the ROM + the progress patches of $1AC4 (high nibble of $15E48[s] -> table
-   $1B03: a mask of $C845, then (cell, metatile) pairs up to $FF; 4 screens, e.g. bridges) */
-static void cells(int s, int hero, uint8_t out[180])
+   $1B03: a mask of $C845, then (cell, metatile) pairs up to $FF; 4 screens, e.g. bridges). prog = the
+   $C845 to use (the live one, or a save slot's) */
+static void cells_p(int s, int hero, uint8_t prog, uint8_t out[180])
 {
     if (s == hero) { for (int i = 0; i < 180; i++) out[i] = sms_read8((uint16_t)(0xCA00 + i)); return; }
     const uint8_t *l = layout(s);
@@ -237,9 +238,10 @@ static void cells(int s, int hero, uint8_t out[180])
     int t = asset(0x5D), hi = t >= 0 ? s_rom[t + s] >> 4 : 0;
     if (!hi || hi > 4) return;                      /* the table has 4 entries */
     int p = s_rom[0x1B03 + (hi - 1) * 2] | s_rom[0x1B03 + (hi - 1) * 2 + 1] << 8;
-    if (p >= 0x8000 || !(s_rom[p] & sms_read8(0xC845))) return;
+    if (p >= 0x8000 || !(s_rom[p] & prog)) return;
     for (p++; (size_t)p + 1 < s_rom_n && s_rom[p] != 0xFF; p += 2) if (s_rom[p] < 180) out[s_rom[p]] = s_rom[p + 1];
 }
+static void cells(int s, int hero, uint8_t out[180]) { cells_p(s, hero, sms_read8(0xC845), out); }
 /* terrain attribute of a metatile on screen s (the hero's: the live table) */
 static uint8_t terrain(int s, int hero, uint8_t m)
 {
@@ -289,7 +291,9 @@ static void reach(int hero)
     s_reach[(hero / COLS - s_r0) * WIN + hero % COLS - s_c0] = 1;
 }
 
-static void draw_screen(int s, int ox, int oy, int hero)
+/* screen s into img (row length stride) at ox, oy. A save slot's view: hero = -1, prog = its $C845,
+   ent = its known caves (NULL = the live game's, gv_cave_known) */
+static void draw_screen_ex(uint32_t *img, int stride, int s, int ox, int oy, int hero, uint8_t prog, const uint8_t *ent)
 {
     const uint8_t *tiles, *mt; uint32_t col[16];
     if (s == hero) {                                /* what the game has loaded (on_overworld() holds) */
@@ -302,8 +306,8 @@ static void draw_screen(int s, int ox, int oy, int hero)
         tiles = S->vram; mt = S->mt;
         for (int i = 0; i < 16; i++) col[i] = argb(pal ? pal[i] : g_vdp.cram[i]);
     }
-    uint8_t cl[180]; cells(s, hero, cl);
-    if (s != hero && gv_cave_known(s)) {           /* a known cave: its entrance, also when hidden (as the MAP tab) */
+    uint8_t cl[180]; cells_p(s, hero, prog, cl);
+    if (s != hero && (ent ? ent[s] != 0 : gv_cave_known(s))) {    /* a known cave: its entrance, also when hidden (as the MAP tab) */
         int room = s_rom[0x15890 + s]; const uint8_t *r = s_rom + 0x15947 + room * 7;
         uint8_t m = r[6];
         if (room == 175 && m == 0x94 && gv_is_plus() && sms_read8(0xC0D2)) m = 0x2B;
@@ -315,7 +319,7 @@ static void draw_screen(int s, int ox, int oy, int hero)
             int t = mt ? mt[m * 4 + q] : sms_read8((uint16_t)(0xCC00 + m * 4 + q));      /* tile 256 + t */
             int px = ox + (cell % 15) * 16 + (q & 1) * 8, py = oy + (cell / 15) * 16 + (q >> 1) * 8;
             for (int r = 0; r < 8; r++) {
-                uint32_t *dst = s_img + (size_t)(py + r) * (WIN * SW) + px;
+                uint32_t *dst = img + (size_t)(py + r) * stride + px;
                 const uint8_t *row = tiles + t * 32 + r * 4;
                 for (int x = 0; x < 8; x++) {
                     int b = 7 - x;
@@ -326,10 +330,12 @@ static void draw_screen(int s, int ox, int oy, int hero)
         }
     }
 }
-static void fill_screen(int ox, int oy, uint32_t c)
+static void draw_screen(int s, int ox, int oy, int hero) { draw_screen_ex(s_img, WIN * SW, s, ox, oy, hero, sms_read8(0xC845), NULL); }
+static void fill_screen_ex(uint32_t *img, int ox, int oy, uint32_t c)
 {
-    for (int y = 0; y < SH; y++) for (int x = 0; x < SW; x++) s_img[(size_t)(oy + y) * (WIN * SW) + ox + x] = c;
+    for (int y = 0; y < SH; y++) for (int x = 0; x < SW; x++) img[(size_t)(oy + y) * (WIN * SW) + ox + x] = c;
 }
+static void fill_screen(int ox, int oy, uint32_t c) { fill_screen_ex(s_img, ox, oy, c); }
 
 /* re-render when the window, the hero's cell / screen data, the terrain level, the progress flags
    or the set of visited screens change */
@@ -367,9 +373,246 @@ static void box(uint32_t *b, int w, int h, int x0, int y0, int x1, int y1)
 }
 static int bcd(uint8_t v) { return (v >> 4) * 10 + (v & 15); }
 
+/* ---- save-slot preview (Golvellius Plus) ----
+ * While one of the ROM's slot lists is open, the panel shows the slot under its cursor (SaveCur, RAM
+ * $C0AB) from battery RAM instead of the game: its name, play time, crystals, gold / max / power, the
+ * 3 x 3 screens around where it was saved (the hero there) and the WORLD overview, both with that
+ * slot's own explored screens and known caves. The two lists (golvellius_plus.asm):
+ *   SAVE page (title -> CONTINUE -> SAVE, AUTO + slots 1-5): a page on name table $3000 (VDP reg 2
+ *     $FD) in the title's high tile set, "SAVE" at row 1, column 14 (the OPTIONS page has "OPTIONS").
+ *     Loading halves the gold (the game's LAST GAME CONTINUE, asset $79 = bank 7 $8014: the BCD gold
+ *     $C83F-$C841 halved digit by digit = rounded down) unless KEEP GOLD (OptVals+5 = RAM $C0D6) is on:
+ *     the gold line shows what a load gives, with the saved amount beside it.
+ *   SAVE GAME (Pause on the overworld + button 1, and after Game Over's password; slots 1-5): the game's
+ *     name table $3800 cleared, "SAVE GAME" on row 1 at a column that follows the scroll, in the low
+ *     font at a tile offset ($C0 on the Pause screen, 0 after Game Over): found as the text at any
+ *     column with one constant offset. Shows the saved gold (it is what would be overwritten).
+ * Slot n (0 = AUTO): record $8100 + 64 n (+0 $A5, +1 screen, +2 hero y, +3 x, +4 play time: frames,
+ * seconds (both binary), minutes, hours (both BCD), +10 $C839-$C84B, +63 sum of +0..+62 xor $5A), map block $8300 + 64 n
+ * (+0 $A5, +1 screens seen 23 bytes, +24 caves entered 23, +47 sum of +0..+46 xor $5A; none for a slot
+ * saved before the ROM had its map). The PC build's own maps of the slot (gv_slots.c:
+ * <save>.save<n>.gvmap / .gvcave) are added: their visited screens / entered caves count too. The
+ * screens are drawn from the ROM like the panel's neighbours (the slot's progress flags $C845), so a
+ * slot saved before any map existed still shows its own screen. */
+extern const uint8_t *glue_sram_image(size_t *size);
+extern void gv_slots_plus_file(int n, const char *ext, char *out, size_t sz);
+extern int gv_cave_info_all;
+#define OCW (SW / 4)                                /* overview cell, as gv_map.c */
+#define OCH (SH / 4)
+static struct {
+    int slot, list; uint32_t key, flags; bool fresh;
+    uint8_t rec[64], seen[NSCR], ent[NSCR];
+    int c0, r0, nseen; uint32_t gen, ov_gen;
+} s_pv = { -1, 0, 0, 0, false, { 0 }, { 0 }, { 0 }, 0, 0, 0, 1, 1 };
+static uint32_t s_pv_img[WIN * SW * WIN * SH];
+static uint32_t s_pv_ov[COLS * OCW * ROWS * OCH];
+
+static bool nt_is(int nt, int row, int col, const char *t, int ofs, int hi)
+{
+    for (int i = 0; t[i]; i++) {
+        int c = t[i] == ' ' ? 0x40 : t[i];
+        int a = nt + (row * 32 + ((col + i) & 31)) * 2;
+        if (g_vdp.vram[a] != (uint8_t)(c + ofs) || (hi >= 0 && (g_vdp.vram[a + 1] & 1) != hi)) return false;
+    }
+    return true;
+}
+/* 1 = the SAVE page, 2 = SAVE GAME, 0 = neither (or not Golvellius Plus) */
+static int slot_list(void)
+{
+    if (!gv_is_plus()) return 0;
+    int nt = (g_vdp.reg[2] & 0x0E) << 10;
+    if (nt == 0x3000) return nt_is(nt, 1, 14, "SAVE", 0, 1) ? 1 : 0;
+    if (nt != 0x3800) return 0;
+    for (int col = 0; col < 32; col++) {
+        int ofs = (g_vdp.vram[nt + (32 + col) * 2] - 'S') & 0xFF;
+        if (nt_is(nt, 1, col, "SAVE GAME", ofs, -1)) return 2;
+    }
+    return 0;
+}
+static uint32_t fnv(uint32_t h, const uint8_t *p, size_t n) { while (n--) h = (h ^ *p++) * 16777619u; return h; }
+static void pv_files(int slot)                      /* the PC build's maps of the slot: seen / entered flags */
+{
+    char p[1100]; FILE *f; uint8_t v[NSCR]; char mg[4];
+    gv_slots_plus_file(slot, ".gvmap", p, sizeof p);
+    if ((f = fopen(p, "rb"))) {                     /* "GVM1/2/3" + the visited flags first (GVM2: 183, the first 182 = screens) */
+        if (fread(mg, 1, 4, f) == 4 && !memcmp(mg, "GVM", 3) && mg[3] >= '1' && mg[3] <= '3' && fread(v, 1, NSCR, f) == NSCR)
+            for (int i = 0; i < NSCR; i++) s_pv.seen[i] |= v[i] != 0;
+        fclose(f);
+    }
+    gv_slots_plus_file(slot, ".gvcave", p, sizeof p);
+    if ((f = fopen(p, "rb"))) {                     /* "GVC2": the entered flags are the file's last 182 bytes */
+        if (fread(mg, 1, 4, f) == 4 && !memcmp(mg, "GVC2", 4) && !fseek(f, -(long)NSCR, SEEK_END) && fread(v, 1, NSCR, f) == NSCR)
+            for (int i = 0; i < NSCR; i++) s_pv.ent[i] |= v[i] != 0;
+        fclose(f);
+    }
+}
+/* the slot's pictures: drawn again when the slot, its record / map block or an option that changes the
+   drawing changed, or its map files say something new (read again every 30 frames: gv_slots.c copies
+   the maps to a slot when it sees the ROM's save, which may be a frame after the panel saw it) */
+static void pv_update(int list, int slot, const uint8_t *rec, const uint8_t *mb)
+{
+    static unsigned tick;
+    uint8_t opt[2] = { sms_read8(0xC0D2), (uint8_t)gv_cave_info_all };
+    uint32_t key = fnv(fnv(fnv(2166136261u ^ (uint32_t)slot, rec, 64), mb, 48), opt, 2);
+    bool same = slot == s_pv.slot && key == s_pv.key && s_pv.fresh;
+    if (same && ++tick % 30) return;
+    memset(s_pv.seen, 0, sizeof s_pv.seen); memset(s_pv.ent, 0, sizeof s_pv.ent);
+    uint8_t s = 0; for (int i = 0; i < 47; i++) s = (uint8_t)(s + mb[i]);
+    if (mb[0] == 0xA5 && (uint8_t)(s ^ 0x5A) == mb[47])
+        for (int i = 0; i < NSCR; i++) { s_pv.seen[i] = mb[1 + i / 8] >> (i & 7) & 1; s_pv.ent[i] = mb[24 + i / 8] >> (i & 7) & 1; }
+    pv_files(slot);
+    int scr = rec[1] < NSCR ? rec[1] : 180;
+    s_pv.seen[scr] = 1;                             /* the hero was there */
+    for (int i = 0; i < NSCR; i++)                  /* as gv_cave_known(): CAVE INFO = all, or L14's start house (cave id 0) once seen */
+        if (gv_cave_info_all || (s_pv.seen[i] && s_rom[0x15947 + s_rom[0x15890 + i] * 7 + 3] == 0)) s_pv.ent[i] = 1;
+    uint32_t flags = fnv(fnv(2166136261u, s_pv.seen, NSCR), s_pv.ent, NSCR);
+    if (same && flags == s_pv.flags) return;
+    s_pv.slot = slot; s_pv.list = list; s_pv.key = key; s_pv.flags = flags; s_pv.fresh = true;
+    memcpy(s_pv.rec, rec, 64);
+    s_pv.nseen = 0; for (int i = 0; i < NSCR; i++) s_pv.nseen += s_pv.seen[i];
+    uint8_t prog = rec[10 + (0xC845 - 0xC839)];
+    int c0 = scr % COLS - 1, r0 = scr / COLS - 1;
+    if (c0 < 0) c0 = 0; if (c0 > COLS - WIN) c0 = COLS - WIN;
+    if (r0 < 0) r0 = 0; if (r0 > ROWS - WIN) r0 = ROWS - WIN;
+    s_pv.c0 = c0; s_pv.r0 = r0;
+    for (int wy = 0; wy < WIN; wy++)
+        for (int wx = 0; wx < WIN; wx++) {
+            int k = (r0 + wy) * COLS + c0 + wx;
+            if (s_pv.seen[k]) draw_screen_ex(s_pv_img, WIN * SW, k, wx * SW, wy * SH, -1, prog, s_pv.ent);
+            else fill_screen_ex(s_pv_img, wx * SW, wy * SH, 0xFF000000u);
+        }
+    static uint32_t one[SW * SH];                   /* the overview: each seen screen at 1/4 (4 x 4 average) */
+    for (int k = 0; k < NSCR; k++) {
+        int cx = (k % COLS) * OCW, cy = (k / COLS) * OCH;
+        if (s_pv.seen[k]) draw_screen_ex(one, SW, k, 0, 0, -1, prog, s_pv.ent);
+        for (int y = 0; y < OCH; y++)
+            for (int x = 0; x < OCW; x++) {
+                uint32_t *d = &s_pv_ov[(size_t)(cy + y) * (COLS * OCW) + cx + x];
+                if (!s_pv.seen[k]) { *d = 0; continue; }
+                unsigned r = 0, g = 0, bl = 0;
+                for (int dy = 0; dy < 4; dy++)
+                    for (int dx = 0; dx < 4; dx++) { uint32_t c = one[(y * 4 + dy) * SW + x * 4 + dx]; r += c >> 16 & 255; g += c >> 8 & 255; bl += c & 255; }
+                *d = 0xFF000000u | (r / 16) << 16 | (g / 16) << 8 | (bl / 16);
+            }
+    }
+    s_pv.gen++; s_pv.ov_gen++;
+}
+static long bcd_n(const uint8_t *p, int n) { long v = 0; for (int i = 0; i < n; i++) v = v * 100 + bcd(p[i]); return v; }
+
+/* true = a slot list is open: the panel shows its slot */
+static bool slot_preview(uint32_t *b, int w, int h)
+{
+    int list = slot_list();
+    size_t n = 0; const uint8_t *sram = glue_sram_image(&n);
+    int slot = sms_read8(0xC0AB);
+    {   static int last = -1; int now = list ? list * 8 + slot : 0;      /* test: GV_PANEL_LOG=1 */
+        if (now != last && getenv("GV_PANEL_LOG")) fprintf(stderr, "[gv_panel] slot preview: %s slot %d\n", !list ? "off" : list == 1 ? "SAVE page" : "SAVE GAME", slot);
+        last = now; }
+    if (!list || !sram || n < 0x500 || slot > 5 || (list == 2 && slot < 1)) { s_pv.fresh = false; return false; }
+    if (!s_rom) s_rom = glue_rom_image(&s_rom_n);
+    if (!s_rom || s_rom_n < 0x40000) return false;
+    const uint8_t *rec = sram + 0x100 + 64 * slot, *mb = sram + 0x300 + 64 * slot;
+    uint8_t sum = 0; for (int i = 0; i < 63; i++) sum = (uint8_t)(sum + rec[i]);
+    char t[48], nm[8];
+    if (slot) snprintf(nm, sizeof nm, "SLOT %d", slot); else snprintf(nm, sizeof nm, "AUTO");
+    for (int i = 0; i < w * h; i++) b[i] = BG;
+    if (rec[0] != 0xA5 || (uint8_t)(sum ^ 0x5A) != rec[63]) {          /* empty (or damaged: the ROM shows EMPTY too) */
+        s_pv.fresh = false;
+        box(b, w, h, 8, 8, w - 8, h - 8);
+        hud_text_scaled(b, w, h, (w - 12 * (int)strlen(nm)) / 2, h / 2 - 30, nm, CYAN, 2);
+        hud_text_scaled(b, w, h, (w - 5 * 12) / 2, h / 2 - 6, "EMPTY", GREY, 2);
+        return true;
+    }
+    if (list != s_pv.list) s_pv.fresh = false;      /* a list opened again: read the slot's map files again */
+    pv_update(list, slot, rec, mb);
+    const uint8_t *g = s_pv.rec + 10;               /* $C839.. */
+    int scr = s_pv.rec[1] < NSCR ? s_pv.rec[1] : 180;
+    int y = 8;
+
+    /* name, play time, crystals */
+    box(b, w, h, 8, y, w - 8, y + 70);
+    hud_text_scaled(b, w, h, 16, y + 8, nm, CYAN, 2);
+    snprintf(t, sizeof t, "%d:%02d:%02d", bcd(s_pv.rec[7]), bcd(s_pv.rec[6]), s_pv.rec[5] % 60);   /* seconds binary (PlayTick) */
+    hud_text_scaled(b, w, h, w - 16 - 12 * (int)strlen(t), y + 8, t, WHITE, 2);
+    hud_text(b, w, h, w - 16 - 6 * 9, y + 26, "PLAY TIME", GREY);
+    int cr = 0; for (int i = 0; i < 7; i++) cr += g[0xC847 - 0xC839] >> i & 1;
+    hud_text_scaled(b, w, h, 16, y + 44, "CRYSTALS", CYAN, 2);
+    snprintf(t, sizeof t, "%d/7", cr); hud_text_scaled(b, w, h, w - 16 - 12 * (int)strlen(t), y + 44, t, WHITE, 2);
+    y += 78;
+
+    /* where it was saved: area, screen (+ what its cave holds, when known), the 3 x 3 screens */
+    const char *area = gv_area_name(scr);
+    if (area[0]) snprintf(t, sizeof t, "%s", area); else snprintf(t, sizeof t, "SCREEN %c%d", 'A' + scr % COLS, scr / COLS + 1);
+    int bx0 = 8, bx1 = w - 8, mw = bx1 - bx0 - 8, mh = mw * (WIN * SH) / (WIN * SW);
+    box(b, w, h, bx0, y, bx1, y + 36 + mh + 8);
+    hud_text_scaled(b, w, h, 16, y + 6, t, CYAN, (int)strlen(t) * 12 <= w - 32 ? 2 : 1);
+    {   char cl[48], line[16]; int done = 0;
+        snprintf(line, sizeof line, "%c%d", 'A' + scr % COLS, scr / COLS + 1);
+        hud_text(b, w, h, 16, y + 24, line, WHITE);
+        if (s_pv.ent[scr] && gv_cave_label(scr, cl, sizeof cl, &done))      /* (bought / taken: the live game's flags, not shown) */
+            hud_text(b, w, h, 16 + 6 * 4, y + 24, cl, gv_pw_cave(scr) ? 0xFFFF40FFu : GOLDC);
+        else hud_text(b, w, h, 16 + 6 * 4, y + 24, "?", GREY);
+    }
+    float mx = (float)bx0 + 4, my = (float)y + 36, sc = (float)mw / (WIN * SW);
+    if (hud_hires()) hud_image(HUD_SPACE_PANEL, mx, my, (float)mw, (float)mh, s_pv_img, WIN * SW, WIN * SH, 0, 0, WIN * SW, WIN * SH, false, s_pv.gen);
+    else
+        for (int yy = 0; yy < mh; yy++)
+            for (int xx = 0; xx < mw; xx++)
+                b[(size_t)((int)my + yy) * w + (int)mx + xx] = s_pv_img[(size_t)(yy * WIN * SH / mh) * (WIN * SW) + xx * WIN * SW / mw];
+    for (int i = 1; i < WIN; i++) {
+        hud_rect(HUD_SPACE_PANEL, mx + i * SW * sc, my, 0.5f, (float)mh, 0x50FFFFFFu);
+        hud_rect(HUD_SPACE_PANEL, mx, my + i * SH * sc, (float)mw, 0.5f, 0x50FFFFFFu);
+    }
+    static unsigned blink; blink++;
+    if ((blink / 20) % 3) {                         /* the hero where the slot starts (y, x as $C101 / $C102) */
+        float hx = (float)((scr % COLS - s_pv.c0) * SW + s_pv.rec[3] - 8), hy = (float)((scr / COLS - s_pv.r0) * SH + s_pv.rec[2]);
+        hud_marker(HUD_SPACE_PANEL, mx + hx * sc, my + hy * sc, 3.f, 1.f, 0xFFFFE040u, 0xFF000000u);
+    }
+    y += 36 + mh + 8 + 8;
+
+    /* gold (the SAVE page: what a load gives) + power */
+    box(b, w, h, 8, y, w - 8, y + 92);
+    long saved = bcd_n(g + (0xC83F - 0xC839), 3), gold = saved;
+    if (list == 1 && !sms_read8(0xC0D6)) gold = saved / 2;           /* KEEP GOLD off: the continue halves it */
+    long gmax = bcd_n(g + (0xC842 - 0xC839), 3);
+    hud_text_scaled(b, w, h, 16, y + 8, "GOLD", GOLDC, 2);
+    snprintf(t, sizeof t, "%ld", gold * 10); hud_text_scaled(b, w, h, w - 16 - 12 * (int)strlen(t), y + 8, t, WHITE, 2);
+    if (gold != saved) { snprintf(t, sizeof t, "(SAVED %ld)", saved * 10); hud_text(b, w, h, 16 + 4 * 12 + 6, y + 12, t, GREY); }
+    hud_text_scaled(b, w, h, 16, y + 28, "MAX", GREY, 2);
+    snprintf(t, sizeof t, "%ld", gmax * 10); hud_text_scaled(b, w, h, w - 16 - 12 * (int)strlen(t), y + 28, t, GREY, 2);
+    int pmax = bcd(g[0]);                           /* the slot keeps only the maximum: a continue starts with full power */
+    hud_text_scaled(b, w, h, 16, y + 50, "POWER", POWC, 2);
+    snprintf(t, sizeof t, "%d/%d", pmax, pmax); hud_text_scaled(b, w, h, w - 16 - 12 * (int)strlen(t), y + 50, t, WHITE, 2);
+    hud_fill(b, w, h, 16, y + 72, w - 16, y + 80, pmax > 0 ? POWC : 0xFF000000u, false);
+    y += 100;
+
+    /* WORLD: the slot's explored screens, the 3 x 3 window framed, the hero's screen */
+    int ow = COLS * OCW, oh = ROWS * OCH, avail = h - 8 - y - 24 - 8;
+    float ms = (float)(w - 24) / ow; if (oh * ms > avail) ms = (float)avail / oh;
+    if (ms <= 0 || avail <= 40) return true;
+    float dw = ow * ms, dh = oh * ms;
+    box(b, w, h, 8, y, w - 8, y + 24 + (int)dh + 8);
+    hud_text_scaled(b, w, h, 16, y + 6, "WORLD", CYAN, 2);
+    snprintf(t, sizeof t, "%d/%d", s_pv.nseen, NSCR); hud_text(b, w, h, w - 16 - 6 * (int)strlen(t), y + 10, t, GREY);
+    float ox = 8 + ((w - 16) - dw) / 2, oy = (float)y + 24, cw = dw / COLS, ch = dh / ROWS;
+    hud_fill(b, w, h, (int)ox, (int)oy, (int)(ox + dw), (int)(oy + dh), 0xFF000000u, false);
+    if (hud_hires()) {
+        hud_image_alpha(HUD_SPACE_PANEL, ox, oy, dw, dh, s_pv_ov, ow, oh, s_pv.ov_gen);
+        for (int i = 0; i < NSCR; i++)
+            if (s_pv.seen[i] && gv_pw_cave(i))
+                hud_rect(HUD_SPACE_PANEL, ox + (i % COLS + 1) * cw - cw * 0.35f, oy + (i / COLS) * ch, cw * 0.35f, cw * 0.35f, 0xFFFF40FFu);
+        float fx = ox + s_pv.c0 * cw, fy = oy + s_pv.r0 * ch, lw = 1.f;
+        hud_rect(HUD_SPACE_PANEL, fx, fy, WIN * cw, lw, CYAN); hud_rect(HUD_SPACE_PANEL, fx, fy + WIN * ch - lw, WIN * cw, lw, CYAN);
+        hud_rect(HUD_SPACE_PANEL, fx, fy, lw, WIN * ch, CYAN); hud_rect(HUD_SPACE_PANEL, fx + WIN * cw - lw, fy, lw, WIN * ch, CYAN);
+        hud_marker(HUD_SPACE_PANEL, ox + (scr % COLS + 0.5f) * cw, oy + (scr / COLS + 0.5f) * ch, 2.f, 1.f, 0xFFFFE040u, 0xFF000000u);
+    }
+    return true;
+}
+
 extern bool gv_cave_panel(uint32_t *b, int w, int h);
 void gv_panel_draw(uint32_t *b, int w, int h)
 {
+    if (slot_preview(b, w, h)) return;              /* Golvellius Plus: a save slot list is open */
     if (gv_cave_panel(b, w, h)) return;             /* inside a dungeon: its map fills the panel (gv_cave.c) */
     for (int i = 0; i < w * h; i++) b[i] = BG;
     if (!s_rom) s_rom = glue_rom_image(&s_rom_n);

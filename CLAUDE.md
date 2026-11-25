@@ -71,7 +71,7 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 ## Notes by area (read the matching file before working there)
 - `Docs/notes/phantasy-star.md`: every PS build, ROM facts, all PS options and their hooks, PSRP.
 - `Docs/notes/golvellius.md`: Golvellius ROM facts, options, maps, caves, panel.
-- `Docs/notes/golvellius-plus.md`: our Golvellius ROM patch (steps, options, RAM / bank 1 use).
+- `Docs/notes/golvellius-plus.md`: our Golvellius ROM patch (steps, options, RAM / bank 1 use), save-slot preview.
 - `Docs/notes/miracle-warriors.md`: MW ROM facts, options, map, Plus plan.
 - `Docs/notes/engine.md`: our recompiler / runner changes, idioms, reviews, Sonic regression.
 - `Docs/notes/testing.md`: lockstep, scenarios, coverage, diagnostic build, test env vars.
@@ -95,6 +95,12 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
   `VS2026\Projects`; the user works in VS Code). All 28 build folders repaired with `Tools/rename_project.ps1
   -RepairOnly`, Launcher rebuilt OK; each game recompiles fully on its next build. Claude Code data copied
   to the new path's folder.
+- **Open: PR #8** (branch `golvellius-plus-slot-preview`, built 2026-11-25 while the user was away): Golvellius
+  Plus save-slot preview in the side panel (title SAVE page + Pause / Game Over SAVE GAME; user's choices:
+  both lists, everything, gold after loading). Tested by window shots + soaks (details, test route:
+  `Docs/notes/golvellius-plus.md` "Save-slot preview"); waiting for the user's play test + merge. The next
+  release's CHANGELOG needs a line for it. Found while testing, NOT fixed (ROM patch, ask the user): the Game
+  Over SAVE GAME page is drawn off by the overworld's vertical scroll (same notes section, fix idea there).
 - Decided: all profiles (Sonic too) stay in the release; American spelling in project texts.
 - Next (user's plan): new profiles Golden Axe Warrior, Ultima IV, Wonder Boy, Ys (their ROMs are in
   `ROMs/sms/`; discuss each before building). Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation
