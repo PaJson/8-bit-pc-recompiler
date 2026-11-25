@@ -4,6 +4,20 @@ One section per release, newest first. The section `## v<version>` becomes the t
 Release for the tag `v<version>` (`.github/workflows/release.yml`); a release branch is checked for it
 (`.github/workflows/check.yml`).
 
+## v0.3.0
+
+A save-slot preview in Golvellius Plus, and a fix for its SAVE GAME page after a Game Over.
+
+- Golvellius Plus: when loading (SAVE on the title screen's CONTINUE) or saving (Pause + button 1, or
+  YES after a Game Over), the side panel shows the highlighted save slot: play time, crystals, where you
+  saved (the area's name and the screens around it), gold, maximum gold, power, and the part of the
+  world you had explored in that save. When loading, the gold shown is what you will have after loading
+  (half, unless KEEP GOLD is on). Empty slots say so.
+- Golvellius Plus patch: after a Game Over, the SAVE GAME page was shifted up by the overworld's
+  scrolling (its heading off the top of the screen, part of the overworld still at the bottom). It is
+  now drawn in place, and the "SAVE THIS GAME?" question always shows at the bottom of the screen. The
+  launcher makes the new patched ROM the first time you play it; saves from the earlier patch still work.
+
 ## v0.2.0
 
 Two new features: Build all in the launcher, and a save-slot preview in Miracle Warriors.
