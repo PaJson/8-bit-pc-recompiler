@@ -97,9 +97,8 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
   to the new path's folder.
 - Merged 2026-11-25: PR #8, Golvellius Plus save-slot preview in the side panel (title SAVE page + Pause /
   Game Over SAVE GAME; details, test route: `Docs/notes/golvellius-plus.md` "Save-slot preview").
-- **Open: PR #9** (branch `golvellius-plus-slot-preview` again): ROM patch fix, the Game Over SAVE GAME
-  page was drawn off by the overworld's vertical scroll (same notes section). Verified by window shots +
-  soaks; waiting for the user's play test + merge. The next release's CHANGELOG needs lines for PR #8 + #9.
+- Merged 2026-11-25: PR #9, ROM patch fix: the Game Over SAVE GAME page was drawn off by the overworld's
+  vertical scroll (same notes section). The next release's CHANGELOG needs lines for PR #8 + #9.
 - Decided: all profiles (Sonic too) stay in the release; American spelling in project texts.
 - Next (user's plan): new profiles Golden Axe Warrior, Ultima IV, Wonder Boy, Ys (their ROMs are in
   `ROMs/sms/`; discuss each before building). Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation
