@@ -79,7 +79,7 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - `Docs/notes/history.md`: renames, moves, repo / license / going-public decisions, old plans.
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
-## Current state (2026-11-24; update or delete when done)
+## Current state (2026-11-25; update or delete when done)
 - Latest release **v0.2.0** (tag on `6789164`; PRs #6 + #7): launcher Build all (A / pad X), Esc / pad B
   cancel a build (the whole process tree, job object), key help per device; Miracle Warriors save-slot
   preview in the panel. Not tested yet: a patched game in the Build all queue.
@@ -91,6 +91,10 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - Verified by the user (2026-11-24): the release zip in Windows Sandbox (launcher, Golvellius Plus, PS dark
   dungeon refused + nothing on the map); by play: PS cave map, launcher text fitting, build progress bar,
   launcher message cleared on moving, cover changes only after releasing a held direction. Nothing open.
+- Moved 2026-11-25: project is now `D:\Users\PaJson\Development\VSC\Projects\8-bit-PC-Recompiler` (was
+  `VS2026\Projects`; the user works in VS Code). All 28 build folders repaired with `Tools/rename_project.ps1
+  -RepairOnly`, Launcher rebuilt OK; each game recompiles fully on its next build. Claude Code data copied
+  to the new path's folder.
 - Decided: all profiles (Sonic too) stay in the release; American spelling in project texts.
 - Next (user's plan): new profiles Golden Axe Warrior, Ultima IV, Wonder Boy, Ys (their ROMs are in
   `ROMs/sms/`; discuss each before building). Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation
