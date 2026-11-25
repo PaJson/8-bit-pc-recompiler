@@ -192,6 +192,8 @@ static void plus_file(int n, const char *ext, char *out, size_t sz)
     char b[1024]; base(b, sizeof b);
     snprintf(out, sz, "%s.save%d%s", b, n, ext);
 }
+/* gv_panel.c (save-slot preview): the file of Golvellius Plus slot n (".gvmap" / ".gvcave") */
+void gv_slots_plus_file(int n, const char *ext, char *out, size_t sz) { plus_file(n, ext, out, sz); }
 static void plus_saved(int n)                         /* the ROM wrote slot n: the current maps go with it */
 {
     if (!can_save()) return;

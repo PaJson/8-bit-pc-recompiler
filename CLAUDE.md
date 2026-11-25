@@ -71,7 +71,7 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 ## Notes by area (read the matching file before working there)
 - `Docs/notes/phantasy-star.md`: every PS build, ROM facts, all PS options and their hooks, PSRP.
 - `Docs/notes/golvellius.md`: Golvellius ROM facts, options, maps, caves, panel.
-- `Docs/notes/golvellius-plus.md`: our Golvellius ROM patch (steps, options, RAM / bank 1 use).
+- `Docs/notes/golvellius-plus.md`: our Golvellius ROM patch (steps, options, RAM / bank 1 use), save-slot preview.
 - `Docs/notes/miracle-warriors.md`: MW ROM facts, options, map, Plus plan.
 - `Docs/notes/engine.md`: our recompiler / runner changes, idioms, reviews, Sonic regression.
 - `Docs/notes/testing.md`: lockstep, scenarios, coverage, diagnostic build, test env vars.
