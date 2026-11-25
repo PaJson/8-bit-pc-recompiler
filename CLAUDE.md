@@ -10,6 +10,9 @@ the recompiler or runner.
 ## Rules for every task
 - **Never commit or push without the user's explicit go-ahead.** Engine first: commit + push in
   `Recomp/smsggrecomp` (branch `sms-pc-recompiler`), then `git add Recomp/smsggrecomp` + commit here.
+- **`main` takes no direct pushes** (ruleset "Protect main branch", a copy of GHAADD's, no bypass): every
+  change here, even a one-line doc fix, goes on a branch + PR; the user merges once Check (`check`, a
+  required status check) has passed. No force push, no deleting `main`. Tags are not covered.
 - Nothing ROM-derived or SEGA artwork in git or in a release: no ROMs, `generated/`, game exes,
   captured `(title)` pictures, `Images/<platform>/`. Only `Images/*.png|ico` (the app's own art).
 - Every game option defaults to the original game; features are our own C hooks (`[insn_hooks]`,
@@ -80,14 +83,15 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
 ## Current state (2026-11-25; update or delete when done)
-- Latest release **v0.2.0** (tag on `6789164`; PRs #6 + #7): launcher Build all (A / pad X), Esc / pad B
-  cancel a build (the whole process tree, job object), key help per device; Miracle Warriors save-slot
-  preview in the panel. Not tested yet: a patched game in the Build all queue.
-  v0.1.0-v0.1.4 = PRs #1-#5 (first release, corrected credits,
+- Latest release **v0.3.0** (2026-11-25, tag on `e686f89`; PR #10 = PRs #8 + #9): Golvellius Plus
+  save-slot preview in the side panel; patch fix, the Game Over SAVE GAME page no longer shifted by the
+  scroll. Not played by the user yet: the slot preview, a Game Over save.
+  v0.2.0 = PRs #6 + #7 (launcher Build all, cancel a build, key help per device; Miracle Warriors save-slot
+  preview; not tested yet: a patched game in the Build all queue). v0.1.0-v0.1.4 = PRs #1-#5 (first release, corrected credits,
   public repo + README.txt wording, "license" spelling, clearer README). The repo `PaJson/8-bit-pc-recompiler`
   is PUBLIC since 2026-11-24 (history checked first: `Docs/notes/history.md`). Every release: the flow in
   `Docs/notes/launcher-and-release.md` "Release flow" (release PR -> Check -> user merges -> tag on the
-  user's word). Small repo-only fixes go straight to `main` (on the user's go-ahead).
+  user's word). Other changes: branch + PR too (`main` takes no direct pushes, see the rules above).
 - Verified by the user (2026-11-24): the release zip in Windows Sandbox (launcher, Golvellius Plus, PS dark
   dungeon refused + nothing on the map); by play: PS cave map, launcher text fitting, build progress bar,
   launcher message cleared on moving, cover changes only after releasing a held direction. Nothing open.
@@ -95,11 +99,8 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
   `VS2026\Projects`; the user works in VS Code). All 28 build folders repaired with `Tools/rename_project.ps1
   -RepairOnly`, Launcher rebuilt OK; each game recompiles fully on its next build. Claude Code data copied
   to the new path's folder.
-- Merged 2026-11-25: PR #8, Golvellius Plus save-slot preview in the side panel (title SAVE page + Pause /
-  Game Over SAVE GAME; details, test route: `Docs/notes/golvellius-plus.md` "Save-slot preview"), and
-  PR #9, ROM patch fix: the Game Over SAVE GAME page was drawn off by the overworld's vertical scroll.
-- **Open: release v0.3.0** (branch `release/v0.3.0`, PRs #8 + #9, user's request 2026-11-25): next steps
-  Check -> the user's Sandbox / play test -> the user merges -> tag `v0.3.0` on the user's word.
+- Golvellius Plus slot preview details + test route: `Docs/notes/golvellius-plus.md` "Save-slot preview".
+- Ruleset 2026-11-25 (user): `main` protected like GHAADD (`Docs/notes/history.md`, "Ruleset on main").
 - Decided: all profiles (Sonic too) stay in the release; American spelling in project texts.
 - Next (user's plan): new profiles Golden Axe Warrior, Ultima IV, Wonder Boy, Ys (their ROMs are in
   `ROMs/sms/`; discuss each before building). Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation

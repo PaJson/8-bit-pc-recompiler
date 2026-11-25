@@ -151,6 +151,19 @@ the notes (local paths, email line, the Discord message), `.claude/` no longer t
 personal helper, kept locally). Repo description: "Static recompilation of 8-bit console games to native PC
 builds, with optional quality-of-life features". Releases v0.1.0 / v0.1.1 are public with it.
 
+**Ruleset on main (2026-11-25, user: "an exact copy of the one for GHAADD").** GitHub showed "Your main branch
+isn't protected". Ruleset "Protect main branch" (id 28091700, copied through the API from `PaJson/GHAADD`
+and compared: identical): active, target the default branch, **no bypass actors**; rules: restrict
+deletions, block force pushes, require status checks (none listed, so nothing is required yet; `check` from
+the Check workflow could be added), require a pull request before merging (0 approvals; merge, squash and
+rebase allowed). So every change to `main` goes through a PR, the user's own too; tags are not covered.
+The other repo settings were already the same as GHAADD's, except the wiki (on here, off there; left on).
+Classic branch protection stays unset (GHAADD has none either), so the GitHub banner may still show.
+Same day (user, on Claude's advice): the status-check rule now requires `check` (the Check workflow's job,
+GitHub Actions app id 15368), so a PR merges only after Check passes; GHAADD keeps its empty list (its CI
+is a matrix: every job name would have to be listed). Check runs on every PR to `main` (no path filter), so
+a PR never waits for a check that does not come; during an Actions outage merging waits for it.
+
 **Moving the development setup to another PC** (moved here from README.md 2026-11-24: a personal checklist,
 not for readers of the public repo). Git-ignored, so copy these by hand:
 
