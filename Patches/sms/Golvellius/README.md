@@ -43,6 +43,7 @@ header checksum with `python -I Tools/sms/sms_checksum.py <rom>`.
 | 10 | The map: Pause + button 2 = a 13 x 14 grid of the screens seen (area colours, dot = cave entered, your screen blinks), button 1 = the screen's page (area, the cave's person / item / price / BOUGHT, advice text; only for caves entered), kept per save slot (battery RAM `$8300 + 64 n`) | done |
 | 11 | OPTIONS on two pages (PAGE row; page 2 = the multipliers), EASY CAVE ENTRY (enter a cave when the hero is within 8 px of the entrance point on both axes (2026-11-17: values OFF / HALF = in line on one axis / QUARTER = any; a 4-px step is pointless: the hero turns only on 8-px lines) and the step brought him closer; snapped onto the point, then the game's own entry), help / prompt lines centred with our own ':', play time h:mm, multipliers 0X..10X | done |
 | 12 | Map page: a half-size picture of the screen (rows 1-12; one 8 x 8 tile per metatile, every other pixel; made at run time from the ROM's room / metatile / tile data, the area's tiles loaded into VRAM `$2000-$37FF` when another area's are there and put back afterwards; hook `$1A52` = the loaded area); text below in the sprite palette | done |
+| 13 | OPTIONS while playing: Pause -> SAVE GAME -> OPTIONS (entry under slot 5, cursor position 6); the title page's code runs on the Pause screen too (`PauseOptions`, `OptLoop`); no bank-1 bytes | done 2026-11-25 (PC build tested; not played by the user yet) |
 
 ## Notes
 

@@ -63,3 +63,22 @@
   `SaveMenu`, and its "SAVE THIS GAME?" question goes on name-table row (22 + reg 9 shadow `$C058` / 8)
   mod 28 = screen row 22 (the original's GAME OVER box follows the scroll the same way, `$1F33`; at a
   scroll of 192 / 208 row 22 itself would be below the screen).
+
+## OPTIONS while playing (built 2026-11-25, user request; not played by the user yet)
+- Pause (overworld) -> button 1 -> SAVE GAME has a 6th entry "OPTIONS" on row 20 (under slot 5, one blank row between; the Pause screen draws the title on row 0 and the slots two rows higher; Down from slot 5,
+  Up from slot 1 wraps to it); button 1 opens the same two-page OPTIONS page as the title, button 2 saves the
+  options (battery RAM) and returns to the SAVE page with the cursor still on OPTIONS. Game Over's SAVE GAME has
+  no such entry. Bank 1 untouched (all in bank 16); patch CRC32 `96F43AA4`.
+- Code: `OptionsPage` (title) and `PauseOptions` (Pause) share `OptBody` (legend, title, help, page 1) and `OptLoop`
+  (keys; returns on button 2; `WaitPaused` instead of `WaitFrame` when `NtTileOfs` <> 0). `SaveMenu` split into
+  `SaveClearNt` + `SaveDraw` (redrawn after the options page). **`NtTileOfs` <> 0 (= $C0, the Pause font) is the
+  "on the Pause screen" test** (SaveDraw / DrawCursors / SaveMenu keys / OptLoop); GameNt resets it to 0 for Game
+  Over. `OptDrawRow` writes its ' ' / '*' with `NtChar` (was `NtTile`: the same on the title, offset 0). The '*' is
+  tile `$7A` on the Pause screen (`PauseOptions` uploads `StarBits` there; ':' = `$7B` from PauseSave).
+- Checked on the PC build (copy of the saves via `SMS_SAVE_DIR`): page shots (SAVE GAME with the entry, cursor on
+  it, OPTIONS page 1, '*' appears after a changed value), back -> SAVE page cursor on OPTIONS, a changed option
+  (MAP FIXES) written to `OptVals` and the battery block, status screen after SAVE -> OPTIONS -> back -> back: VRAM
+  tiles / name table + CRAM identical to a plain Pause (only the sprite table differs), soaks `rand1` / `rand2`
+  20000 frames: 0 dispatch misses, no `[stack]`. Not checked: Game Over's SAVE GAME (could not trigger a death).
+- Test route (scratchpad `po/run2.sh`): the SAVE-page load route `300:A 380:A 460:A 540:A 620:A 700:A 760:A`, then
+  `1100:P 1180:A` + 5 x D (`1250..1410`) + `1520:A`; needs saves, so use `SMS_SAVE_DIR=<copy>`.
