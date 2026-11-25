@@ -95,13 +95,11 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
   `VS2026\Projects`; the user works in VS Code). All 28 build folders repaired with `Tools/rename_project.ps1
   -RepairOnly`, Launcher rebuilt OK; each game recompiles fully on its next build. Claude Code data copied
   to the new path's folder.
-- **Open: PR #8** (branch `golvellius-plus-slot-preview`, built 2026-11-25 while the user was away): Golvellius
-  Plus save-slot preview in the side panel (title SAVE page + Pause / Game Over SAVE GAME; user's choices:
-  both lists, everything, gold after loading). Tested by window shots + soaks (details, test route:
-  `Docs/notes/golvellius-plus.md` "Save-slot preview"); waiting for the user's play test + merge. The next
-  release's CHANGELOG needs a line for it. Also on the branch (2026-11-25, on the user's word): ROM patch fix
-  for the Game Over SAVE GAME page drawn off by the overworld's vertical scroll (same notes section;
-  verified by window shots + soaks, not yet played by the user).
+- Merged 2026-11-25: PR #8, Golvellius Plus save-slot preview in the side panel (title SAVE page + Pause /
+  Game Over SAVE GAME; details, test route: `Docs/notes/golvellius-plus.md` "Save-slot preview").
+- **Open: PR #9** (branch `golvellius-plus-slot-preview` again): ROM patch fix, the Game Over SAVE GAME
+  page was drawn off by the overworld's vertical scroll (same notes section). Verified by window shots +
+  soaks; waiting for the user's play test + merge. The next release's CHANGELOG needs lines for PR #8 + #9.
 - Decided: all profiles (Sonic too) stay in the release; American spelling in project texts.
 - Next (user's plan): new profiles Golden Axe Warrior, Ultima IV, Wonder Boy, Ys (their ROMs are in
   `ROMs/sms/`; discuss each before building). Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation
