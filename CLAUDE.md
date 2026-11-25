@@ -99,8 +99,9 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
   Plus save-slot preview in the side panel (title SAVE page + Pause / Game Over SAVE GAME; user's choices:
   both lists, everything, gold after loading). Tested by window shots + soaks (details, test route:
   `Docs/notes/golvellius-plus.md` "Save-slot preview"); waiting for the user's play test + merge. The next
-  release's CHANGELOG needs a line for it. Found while testing, NOT fixed (ROM patch, ask the user): the Game
-  Over SAVE GAME page is drawn off by the overworld's vertical scroll (same notes section, fix idea there).
+  release's CHANGELOG needs a line for it. Also on the branch (2026-11-25, on the user's word): ROM patch fix
+  for the Game Over SAVE GAME page drawn off by the overworld's vertical scroll (same notes section;
+  verified by window shots + soaks, not yet played by the user).
 - Decided: all profiles (Sonic too) stay in the release; American spelling in project texts.
 - Next (user's plan): new profiles Golden Axe Warrior, Ultima IV, Wonder Boy, Ys (their ROMs are in
   `ROMs/sms/`; discuss each before building). Later: MSYS2 MINGW64 -> UCRT64 (setup-msys2 deprecation

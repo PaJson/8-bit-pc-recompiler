@@ -56,8 +56,10 @@
   (press file): `300:A 380:A 460:A 540:A 620:A` (6-frame presses) = the SAVE page; `+ 700:A 760:A` =
   LOAD; then `1100:P` + `1180:A` = Pause -> SAVE GAME. Game Over: `--poke 1050:C836=00 1050:C81A=00
   1050:C0D9=01` (power 0, DAMAGE RECEIVED x1) and wait on K13.
-- **Found while testing, not fixed (ROM patch, step 5): the Game Over SAVE GAME page is drawn off by the
-  overworld's vertical scroll.** After a death on K13 the list started ~4 rows too high ("SAVE GAME" and
-  AUTO's first line off the top) and the bottom rows still showed the overworld: `SaveMenu` clears / draws
-  name-table rows 0-23 but `GameOverAsk` does not reset VDP reg 9 (the Pause path is fine). The menu
-  still works. Fix idea: reg 9 = 0 (and clear all 28 rows) before `SaveMenu` in `GameOverAsk`.
+- Fixed (ROM patch, step 5): the Game Over SAVE GAME page was drawn off by the overworld's vertical
+  scroll (after a death on K13 the list started ~4 rows too high, "SAVE GAME" and AUTO's first line off
+  the top, the overworld in the bottom rows): `SaveMenu` draws name-table rows 0-23 but `GameOverAsk` kept
+  VDP reg 9 (the Pause path has 0 from asset `$71`). Now `GameOverAsk` sets reg 9 = 0 (`$0048`) before
+  `SaveMenu`, and its "SAVE THIS GAME?" question goes on name-table row (22 + reg 9 shadow `$C058` / 8)
+  mod 28 = screen row 22 (the original's GAME OVER box follows the scroll the same way, `$1F33`; at a
+  scroll of 192 / 208 row 22 itself would be below the screen).
