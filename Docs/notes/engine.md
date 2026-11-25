@@ -22,7 +22,7 @@ sh Tools/verify_game.sh <slug>              # build + compare recompiled vs --in
 `game.toml` `rom = "../../../ROMs/sms/<file>"` (relative to the game folder; `CMakeLists` default `SMSGG_ROOT = ../../../Recomp/smsggrecomp`).
 Every generated build is tied to its ROM's CRC32 (the runner refuses another ROM). Launcher app: see "Launcher" in the QoL / feature ToDo below.
 
-**Path gotcha:** the project path (`...\VS2026\Projects\8-bit-PC-Recompiler`) no longer has spaces or `#` (folders moved / renamed 2026-11-22 and 2026-11-23). Still quote paths in scripts (other machines / clones). Folder depth matters: game folders are 3 levels below the root (`Games/sms/<slug>`).
+**Path gotcha:** the project path (`D:\Users\PaJson\Development\VSC\Projects\8-bit-PC-Recompiler`) no longer has spaces or `#` (folders moved / renamed 2026-11-22 and 2026-11-23; `VS2026\Projects` moved to `VSC\Projects` on 2026-11-25, build folders repaired with `Tools/rename_project.ps1 -RepairOnly`). Still quote paths in scripts (other machines / clones). Folder depth matters: game folders are 3 levels below the root (`Games/sms/<slug>`).
 
 ## Status (as of 2026-11-11)
 
