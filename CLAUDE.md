@@ -83,9 +83,12 @@ Tools/sandbox_test.ps1 [-Zip <zip>]                                        # tes
 - `Docs/notes/references.md`: links (tools, disassemblies, audio references).
 
 ## Current state (2026-11-25; update or delete when done)
-- Latest release **v0.3.0** (2026-11-25, tag on `e686f89`; PR #10 = PRs #8 + #9): Golvellius Plus
-  save-slot preview in the side panel; patch fix, the Game Over SAVE GAME page no longer shifted by the
-  scroll. Not played by the user yet: the slot preview, a Game Over save.
+- Latest release **v0.4.0** (2026-11-25, tag on `ff04502`; PR #13 = release PR, feature PR #12): Golvellius
+  Plus options can be changed while playing (Pause -> button 1 SAVE GAME -> OPTIONS entry under slot 5; the
+  Pause SAVE GAME page sits two rows higher). Tested on the PC build, not played by the user yet except a
+  first test of the page (works); Game Over's SAVE GAME not re-tested. v0.3.0 (2026-11-25, tag on `e686f89`;
+  PR #10 = PRs #8 + #9): Golvellius Plus save-slot preview in the side panel; patch fix, the Game Over SAVE
+  GAME page no longer shifted by the scroll. Not played by the user yet: the slot preview, a Game Over save.
   v0.2.0 = PRs #6 + #7 (launcher Build all, cancel a build, key help per device; Miracle Warriors save-slot
   preview; not tested yet: a patched game in the Build all queue). v0.1.0-v0.1.4 = PRs #1-#5 (first release, corrected credits,
   public repo + README.txt wording, "license" spelling, clearer README). The repo `PaJson/8-bit-pc-recompiler`
