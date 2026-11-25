@@ -61,7 +61,8 @@ Title screen: button 1 shows START / OPTIONS. Button 1 = select, button 2 = back
 Save slots: AUTO + 5.
   - AUTO is written whenever Winkle tells you the password ("GAME SAVED TO AUTO.").
   - Pause on the overworld (the status screen shows "1:SAVE  2:MAP" under its frame), then button 1:
-    SAVE GAME into slot 1-5.
+    SAVE GAME into slot 1-5. Its last entry, OPTIONS (under slot 5), opens the OPTIONS page
+    (below) while you play.
   - Game Over asks "SAVE THIS GAME?" under the password (you continue at the start house).
   - SAVE page: button 1 on a slot = LOAD / DELETE. A loaded game starts where it was saved.
   - Each slot shows its screen, play time, gold, power and crystals.

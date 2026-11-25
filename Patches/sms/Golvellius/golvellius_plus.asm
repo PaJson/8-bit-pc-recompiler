@@ -3658,6 +3658,25 @@ OptionsPage:
     ld hl,$2000+StarTile*32      ; our '*' (colour 15 = every plane, as the font)
     ld de,StarBits
     call GlyphUp
+    call OptBody
+    call PageShow
+    call OptLoop
+    call OptSave
+    jp PageClose
+
+; the same page on the Pause screen (SAVE GAME's OPTIONS entry): the caller has the display off and the
+; Pause font loaded (PauseSave), NtTileOfs = $C0 there; the display is on when this returns
+PauseOptions:
+    ld hl,(StarTile-$40)*32      ; our '*' at tile $7A (':' is $7B, loaded by PauseSave)
+    ld de,StarBits
+    call GlyphUp
+    call SaveClearNt
+    call OptBody
+    call ScreenOn
+    call OptLoop
+    jp OptSave
+
+OptBody:                         ; legend, title, help line, page 1
     ld b,23
     ld hl,StrOptLegend
     call NtCentre
@@ -3671,15 +3690,23 @@ OptionsPage:
     ld hl,StrOptHelp
     ld (HelpText),hl
     call DrawHelp
-    call OptDrawPage
-    call PageShow
+    jp OptDrawPage
+
+OptLoop:                         ; the keys; returns on button 2 (NtTileOfs <> 0 = the Pause screen: frames without play time)
 @loop:
+    ld a,(NtTileOfs)
+    or a
+    jr z,@title
+    call WaitPaused
+    jr @waited
+@title:
     call WaitFrame
+@waited:
     call ReadPad
     ld a,(PadNew)
     ld b,a
     and $20
-    jp nz,@back
+    ret nz                       ; button 2: back (the caller saves)
     ld a,(OptCur)
     bit 0,b
     jr z,@notup
@@ -3758,9 +3785,6 @@ OptionsPage:
     ld a,(OptCur)
     call OptDrawRow
     jp @loop
-@back:
-    call OptSave
-    jp PageClose
 
 OptList:                         ; HL -> the current page's option list (DE changes)
     ld a,(OptPage)
@@ -3910,7 +3934,7 @@ OptDrawRow:                      ; A = position on the page: its option's label,
     jr nz,@mark
     ld a,StarTile
 @mark:
-    call NtTile
+    call NtChar
     pop bc
     call NtAt
     ld a,(Tmp+15)
@@ -4152,6 +4176,12 @@ SlotRow:                         ; A = slot -> B = its first row (4, 7, ... 19)
     add a,b
     add a,4
     ld b,a
+    ld a,(NtTileOfs)             ; the Pause screen: two rows higher (room for the OPTIONS entry)
+    or a
+    ret z
+    ld a,b
+    sub 2
+    ld b,a
     ret
 
 DrawCursors:                     ; the arrow at column 1 of the slot under the cursor, spaces elsewhere
@@ -4173,7 +4203,18 @@ DrawCursors:                     ; the arrow at column 1 of the slot under the c
     pop af
     dec a
     jp p,@each
-    ret
+    ld a,(NtTileOfs)
+    or a
+    ret z
+    ld bc,1+256*20               ; the OPTIONS entry's arrow (Pause screen)
+    call NtAt
+    ld a,(SaveCur)
+    cp 6
+    ld a,$40
+    jr nz,@opt
+    ld a,$61
+@opt:
+    jp NtChar
 
 DrawHelp:                        ; row HelpRow: HelpText, centred (columns 1-30 cleared)
     ld a,(HelpRow)
@@ -4469,43 +4510,13 @@ LoadSlot:                        ; SlotBuf (valid) -> the game's RAM, then LAST 
 ; the low tile set (loaded by the caller); slots 1-5; SvScreen / SvY / SvX / SvFlag = what is saved.
 ; Display off on entry, on when it returns. ---
 SaveMenu:                        ; (the caller set the name table / font: GameNt, PauseSave)
-    ld hl,$3800
-    di
-    call SetVramAddr
-    ld bc,32*24
-@clear:
-    ld a,(NtTileOfs)
-    add a,$40                    ; the space
-    out ($BE),a
-    xor a
-    out ($BE),a
-    dec bc
-    ld a,b
-    or c
-    jr nz,@clear
-    ei
-    call SramPrepare
-    ld bc,11+256*1
-    call NtAt
-    ld hl,StrSaveGame
-    call NtPrint
-    ld hl,StrHelpSave
-    ld (HelpText),hl
-    call DrawHelp
-    ld a,5
-@slots:
-    push af
-    call DrawSlot
-    pop af
-    dec a
-    jp p,@slots
     ld a,(LastSlot)
     or a
     jr nz,@cur
     inc a
 @cur:
     ld (SaveCur),a
-    call DrawCursors
+    call SaveDraw
     call ScreenOn
 @loop:
     call WaitPaused
@@ -4522,13 +4533,25 @@ SaveMenu:                        ; (the caller set the name table / font: GameNt
     jr z,@notup
     dec a
     jr nz,@move
+    ld a,(NtTileOfs)             ; (the Pause screen has the OPTIONS entry as position 6)
+    or a
     ld a,5
+    jr z,@move
+    inc a
     jr @move
 @notup:
     bit 1,b
     jr z,@loop
     inc a
-    cp 6
+    ld c,a
+    ld a,(NtTileOfs)
+    or a
+    ld b,6
+    jr z,@lim
+    inc b
+@lim:
+    ld a,c
+    cp b
     jr c,@move
     ld a,1
 @move:
@@ -4537,6 +4560,8 @@ SaveMenu:                        ; (the caller set the name table / font: GameNt
     jr @loop
 @select:
     ld a,(SaveCur)
+    cp 6
+    jp z,@options
     call ReadSlot
     jr c,@save                   ; empty: save at once
     xor a                        ; used: OVERWRITE? (NO first)
@@ -4577,6 +4602,64 @@ SaveMenu:                        ; (the caller set the name table / font: GameNt
     pop bc
     djnz @show
     ret
+@options:                        ; the options page, then this page again (cursor stays on OPTIONS)
+    call ScreenOff
+    call PauseOptions
+    call ScreenOff
+    call SaveDraw
+    call ScreenOn
+    jp @loop
+
+SaveClearNt:                     ; the name table $3800, rows 0-23: spaces
+    ld hl,$3800
+    di
+    call SetVramAddr
+    ld bc,32*24
+@clear:
+    ld a,(NtTileOfs)
+    add a,$40                    ; the space
+    out ($BE),a
+    xor a
+    out ($BE),a
+    dec bc
+    ld a,b
+    or c
+    jr nz,@clear
+    ei
+    ret
+
+SaveDraw:                        ; the whole page (display off); SaveCur = the cursor. The Pause screen
+                                 ; (NtTileOfs <> 0) has an OPTIONS entry under slot 5 (row 21, position 6)
+    call SaveClearNt
+    call SramPrepare
+    ld bc,11+256*1
+    ld a,(NtTileOfs)             ; (the Pause screen: title on row 0, slots from row 2, OPTIONS on row 20)
+    or a
+    jr z,@title
+    ld b,0
+@title:
+    call NtAt
+    ld hl,StrSaveGame
+    call NtPrint
+    ld hl,StrHelpSave
+    ld (HelpText),hl
+    call DrawHelp
+    ld a,5
+@slots:
+    push af
+    call DrawSlot
+    pop af
+    dec a
+    jp p,@slots
+    ld a,(NtTileOfs)
+    or a
+    jr z,@cursors
+    ld bc,3+256*20
+    call NtAt
+    ld hl,StrOptTitle
+    call NtPrint
+@cursors:
+    jp DrawCursors
 
 GameNt:                          ; text on the game's own screen: name table $3800, its low-set font, and
     ld a,$38                     ; columns that follow its horizontal scroll (reg 8 shadow $C057: $F8 or $08

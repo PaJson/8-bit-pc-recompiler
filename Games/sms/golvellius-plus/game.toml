@@ -2,7 +2,7 @@
 # Z80, 512 KB ROM (32 x 16KB banks: 0-15 = the original, 16-31 = the patch), Sega mapper.
 # Copied from Games/golvellius (same code addresses: the patch only adds code / data in new space).
 
-# ROM CRC32 297BDDA7 (the patched ROM; written by Tools/sms/gv_build_patch.py)
+# ROM CRC32 96F43AA4 (the patched ROM; written by Tools/sms/gv_build_patch.py)
 
 [game]
 output_prefix = "golvellius_plus"
