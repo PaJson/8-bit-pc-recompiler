@@ -4,6 +4,18 @@ One section per release, newest first. The section `## v<version>` becomes the t
 Release for the tag `v<version>` (`.github/workflows/release.yml`); a release branch is checked for it
 (`.github/workflows/check.yml`).
 
+## v0.4.0
+
+Golvellius Plus: change the options while you play.
+
+- Golvellius Plus: Pause on the overworld, press button 1 (SAVE GAME), and move down past slot 5 to the new
+  OPTIONS entry. Button 1 opens the same OPTIONS pages as the title screen, so every option (fixes, sword
+  reach, easy cave entry, speeds, keep gold, multipliers) can be changed during the game. Button 2 saves
+  the options and returns to the SAVE GAME page. The Game Over save page is unchanged.
+- Golvellius Plus patch: the SAVE GAME page on the Pause screen sits two rows higher to make room for the
+  entry. The launcher makes the new patched ROM the first time you play it; saves from the earlier patch
+  still work.
+
 ## v0.3.0
 
 A save-slot preview in Golvellius Plus, and a fix for its SAVE GAME page after a Game Over.
