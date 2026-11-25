@@ -5050,6 +5050,17 @@ PauseSave:
 ; Game Over: the password was shown and a button pressed (from Stub_GameOver; the font is loaded)
 GameOverAsk:
     call GameNt
+    ld a,($C058)                 ; the question on screen row 22 under the overworld's vertical scroll
+    rrca                         ; (reg 9 shadow, 0-223; the original's GAME OVER box follows it too):
+    rrca                         ; name-table row (22 + reg 9 / 8) mod 28, else a scroll of 192 or 208
+    rrca                         ; would put it below the screen
+    and 31
+    add a,22
+    cp 28
+    jr c,@row
+    sub 28
+@row:
+    ld (HelpRow),a
     xor a
     ld (SubSel),a
     ld hl,StrSaveAsk
@@ -5062,6 +5073,10 @@ GameOverAsk:
     or a
     jr z,@done
     call ScreenOff
+    ld bc,$0009                  ; vertical scroll 0 (the Pause path has it from asset $71): SaveMenu
+    call $0048                   ; draws rows 0-23 = the screen; the title after it sets its own scroll
+    ld a,22
+    ld (HelpRow),a               ; OVERWRITE? / SAVED. on screen row 22 again
     ld a,$B4                     ; LAST GAME CONTINUE starts at L14 with the original position
     ld (SvScreen),a
     ld a,$98
